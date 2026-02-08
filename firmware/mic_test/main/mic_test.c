@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <inttypes.h>
+#include <limits.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
