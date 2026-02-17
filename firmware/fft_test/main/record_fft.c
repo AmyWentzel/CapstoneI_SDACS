@@ -20,6 +20,8 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -33,6 +35,15 @@
 #include "nvs_flash.h"
 
 #include "driver/i2s_std.h"
+
+#include "esp_system.h"
+#include "driver/spi_master.h"
+#include "soc/gpio_struct.h"
+#include "driver/gpio.h"
+#include "driver/uart.h"
+#include "soc/uart_struct.h"
+
+#include "esp_dsp.h"
 
 /* ================= USER CONFIG ================= */
 
@@ -65,6 +76,23 @@ static i2s_chan_handle_t rx_chan = NULL;
 static int32_t audio_buffer[SAMPLE_RATE_HZ * RECORD_DURATION_SEC];
 static size_t buffer_index = 0;
 static SemaphoreHandle_t recording_done_sem = NULL;
+
+// FFT parameters
+#define FFT_SIZE 1024
+static float fft_input[FFT_SIZE];
+static float fft_output[FFT_SIZE];
+static float magnitude[FFT_SIZE / 2];
+
+// FFT results storage
+typedef struct {
+    float magnitude;
+    int bin;
+    float frequency;
+} FFT_Result;
+
+#define MAX_FFT_CHUNKS 1000
+static FFT_Result FFT_results[MAX_FFT_CHUNKS];
+static size_t num_fft_chunks = 0;
 
 /*
     Convert a 32-bit I2S slot word into a signed 24-bit sample.
@@ -164,50 +192,83 @@ static void recording_task(void *arg)
 /* ------------------------------------------------------------
    Process audio buffer (called from main after recording)
 ------------------------------------------------------------ */
-static void process_audio_buffer(void)
+static void calculateFFTAudio(void)
 {
     if (buffer_index == 0) {
         ESP_LOGE(TAG, "No audio samples recorded!");
         return;
     }
 
-    ESP_LOGI(TAG, "Processing %zu samples...", buffer_index);
-
-    // Example: calculate overall statistics
-    int32_t minv = INT32_MAX;
-    int32_t maxv = INT32_MIN;
-    int64_t sum = 0;
-    double acc2 = 0.0;
-    int zeros = 0;
-
-    for (size_t i = 0; i < buffer_index; i++) {
-        int32_t s = audio_buffer[i];
-
-        if (s == 0) zeros++;
-        if (s < minv) minv = s;
-        if (s > maxv) maxv = s;
-        sum += s;
-
-        float x = (float)s / 8388608.0f; // 2^23
-        acc2 += (double)x * (double)x;
+    ESP_LOGI(TAG, "Processing %zu samples with FFT (size=%d)...", buffer_index, FFT_SIZE);
+    
+    // Initialize FFT
+    esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FFT initialization failed: %s", esp_err_to_name(ret));
+        return;
     }
 
-    float mean = (float)((double)sum / buffer_index);
-    float rms = (float)sqrt(acc2 / buffer_index);
-    int32_t p2p = maxv - minv;
+    // Process audio in chunks of FFT_SIZE
+    size_t num_chunks = buffer_index / FFT_SIZE;
+    ESP_LOGI(TAG, "Computing %zu FFTs...", num_chunks);
+    num_fft_chunks = 0;  // Reset chunk counter
 
-    ESP_LOGI(TAG, "Audio Analysis Results:");
-    ESP_LOGI(TAG, "  Samples: %zu", buffer_index);
-    ESP_LOGI(TAG, "  Mean: %.1f", mean);
-    ESP_LOGI(TAG, "  Peak-to-peak: %" PRId32, p2p);
-    ESP_LOGI(TAG, "  RMS: %.6f", rms);
-    ESP_LOGI(TAG, "  Zero samples: %d", zeros);
+    for (size_t chunk_idx = 0; chunk_idx < num_chunks; chunk_idx++) {
+        // 1. Convert int32 samples to float and normalize
+        for (int i = 0; i < FFT_SIZE; i++) {
+            // Normalize to [-1, 1] range
+            fft_input[i] = (float)audio_buffer[chunk_idx * FFT_SIZE + i] / (float)INT32_MAX;
+        }
 
-    // TODO: Add your custom audio processing here
-    // - FFT analysis
-    // - Feature extraction
-    // - Write to file
-    // - Send via network, etc.
+        // 2. Apply Hann window to reduce spectral leakage
+        dsps_wind_hann_f32(fft_input, FFT_SIZE);
+
+        // 3. Prepare input for FFT (interleave real and imaginary parts)
+        for (int i = 0; i < FFT_SIZE; i++) {
+            fft_output[i * 2 + 0] = fft_input[i];      // Real part
+            fft_output[i * 2 + 1] = 0.0f;              // Imaginary part (initially zero)
+        }
+
+        // 4. Compute FFT
+        dsps_fft2r_fc32(fft_output, FFT_SIZE);
+
+        // 5. Bit reversal (required by esp-dsp)
+        dsps_bit_rev_fc32(fft_output, FFT_SIZE);
+
+        // 6. Compute magnitude spectrum
+        float max_magnitude = 0.0f;
+        int max_bin = 0;
+        for (int i = 0; i < FFT_SIZE / 2; i++) {
+            float real = fft_output[i * 2 + 0];
+            float imag = fft_output[i * 2 + 1];
+            magnitude[i] = sqrt(real * real + imag * imag) / FFT_SIZE;
+
+            // Track peak frequency
+            if (magnitude[i] > max_magnitude) {
+                max_magnitude = magnitude[i];
+                max_bin = i;
+            }
+        }
+
+        // Calculate corresponding frequency
+        float peak_freq = (float)max_bin * SAMPLE_RATE_HZ / FFT_SIZE;
+
+        // Store result in FFT_results array
+        if (chunk_idx < MAX_FFT_CHUNKS) {
+            FFT_results[chunk_idx].magnitude = max_magnitude;
+            FFT_results[chunk_idx].bin = max_bin;
+            FFT_results[chunk_idx].frequency = peak_freq;
+        }
+
+        // Print results for this chunk
+        ESP_LOGI(TAG, "FFT Chunk %zu Results:", chunk_idx);
+        ESP_LOGI(TAG, "  Peak magnitude: %.4f at bin %d", max_magnitude, max_bin);
+        ESP_LOGI(TAG, "  Peak frequency: %.1f Hz", peak_freq);
+    }
+
+    num_fft_chunks = (num_chunks < MAX_FFT_CHUNKS) ? num_chunks : MAX_FFT_CHUNKS;
+
+    ESP_LOGI(TAG, "FFT processing complete!");
 }
 
 /* ------------------------------------------------------------
@@ -241,7 +302,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Waiting for recording to complete...");
     if (xSemaphoreTake(recording_done_sem, portMAX_DELAY) == pdTRUE) {
         ESP_LOGI(TAG, "Recording finished, processing audio...");
-        process_audio_buffer();
+        calculateFFTAudio();
         ESP_LOGI(TAG, "Audio processing complete!");
     }
 
