@@ -19,6 +19,12 @@
       DOUT   -> GPIO4
 */
 
+/*
+    AW - 2026/02/19
+    record_fft.c - added two functions to record 20 seconds of audio and record FFT 
+    audio is stored in audio_buffer, and FFT results are stored in FFT_results
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
