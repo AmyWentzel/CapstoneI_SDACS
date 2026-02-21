@@ -152,7 +152,7 @@ static void mic_test_task(void *arg)
         esp_err_t err = i2s_channel_read(
             rx_chan,
             raw,
-            sizeof(raw),
+ z             sizeof(raw),
             &bytes_read,
             portMAX_DELAY
         );

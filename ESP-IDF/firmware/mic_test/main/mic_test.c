@@ -8,7 +8,7 @@
     PURPOSE:
       - Verify I2S clocking and data wiring
       - Confirm microphone is producing real audio samples
-      - Print simple statistics to serial (USB)
+      - Record a fixed capture window to RAM for later processing
 
     WIRING (ICS-43434 → ESP32-S3):
       3V     -> 3.3V
@@ -20,15 +20,16 @@
 */
 
 #include <stdio.h>
-#include <math.h>
-#include <inttypes.h>
-#include <limits.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #include "driver/i2s_std.h"
@@ -46,16 +47,10 @@
 // I2S read size
 #define I2S_FRAMES_PER_READ  512
 
-// How often to print stats
-#define PRINT_PERIOD_MS  250
-
-// Full-scale magnitude for signed 24-bit PCM: [-2^23, 2^23-1]
-// Used to normalize samples into [-1.0, +1.0).
-#define S24_FULL_SCALE  8388608.0f
-
-// Small floor for dB conversion to avoid log10(0).
-// 1 LSB of 24-bit full-scale is a practical minimum.
-#define RMS_DB_FLOOR_LINEAR (1.0f / S24_FULL_SCALE)
+// One-shot recording duration in seconds.
+#define RECORD_SECONDS 20
+// Audio is stored in fixed-size chunks to avoid one large contiguous allocation.
+#define AUDIO_CHUNK_SAMPLES 4096
 
 /* ============================================== */
 
@@ -64,17 +59,39 @@ static const char *TAG = "MIC_TEST";
 static i2s_chan_handle_t rx_chan = NULL;
 static int32_t raw[I2S_FRAMES_PER_READ];
 
+// Recorded audio for later FFT/MQTT pipeline.
+static int32_t **g_audio_chunks = NULL;
+static size_t g_audio_chunk_count = 0;
+static size_t g_audio_total_capacity = 0;
+static size_t g_audio_samples_count = 0;
+static const size_t g_audio_target_samples = (size_t)SAMPLE_RATE_HZ * RECORD_SECONDS;
+
+static inline bool audio_store_sample(int32_t sample)
+{
+    if (g_audio_samples_count >= g_audio_total_capacity) {
+        return false;
+    }
+
+    size_t sample_index = g_audio_samples_count;
+    size_t chunk_index = sample_index / AUDIO_CHUNK_SAMPLES;
+    size_t chunk_offset = sample_index % AUDIO_CHUNK_SAMPLES;
+    g_audio_chunks[chunk_index][chunk_offset] = sample;
+    g_audio_samples_count++;
+    return true;
+}
+
 /*
     Convert a 32-bit I2S slot word into a signed 24-bit sample.
 
     The ICS-43434 outputs 24-bit two's-complement audio.
-    Depending on I2S packing, the valid sample may appear in the
-    lower 24 bits of the 32-bit slot word.
+    For this setup, the valid sample is treated as MSB-aligned
+    in the 32-bit slot word (bits 31:8).
 */
 static inline int32_t i2s_word_to_s24(int32_t w)
 {
-    // Keep only 24 payload bits.
-    int32_t s = w & 0x00FFFFFF;
+    // ICS-43434 data is typically MSB-aligned in a 32-bit slot (bits 31:8).
+    // Shift down to a 24-bit payload, then sign-extend to 32-bit.
+    int32_t s = (int32_t)((uint32_t)w >> 8);
     // If bit23 is set, sign-extend to 32-bit.
     if (s & 0x00800000) {
         s |= ~0x00FFFFFF;
@@ -148,10 +165,11 @@ static void i2s_mic_init(void)
 static void mic_test_task(void *arg)
 {
     size_t bytes_read = 0;
+    int64_t start_us = esp_timer_get_time();
+    int64_t end_us = start_us + ((int64_t)RECORD_SECONDS * 1000000LL);
+    int64_t next_progress_us = start_us + 1000000LL;
 
-    TickType_t last_print = xTaskGetTickCount();
-
-    while (1) {
+    while (esp_timer_get_time() < end_us && g_audio_samples_count < g_audio_total_capacity) {
         esp_err_t err = i2s_channel_read(
             rx_chan,
             raw,
@@ -169,69 +187,33 @@ static void mic_test_task(void *arg)
         int n_raw = bytes_read / sizeof(int32_t);
         if (n_raw <= 0) continue;
 
-        // Stats over the decoded PCM sample set:
-        // - min/max -> p2p (peak-to-peak span in raw counts)
-        // - sum     -> mean (DC offset estimate in raw counts)
-        // - acc2    -> rms (signal energy)
-        // - zeros   -> simple integrity signal (excessive zeros can indicate link issues)
-        int32_t minv = INT32_MAX;
-        int32_t maxv = INT32_MIN;
-        int64_t sum  = 0;
-        double  acc2 = 0.0;
-        int zeros = 0;
-
-        int n = 0;
-        // Consume only LEFT-phase words from interleaved I2S stream.
-        // With current packing this lands on even indices.
-        for (int i = 0; i < n_raw; i += 2) {
+        // In MONO + LEFT-slot mode, each returned word is a valid mic sample.
+        for (int i = 0; i < n_raw; i++) {
             int32_t s24 = i2s_word_to_s24(raw[i]);
-
-            if (s24 == 0) zeros++;
-            if (s24 < minv) minv = s24;
-            if (s24 > maxv) maxv = s24;
-
-            sum += s24;
-
-            // Normalize signed 24-bit sample to approximately [-1.0, +1.0).
-            float x = (float)s24 / S24_FULL_SCALE;
-            acc2 += (double)x * (double)x;
-            n++;
-        }
-
-        if (n <= 0) continue;
-
-        // Mean in raw sample counts (not normalized). Near zero is expected for AC-coupled audio.
-        float mean = (float)((double)sum / n);
-        // RMS in linear full-scale units (0..1+). Useful for level tracking.
-        float rms  = (float)sqrt(acc2 / n);
-        // RMS converted to dBFS using linear full-scale reference (1.0).
-        // With this convention, a full-scale sine is about -3.01 dBFS.
-        float rms_dbfs = 20.0f * log10f(fmaxf(rms, RMS_DB_FLOOR_LINEAR));
-        // Peak-to-peak span in raw sample counts.
-        int32_t p2p = maxv - minv;
-
-        TickType_t now = xTaskGetTickCount();
-        if (pdTICKS_TO_MS(now - last_print) >= PRINT_PERIOD_MS) {
-            last_print = now;
-
-            ESP_LOGI(TAG,
-                // Field guide:
-                // n         : number of analyzed samples this print window
-                // mean      : average raw count (DC bias indicator)
-                // p2p       : max-min raw count span
-                // rms       : linear RMS, normalized to full-scale
-                // rms_dbfs  : RMS in dBFS (more negative = quieter)
-                // zeros     : exact-zero sample count in this block
-                "n=%d mean=%.1f p2p=%" PRId32 " rms=%.6f rms_dbfs=%.2f zeros=%d",
-                n, mean, p2p, rms, rms_dbfs, zeros
-            );
-
-            if (zeros == n) {
-                ESP_LOGE(TAG,
-                    "ALL ZERO SAMPLES! Check DIN, clocks, and SEL=GND.");
+            if (!audio_store_sample(s24)) {
+                break;
             }
         }
+
+        int64_t now_us = esp_timer_get_time();
+        if (now_us >= next_progress_us) {
+            next_progress_us += 1000000LL;
+            ESP_LOGI(TAG, "Recording... %u/%u samples",
+                (unsigned)g_audio_samples_count,
+                (unsigned)g_audio_total_capacity);
+        }
     }
+
+    ESP_ERROR_CHECK(i2s_channel_disable(rx_chan));
+
+    ESP_LOGI(TAG, "Recording complete: %.2f s, samples=%u",
+        (float)(esp_timer_get_time() - start_us) / 1000000.0f,
+        (unsigned)g_audio_samples_count);
+    ESP_LOGI(TAG, "Stored stream uses mono/left-slot samples without decimation.");
+    ESP_LOGI(TAG, "Samples stored in %u chunk(s) for later FFT/MQTT.",
+        (unsigned)g_audio_chunk_count);
+
+    vTaskDelete(NULL);
 }
 
 /* ------------------------------------------------------------
@@ -239,7 +221,60 @@ static void mic_test_task(void *arg)
 ------------------------------------------------------------ */
 void app_main(void)
 {
-    ESP_ERROR_CHECK(nvs_flash_init());
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_err);
+
+    size_t max_chunks = (g_audio_target_samples + AUDIO_CHUNK_SAMPLES - 1) / AUDIO_CHUNK_SAMPLES;
+    g_audio_chunks = (int32_t **)calloc(max_chunks, sizeof(int32_t *));
+    if (g_audio_chunks == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate audio chunk table.");
+        return;
+    }
+
+    for (size_t i = 0; i < max_chunks; i++) {
+        size_t chunk_samples = AUDIO_CHUNK_SAMPLES;
+        size_t remaining = g_audio_target_samples - g_audio_total_capacity;
+        if (remaining < chunk_samples) {
+            chunk_samples = remaining;
+        }
+
+        int32_t *chunk = (int32_t *)heap_caps_malloc(
+            chunk_samples * sizeof(int32_t),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+        if (chunk == NULL) {
+            chunk = (int32_t *)heap_caps_malloc(
+                chunk_samples * sizeof(int32_t),
+                MALLOC_CAP_8BIT
+            );
+        }
+
+        if (chunk == NULL) {
+            break;
+        }
+
+        g_audio_chunks[g_audio_chunk_count++] = chunk;
+        g_audio_total_capacity += chunk_samples;
+    }
+
+    if (g_audio_total_capacity == 0) {
+        ESP_LOGE(TAG, "Audio buffer allocation failed.");
+        free(g_audio_chunks);
+        g_audio_chunks = NULL;
+        return;
+    }
+
+    if (g_audio_total_capacity < g_audio_target_samples) {
+        ESP_LOGW(TAG, "Allocated %u/%u samples (%.2f/%.2f s).",
+            (unsigned)g_audio_total_capacity,
+            (unsigned)g_audio_target_samples,
+            (float)g_audio_total_capacity / (float)SAMPLE_RATE_HZ,
+            (float)g_audio_target_samples / (float)SAMPLE_RATE_HZ);
+    }
 
     i2s_mic_init();
 
@@ -253,6 +288,6 @@ void app_main(void)
         1
     );
 
-    ESP_LOGI(TAG, "ICS-43434 mic test running. Clap or speak near mic.");
+    ESP_LOGI(TAG, "ICS-43434 one-shot capture started (%d s).", RECORD_SECONDS);
 }
 
