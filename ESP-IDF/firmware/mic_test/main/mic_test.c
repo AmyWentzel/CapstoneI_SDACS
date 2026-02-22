@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -51,6 +52,7 @@
 #define RECORD_SECONDS 20
 // Audio is stored in fixed-size chunks to avoid one large contiguous allocation.
 #define AUDIO_CHUNK_SAMPLES 4096
+#define CAL_OFFSET_DB  94.0f   // placeholder until calibrated
 
 /* ============================================== */
 
@@ -168,6 +170,8 @@ static void mic_test_task(void *arg)
     int64_t start_us = esp_timer_get_time();
     int64_t end_us = start_us + ((int64_t)RECORD_SECONDS * 1000000LL);
     int64_t next_progress_us = start_us + 1000000LL;
+    double rms_sum_sq = 0.0;
+    size_t rms_count = 0;
 
     while (esp_timer_get_time() < end_us && g_audio_samples_count < g_audio_total_capacity) {
         esp_err_t err = i2s_channel_read(
@@ -193,14 +197,32 @@ static void mic_test_task(void *arg)
             if (!audio_store_sample(s24)) {
                 break;
             }
+
+            float norm = (float)s24 / 8388608.0f;
+            rms_sum_sq += (double)norm * (double)norm;
+            rms_count++;
         }
 
         int64_t now_us = esp_timer_get_time();
         if (now_us >= next_progress_us) {
             next_progress_us += 1000000LL;
+            float rms = 0.0f;
+            if (rms_count > 0) {
+                rms = sqrtf((float)(rms_sum_sq / (double)rms_count));
+            }
+
+            // Convert RMS (normalized 0..1) to dBFS and then to SPL via calibration offset.
+            float dbfs = 20.0f * log10f(rms + 1e-12f);
+            float db_spl = dbfs + CAL_OFFSET_DB;
+
             ESP_LOGI(TAG, "Recording... %u/%u samples",
                 (unsigned)g_audio_samples_count,
                 (unsigned)g_audio_total_capacity);
+            ESP_LOGI(TAG, "  dBFS: %.2f dB", dbfs);
+            ESP_LOGI(TAG, "  SPL:  %.2f dB", db_spl);
+
+            rms_sum_sq = 0.0;
+            rms_count = 0;
         }
     }
 
