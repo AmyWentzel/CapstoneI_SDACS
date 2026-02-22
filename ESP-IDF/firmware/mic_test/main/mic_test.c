@@ -21,7 +21,6 @@
 
 #include <stdio.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -31,9 +30,7 @@
 
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_heap_caps.h"
 #include "esp_timer.h"
-#include "nvs_flash.h"
 
 #include "driver/i2s_std.h"
 #include "config_store.h"
@@ -55,13 +52,13 @@
 // One-shot recording duration in seconds.
 #define RECORD_SECONDS 20
 // Audio is stored in fixed-size chunks to avoid one large contiguous allocation.
-#define AUDIO_CHUNK_SAMPLES 4096
+#define AUDIO_CHUNK_SAMPLES 2048
 #define CAL_OFFSET_DB  94.0f   // placeholder until calibrated
 
 // Temporary first-boot provisioning values (stored into NVS if wifi is empty).
 #define PROVISION_WIFI_SSID   "195BSMT_2.4GHz"
 #define PROVISION_WIFI_PASS   "LD4BSMT"
-#define PROVISION_MQTT_URI    "mqtt://192.168.1.50"
+#define PROVISION_MQTT_URI    "mqtt://192.168.5.38:1883"
 #define PROVISION_MQTT_TOPIC  "sdacs/node/node01/features"
 
 /* ============================================== */
@@ -71,12 +68,17 @@ static const char *TAG = "MIC_TEST";
 static i2s_chan_handle_t rx_chan = NULL;
 static int32_t raw[I2S_FRAMES_PER_READ];
 
-// Recorded audio for later FFT/MQTT pipeline.
-static int32_t **g_audio_chunks = NULL;
-static size_t g_audio_chunk_count = 0;
-static size_t g_audio_total_capacity = 0;
-static size_t g_audio_samples_count = 0;
-static const size_t g_audio_target_samples = (size_t)SAMPLE_RATE_HZ * RECORD_SECONDS;
+typedef struct __attribute__((packed)) {
+    uint32_t magic;       // 'S''D''A''C'
+    uint16_t ver;         // 1
+    uint16_t flags;       // 0 for now
+    uint32_t seq;         // chunk counter
+    uint64_t t_us;        // esp_timer_get_time() when chunk completed
+    uint32_t sample_rate; // 48000
+    uint32_t n;           // samples in this chunk
+} sdacs_audio_hdr_t;
+
+#define SDACS_MAGIC 0x43414453u  // 'SDAC' little-endian
 
 static void maybe_provision_network_config(void)
 {
@@ -103,20 +105,6 @@ static void maybe_provision_network_config(void)
     ESP_ERROR_CHECK(config_store_set_mqtt(PROVISION_MQTT_URI, PROVISION_MQTT_TOPIC));
 
     ESP_LOGI(TAG, "Provisioned WiFi/MQTT defaults into NVS (one-time).");
-}
-
-static inline bool audio_store_sample(int32_t sample)
-{
-    if (g_audio_samples_count >= g_audio_total_capacity) {
-        return false;
-    }
-
-    size_t sample_index = g_audio_samples_count;
-    size_t chunk_index = sample_index / AUDIO_CHUNK_SAMPLES;
-    size_t chunk_offset = sample_index % AUDIO_CHUNK_SAMPLES;
-    g_audio_chunks[chunk_index][chunk_offset] = sample;
-    g_audio_samples_count++;
-    return true;
 }
 
 /*
@@ -203,14 +191,45 @@ static void i2s_mic_init(void)
 ------------------------------------------------------------ */
 static void mic_test_task(void *arg)
 {
+    const char *base_topic = NULL;
+    const char *broker = NULL;
+    ESP_ERROR_CHECK(config_store_get_mqtt(&broker, &base_topic));
+    (void)broker;
+    if (!base_topic || base_topic[0] == '\0') {
+        ESP_LOGE(TAG, "MQTT base topic is empty.");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    char audio_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];
+    int topic_len = snprintf(audio_topic, sizeof(audio_topic), "%s/audio", base_topic);
+    if (topic_len <= 0 || topic_len >= (int)sizeof(audio_topic)) {
+        ESP_LOGE(TAG, "Audio topic too long; base topic='%s'", base_topic ? base_topic : "(null)");
+        vTaskDelete(NULL);
+        return;
+    }
+
     size_t bytes_read = 0;
     int64_t start_us = esp_timer_get_time();
     int64_t end_us = start_us + ((int64_t)RECORD_SECONDS * 1000000LL);
     int64_t next_progress_us = start_us + 1000000LL;
     double rms_sum_sq = 0.0;
     size_t rms_count = 0;
+    uint32_t samples_streamed = 0;
 
-    while (esp_timer_get_time() < end_us && g_audio_samples_count < g_audio_total_capacity) {
+    sdacs_audio_hdr_t hdr = {
+        .magic = SDACS_MAGIC,
+        .ver = 1,
+        .flags = 0,
+        .seq = 0,
+        .sample_rate = SAMPLE_RATE_HZ,
+    };
+
+    static int32_t chunk[AUDIO_CHUNK_SAMPLES];
+    static uint8_t payload[sizeof(sdacs_audio_hdr_t) + (AUDIO_CHUNK_SAMPLES * sizeof(int32_t))];
+    size_t chunk_fill = 0;
+
+    while (esp_timer_get_time() < end_us) {
         esp_err_t err = i2s_channel_read(
             rx_chan,
             raw,
@@ -231,13 +250,34 @@ static void mic_test_task(void *arg)
         // In MONO + LEFT-slot mode, each returned word is a valid mic sample.
         for (int i = 0; i < n_raw; i++) {
             int32_t s24 = i2s_word_to_s24(raw[i]);
-            if (!audio_store_sample(s24)) {
-                break;
-            }
+            chunk[chunk_fill++] = s24;
+            samples_streamed++;
 
             float norm = (float)s24 / 8388608.0f;
             rms_sum_sq += (double)norm * (double)norm;
             rms_count++;
+
+            if (chunk_fill >= AUDIO_CHUNK_SAMPLES) {
+                hdr.n = (uint32_t)chunk_fill;
+                hdr.t_us = (uint64_t)esp_timer_get_time();
+
+                memcpy(payload, &hdr, sizeof(hdr));
+                memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));
+
+                esp_err_t perr = wifi_mqtt_publish_raw(
+                    audio_topic,
+                    payload,
+                    sizeof(hdr) + (chunk_fill * sizeof(int32_t)),
+                    0,
+                    0
+                );
+                if (perr != ESP_OK && (hdr.seq % 20u == 0u)) {
+                    ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(perr));
+                }
+
+                hdr.seq++;
+                chunk_fill = 0;
+            }
         }
 
         int64_t now_us = esp_timer_get_time();
@@ -253,8 +293,8 @@ static void mic_test_task(void *arg)
             float db_spl = dbfs + CAL_OFFSET_DB;
 
             ESP_LOGI(TAG, "Recording... %u/%u samples",
-                (unsigned)g_audio_samples_count,
-                (unsigned)g_audio_total_capacity);
+                (unsigned)samples_streamed,
+                (unsigned)(SAMPLE_RATE_HZ * RECORD_SECONDS));
             ESP_LOGI(TAG, "  dBFS: %.2f dB", dbfs);
             ESP_LOGI(TAG, "  SPL:  %.2f dB", db_spl);
 
@@ -263,14 +303,33 @@ static void mic_test_task(void *arg)
         }
     }
 
+    if (chunk_fill > 0) {
+        hdr.n = (uint32_t)chunk_fill;
+        hdr.t_us = (uint64_t)esp_timer_get_time();
+        memcpy(payload, &hdr, sizeof(hdr));
+        memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));
+
+        esp_err_t perr = wifi_mqtt_publish_raw(
+            audio_topic,
+            payload,
+            sizeof(hdr) + (chunk_fill * sizeof(int32_t)),
+            0,
+            0
+        );
+        if (perr != ESP_OK) {
+            ESP_LOGW(TAG, "Final audio chunk publish dropped: %s", esp_err_to_name(perr));
+        } else {
+            hdr.seq++;
+        }
+    }
+
     ESP_ERROR_CHECK(i2s_channel_disable(rx_chan));
 
-    ESP_LOGI(TAG, "Recording complete: %.2f s, samples=%u",
+    ESP_LOGI(TAG, "Recording complete: %.2f s, streamed samples=%u",
         (float)(esp_timer_get_time() - start_us) / 1000000.0f,
-        (unsigned)g_audio_samples_count);
-    ESP_LOGI(TAG, "Stored stream uses mono/left-slot samples without decimation.");
-    ESP_LOGI(TAG, "Samples stored in %u chunk(s) for later FFT/MQTT.",
-        (unsigned)g_audio_chunk_count);
+        (unsigned)samples_streamed);
+    ESP_LOGI(TAG, "Streamed %u audio chunk(s) to topic '%s'.",
+        (unsigned)hdr.seq, audio_topic);
 
     vTaskDelete(NULL);
 }
@@ -283,53 +342,7 @@ void app_main(void)
     ESP_ERROR_CHECK(config_store_init());
     maybe_provision_network_config();
 
-    size_t max_chunks = (g_audio_target_samples + AUDIO_CHUNK_SAMPLES - 1) / AUDIO_CHUNK_SAMPLES;
-    g_audio_chunks = (int32_t **)calloc(max_chunks, sizeof(int32_t *));
-    if (g_audio_chunks == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate audio chunk table.");
-        return;
-    }
-
-    for (size_t i = 0; i < max_chunks; i++) {
-        size_t chunk_samples = AUDIO_CHUNK_SAMPLES;
-        size_t remaining = g_audio_target_samples - g_audio_total_capacity;
-        if (remaining < chunk_samples) {
-            chunk_samples = remaining;
-        }
-
-        int32_t *chunk = (int32_t *)heap_caps_malloc(
-            chunk_samples * sizeof(int32_t),
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-        );
-        if (chunk == NULL) {
-            chunk = (int32_t *)heap_caps_malloc(
-                chunk_samples * sizeof(int32_t),
-                MALLOC_CAP_8BIT
-            );
-        }
-
-        if (chunk == NULL) {
-            break;
-        }
-
-        g_audio_chunks[g_audio_chunk_count++] = chunk;
-        g_audio_total_capacity += chunk_samples;
-    }
-
-    if (g_audio_total_capacity == 0) {
-        ESP_LOGE(TAG, "Audio buffer allocation failed.");
-        free(g_audio_chunks);
-        g_audio_chunks = NULL;
-        return;
-    }
-
-    if (g_audio_total_capacity < g_audio_target_samples) {
-        ESP_LOGW(TAG, "Allocated %u/%u samples (%.2f/%.2f s).",
-            (unsigned)g_audio_total_capacity,
-            (unsigned)g_audio_target_samples,
-            (float)g_audio_total_capacity / (float)SAMPLE_RATE_HZ,
-            (float)g_audio_target_samples / (float)SAMPLE_RATE_HZ);
-    }
+    ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
 
     i2s_mic_init();
 
@@ -345,4 +358,3 @@ void app_main(void)
 
     ESP_LOGI(TAG, "ICS-43434 one-shot capture started (%d s).", RECORD_SECONDS);
 }
-

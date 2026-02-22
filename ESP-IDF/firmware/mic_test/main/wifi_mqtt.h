@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -28,6 +29,9 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg);
 
 // Non-blocking enqueue (drops if queue is full)
 bool wifi_mqtt_try_send(const sdacs_features_t *f);
+
+// Publish binary payload directly (returns error if MQTT is not connected)
+esp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t len, int qos, int retain);
 
 // Optional: check if MQTT is connected (for debug/UI)
 bool wifi_mqtt_is_connected(void);

@@ -289,6 +289,27 @@ bool wifi_mqtt_try_send(const sdacs_features_t *f)
     return (xQueueSend(s_feat_q, f, 0) == pdTRUE);
 }
 
+esp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t len, int qos, int retain)
+{
+    if (!topic || !payload || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_mqtt || !s_mqtt_connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int msg_id = esp_mqtt_client_publish(
+        s_mqtt,
+        topic,
+        (const char *)payload,
+        (int)len,
+        qos,
+        retain
+    );
+
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
+
 bool wifi_mqtt_is_connected(void)
 {
     return s_mqtt_connected;
