@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
 #include <math.h>
 
 #include "freertos/FreeRTOS.h"
@@ -34,6 +36,8 @@
 #include "nvs_flash.h"
 
 #include "driver/i2s_std.h"
+#include "config_store.h"
+#include "wifi_mqtt.h"
 
 /* ================= USER CONFIG ================= */
 
@@ -54,6 +58,12 @@
 #define AUDIO_CHUNK_SAMPLES 4096
 #define CAL_OFFSET_DB  94.0f   // placeholder until calibrated
 
+// Temporary first-boot provisioning values (stored into NVS if wifi is empty).
+#define PROVISION_WIFI_SSID   "195BSMT_2.4GHz"
+#define PROVISION_WIFI_PASS   "LD4BSMT"
+#define PROVISION_MQTT_URI    "mqtt://192.168.1.50"
+#define PROVISION_MQTT_TOPIC  "sdacs/node/node01/features"
+
 /* ============================================== */
 
 static const char *TAG = "MIC_TEST";
@@ -67,6 +77,33 @@ static size_t g_audio_chunk_count = 0;
 static size_t g_audio_total_capacity = 0;
 static size_t g_audio_samples_count = 0;
 static const size_t g_audio_target_samples = (size_t)SAMPLE_RATE_HZ * RECORD_SECONDS;
+
+static void maybe_provision_network_config(void)
+{
+    const char *ssid = NULL;
+    const char *pass = NULL;
+    esp_err_t err = config_store_get_wifi(&ssid, &pass);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "config_store_get_wifi failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    if (ssid && ssid[0] != '\0') {
+        ESP_LOGI(TAG, "Config already provisioned; keeping existing WiFi/MQTT settings.");
+        return;
+    }
+
+    if (strcmp(PROVISION_WIFI_SSID, "YOUR_WIFI_SSID") == 0 ||
+        strcmp(PROVISION_WIFI_PASS, "YOUR_WIFI_PASSWORD") == 0) {
+        ESP_LOGW(TAG, "Provisioning skipped: set PROVISION_WIFI_SSID/PROVISION_WIFI_PASS in mic_test.c");
+        return;
+    }
+
+    ESP_ERROR_CHECK(config_store_set_wifi(PROVISION_WIFI_SSID, PROVISION_WIFI_PASS));
+    ESP_ERROR_CHECK(config_store_set_mqtt(PROVISION_MQTT_URI, PROVISION_MQTT_TOPIC));
+
+    ESP_LOGI(TAG, "Provisioned WiFi/MQTT defaults into NVS (one-time).");
+}
 
 static inline bool audio_store_sample(int32_t sample)
 {
@@ -243,12 +280,8 @@ static void mic_test_task(void *arg)
 ------------------------------------------------------------ */
 void app_main(void)
 {
-    esp_err_t nvs_err = nvs_flash_init();
-    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        nvs_err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(nvs_err);
+    ESP_ERROR_CHECK(config_store_init());
+    maybe_provision_network_config();
 
     size_t max_chunks = (g_audio_target_samples + AUDIO_CHUNK_SAMPLES - 1) / AUDIO_CHUNK_SAMPLES;
     g_audio_chunks = (int32_t **)calloc(max_chunks, sizeof(int32_t *));
