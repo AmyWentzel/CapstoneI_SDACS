@@ -35,3 +35,10 @@ esp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t l
 
 // Optional: check if MQTT is connected (for debug/UI)
 bool wifi_mqtt_is_connected(void);
+
+/* ======================== ADDED FOR STREAMING STABILITY ======================== */
+
+/**
+ * @brief Block until WiFi got IP and MQTT connected, or timeout.
+ */
+esp_err_t wifi_mqtt_wait_connected(uint32_t timeout_ms);

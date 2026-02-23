@@ -38,42 +38,38 @@ static wifi_mqtt_cfg_t s_cfg = {0};
 // Keep queue small; we only publish ~1 msg/sec
 #define FEATURES_QUEUE_LEN  8
 
-static const char *wifi_disc_reason_str(uint8_t reason)
+static const char *authmode_to_str(wifi_auth_mode_t authmode)
 {
-    switch (reason) {
-        case WIFI_REASON_UNSPECIFIED: return "UNSPECIFIED";
-        case WIFI_REASON_AUTH_EXPIRE: return "AUTH_EXPIRE";
-        case WIFI_REASON_AUTH_LEAVE: return "AUTH_LEAVE";
-        case WIFI_REASON_ASSOC_EXPIRE: return "ASSOC_EXPIRE";
-        case WIFI_REASON_ASSOC_TOOMANY: return "ASSOC_TOOMANY";
-        case WIFI_REASON_NOT_AUTHED: return "NOT_AUTHED";
-        case WIFI_REASON_NOT_ASSOCED: return "NOT_ASSOCED";
-        case WIFI_REASON_ASSOC_LEAVE: return "ASSOC_LEAVE";
-        case WIFI_REASON_ASSOC_NOT_AUTHED: return "ASSOC_NOT_AUTHED";
-        case WIFI_REASON_DISASSOC_PWRCAP_BAD: return "DISASSOC_PWRCAP_BAD";
-        case WIFI_REASON_DISASSOC_SUPCHAN_BAD: return "DISASSOC_SUPCHAN_BAD";
-        case WIFI_REASON_IE_INVALID: return "IE_INVALID";
-        case WIFI_REASON_MIC_FAILURE: return "MIC_FAILURE";
-        case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return "4WAY_HANDSHAKE_TIMEOUT";
-        case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT: return "GROUP_KEY_UPDATE_TIMEOUT";
-        case WIFI_REASON_IE_IN_4WAY_DIFFERS: return "IE_IN_4WAY_DIFFERS";
-        case WIFI_REASON_GROUP_CIPHER_INVALID: return "GROUP_CIPHER_INVALID";
-        case WIFI_REASON_PAIRWISE_CIPHER_INVALID: return "PAIRWISE_CIPHER_INVALID";
-        case WIFI_REASON_AKMP_INVALID: return "AKMP_INVALID";
-        case WIFI_REASON_UNSUPP_RSN_IE_VERSION: return "UNSUPP_RSN_IE_VERSION";
-        case WIFI_REASON_INVALID_RSN_IE_CAP: return "INVALID_RSN_IE_CAP";
-        case WIFI_REASON_802_1X_AUTH_FAILED: return "802_1X_AUTH_FAILED";
-        case WIFI_REASON_CIPHER_SUITE_REJECTED: return "CIPHER_SUITE_REJECTED";
-        case WIFI_REASON_BEACON_TIMEOUT: return "BEACON_TIMEOUT";
-        case WIFI_REASON_NO_AP_FOUND: return "NO_AP_FOUND";
-        case WIFI_REASON_AUTH_FAIL: return "AUTH_FAIL";
-        case WIFI_REASON_ASSOC_FAIL: return "ASSOC_FAIL";
-        case WIFI_REASON_HANDSHAKE_TIMEOUT: return "HANDSHAKE_TIMEOUT";
-        case WIFI_REASON_CONNECTION_FAIL: return "CONNECTION_FAIL";
-        case WIFI_REASON_AP_TSF_RESET: return "AP_TSF_RESET";
-        case WIFI_REASON_ROAMING: return "ROAMING";
+    switch (authmode) {
+        case WIFI_AUTH_OPEN: return "OPEN";
+        case WIFI_AUTH_WEP: return "WEP";
+        case WIFI_AUTH_WPA_PSK: return "WPA_PSK";
+        case WIFI_AUTH_WPA2_PSK: return "WPA2_PSK";
+        case WIFI_AUTH_WPA_WPA2_PSK: return "WPA_WPA2_PSK";
+        case WIFI_AUTH_ENTERPRISE: return "ENTERPRISE";
+        case WIFI_AUTH_WPA3_PSK: return "WPA3_PSK";
+        case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2_WPA3_PSK";
         default: return "UNKNOWN";
     }
+}
+
+static void log_sta_ap_info(const char *prefix)
+{
+    wifi_ap_record_t ap_info = {0};
+    esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s: esp_wifi_sta_get_ap_info failed: %s",
+                 prefix, esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "%s: AP='%s' RSSI=%d dBm CH=%u AUTH=%s",
+             prefix,
+             (const char *)ap_info.ssid,
+             (int)ap_info.rssi,
+             (unsigned)ap_info.primary,
+             authmode_to_str(ap_info.authmode));
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -82,32 +78,43 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
         ESP_LOGI(TAG, "WiFi STA start -> connect");
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
-        uint8_t reason = disc ? disc->reason : 0;
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        wifi_event_sta_connected_t *evt = (wifi_event_sta_connected_t *)event_data;
+        if (evt) {
+            ESP_LOGI(TAG,
+                     "WiFi connected: SSID='%.*s' channel=%u authmode=%s",
+                     (int)evt->ssid_len,
+                     (const char *)evt->ssid,
+                     (unsigned)evt->channel,
+                     authmode_to_str(evt->authmode));
+        } else {
+            ESP_LOGI(TAG, "WiFi connected");
+        }
+        log_sta_ap_info("WiFi link");
+    
+    }else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+
+        wifi_event_sta_disconnected_t *disc =
+            (wifi_event_sta_disconnected_t *)event_data;
+
+        ESP_LOGW(TAG, "WiFi disconnected (reason=%d)", disc ? disc->reason : -1);
+
         s_mqtt_connected = false;
+
         if (s_retry_num < WIFI_MAX_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGW(TAG,
-                "WiFi disconnected (reason=%u:%s), retry %d/%d",
-                (unsigned)reason,
-                wifi_disc_reason_str(reason),
-                s_retry_num,
-                WIFI_MAX_RETRY);
+            ESP_LOGW(TAG, "WiFi disconnected, retry %d/%d",
+                    s_retry_num, WIFI_MAX_RETRY);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGE(TAG,
-                "WiFi failed after retries (last reason=%u:%s)",
-                (unsigned)reason,
-                wifi_disc_reason_str(reason));
         }
-        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        log_sta_ap_info("WiFi IP");
     }
 }
 
@@ -165,7 +172,11 @@ static esp_err_t wifi_init_sta(const char *ssid, const char *pass)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-
+    
+    /* ======================== ADDED FOR STREAMING STABILITY ======================== */
+    /* Disable WiFi power save for stable continuous streaming */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    
     ESP_LOGI(TAG, "WiFi init done. SSID=%s", ssid);
     return ESP_OK;
 }
@@ -330,32 +341,63 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
     return ESP_OK;
 }
 
-bool wifi_mqtt_try_send(const sdacs_features_t *f)
-{
-    if (!s_feat_q || !f) return false;
-    // 0 tick wait => non-blocking
-    return (xQueueSend(s_feat_q, f, 0) == pdTRUE);
-}
+/* ======================== ADDED FOR STREAMING STABILITY ======================== */
 
-esp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t len, int qos, int retain)
+esp_err_t wifi_mqtt_wait_connected(uint32_t timeout_ms)
 {
-    if (!topic || !payload || len == 0) {
-        return ESP_ERR_INVALID_ARG;
+    const TickType_t start = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+
+    /* Wait for WiFi connected (got IP) */
+    EventBits_t bits = xEventGroupWaitBits(
+        s_wifi_event_group,
+        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+        pdFALSE,
+        pdFALSE,
+        timeout_ticks
+    );
+
+    if (bits & WIFI_FAIL_BIT) return ESP_FAIL;
+    if (!(bits & WIFI_CONNECTED_BIT)) return ESP_ERR_TIMEOUT;
+
+    /* Then wait for MQTT connection */
+    while (!s_mqtt_connected) {
+        if ((xTaskGetTickCount() - start) > timeout_ticks) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
-    if (!s_mqtt || !s_mqtt_connected) {
-        return ESP_ERR_INVALID_STATE;
-    }
+
+    return ESP_OK;
+}
+// This lets your mic task publish binary chunks 
+// immediately without allocating new buffers or queueing.
+esp_err_t wifi_mqtt_publish_raw(const char *topic,
+                               const void *payload,
+                               size_t len,
+                               int qos,
+                               int retain)
+{
+    if (!topic || !payload || len == 0) return ESP_ERR_INVALID_ARG;
+    if (!s_mqtt || !s_mqtt_connected) return ESP_ERR_INVALID_STATE;
 
     int msg_id = esp_mqtt_client_publish(
         s_mqtt,
         topic,
         (const char *)payload,
-        (int)len,
+        (int)len,   // IMPORTANT: binary length
         qos,
         retain
     );
-
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
+
+
+bool wifi_mqtt_try_send(const sdacs_features_t *f)
+{
+    if (!s_feat_q || !f) return false;
+    // 0 tick wait => non-blocking
+    return (xQueueSend(s_feat_q, f, 0) == pdTRUE);
 }
 
 bool wifi_mqtt_is_connected(void)
