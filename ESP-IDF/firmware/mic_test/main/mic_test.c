@@ -216,6 +216,9 @@ static void mic_test_task(void *arg)
     double rms_sum_sq = 0.0;
     size_t rms_count = 0;
     uint32_t samples_streamed = 0;
+    uint32_t chunks_attempted = 0;
+    uint32_t chunks_sent = 0;
+    uint32_t chunks_dropped = 0;
 
     sdacs_audio_hdr_t hdr = {
         .magic = SDACS_MAGIC,
@@ -271,11 +274,18 @@ static void mic_test_task(void *arg)
                     0,
                     0
                 );
-                if (perr != ESP_OK && (hdr.seq % 20u == 0u)) {
+                chunks_attempted++;
+                if (perr == ESP_OK) {
+                    chunks_sent++;
+                    hdr.seq++;
+                } else {
+                    chunks_dropped++;
+                }
+
+                if (perr != ESP_OK && (chunks_attempted % 20u == 0u)) {
                     ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(perr));
                 }
 
-                hdr.seq++;
                 chunk_fill = 0;
             }
         }
@@ -316,9 +326,12 @@ static void mic_test_task(void *arg)
             0,
             0
         );
+        chunks_attempted++;
         if (perr != ESP_OK) {
+            chunks_dropped++;
             ESP_LOGW(TAG, "Final audio chunk publish dropped: %s", esp_err_to_name(perr));
         } else {
+            chunks_sent++;
             hdr.seq++;
         }
     }
@@ -328,8 +341,11 @@ static void mic_test_task(void *arg)
     ESP_LOGI(TAG, "Recording complete: %.2f s, streamed samples=%u",
         (float)(esp_timer_get_time() - start_us) / 1000000.0f,
         (unsigned)samples_streamed);
-    ESP_LOGI(TAG, "Streamed %u audio chunk(s) to topic '%s'.",
-        (unsigned)hdr.seq, audio_topic);
+    ESP_LOGI(TAG, "Audio chunks: attempted=%u sent=%u dropped=%u topic='%s'",
+        (unsigned)chunks_attempted,
+        (unsigned)chunks_sent,
+        (unsigned)chunks_dropped,
+        audio_topic);
 
     vTaskDelete(NULL);
 }

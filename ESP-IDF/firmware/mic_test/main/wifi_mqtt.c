@@ -38,6 +38,44 @@ static wifi_mqtt_cfg_t s_cfg = {0};
 // Keep queue small; we only publish ~1 msg/sec
 #define FEATURES_QUEUE_LEN  8
 
+static const char *wifi_disc_reason_str(uint8_t reason)
+{
+    switch (reason) {
+        case WIFI_REASON_UNSPECIFIED: return "UNSPECIFIED";
+        case WIFI_REASON_AUTH_EXPIRE: return "AUTH_EXPIRE";
+        case WIFI_REASON_AUTH_LEAVE: return "AUTH_LEAVE";
+        case WIFI_REASON_ASSOC_EXPIRE: return "ASSOC_EXPIRE";
+        case WIFI_REASON_ASSOC_TOOMANY: return "ASSOC_TOOMANY";
+        case WIFI_REASON_NOT_AUTHED: return "NOT_AUTHED";
+        case WIFI_REASON_NOT_ASSOCED: return "NOT_ASSOCED";
+        case WIFI_REASON_ASSOC_LEAVE: return "ASSOC_LEAVE";
+        case WIFI_REASON_ASSOC_NOT_AUTHED: return "ASSOC_NOT_AUTHED";
+        case WIFI_REASON_DISASSOC_PWRCAP_BAD: return "DISASSOC_PWRCAP_BAD";
+        case WIFI_REASON_DISASSOC_SUPCHAN_BAD: return "DISASSOC_SUPCHAN_BAD";
+        case WIFI_REASON_IE_INVALID: return "IE_INVALID";
+        case WIFI_REASON_MIC_FAILURE: return "MIC_FAILURE";
+        case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return "4WAY_HANDSHAKE_TIMEOUT";
+        case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT: return "GROUP_KEY_UPDATE_TIMEOUT";
+        case WIFI_REASON_IE_IN_4WAY_DIFFERS: return "IE_IN_4WAY_DIFFERS";
+        case WIFI_REASON_GROUP_CIPHER_INVALID: return "GROUP_CIPHER_INVALID";
+        case WIFI_REASON_PAIRWISE_CIPHER_INVALID: return "PAIRWISE_CIPHER_INVALID";
+        case WIFI_REASON_AKMP_INVALID: return "AKMP_INVALID";
+        case WIFI_REASON_UNSUPP_RSN_IE_VERSION: return "UNSUPP_RSN_IE_VERSION";
+        case WIFI_REASON_INVALID_RSN_IE_CAP: return "INVALID_RSN_IE_CAP";
+        case WIFI_REASON_802_1X_AUTH_FAILED: return "802_1X_AUTH_FAILED";
+        case WIFI_REASON_CIPHER_SUITE_REJECTED: return "CIPHER_SUITE_REJECTED";
+        case WIFI_REASON_BEACON_TIMEOUT: return "BEACON_TIMEOUT";
+        case WIFI_REASON_NO_AP_FOUND: return "NO_AP_FOUND";
+        case WIFI_REASON_AUTH_FAIL: return "AUTH_FAIL";
+        case WIFI_REASON_ASSOC_FAIL: return "ASSOC_FAIL";
+        case WIFI_REASON_HANDSHAKE_TIMEOUT: return "HANDSHAKE_TIMEOUT";
+        case WIFI_REASON_CONNECTION_FAIL: return "CONNECTION_FAIL";
+        case WIFI_REASON_AP_TSF_RESET: return "AP_TSF_RESET";
+        case WIFI_REASON_ROAMING: return "ROAMING";
+        default: return "UNKNOWN";
+    }
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -45,14 +83,24 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         esp_wifi_connect();
         ESP_LOGI(TAG, "WiFi STA start -> connect");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        uint8_t reason = disc ? disc->reason : 0;
         s_mqtt_connected = false;
         if (s_retry_num < WIFI_MAX_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGW(TAG, "WiFi disconnected, retry %d/%d", s_retry_num, WIFI_MAX_RETRY);
+            ESP_LOGW(TAG,
+                "WiFi disconnected (reason=%u:%s), retry %d/%d",
+                (unsigned)reason,
+                wifi_disc_reason_str(reason),
+                s_retry_num,
+                WIFI_MAX_RETRY);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGE(TAG, "WiFi failed after retries");
+            ESP_LOGE(TAG,
+                "WiFi failed after retries (last reason=%u:%s)",
+                (unsigned)reason,
+                wifi_disc_reason_str(reason));
         }
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
