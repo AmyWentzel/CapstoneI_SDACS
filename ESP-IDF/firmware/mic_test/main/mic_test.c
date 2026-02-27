@@ -10,13 +10,13 @@
       - Confirm microphone is producing real audio samples
       - Record a fixed capture window to RAM for later processing
 
-    WIRING (ICS-43434 → ESP32-S3):
+    WIRING (ICS-43434 → ESP32-S3 Metro):
       3V     -> 3.3V
       GND    -> GND
       SEL    -> GND        (LEFT channel)
-      BCLK   -> GPIO6
-      LRCLK  -> GPIO5
-      DOUT   -> GPIO4
+      BCLK   -> GPIO14          A0
+      LRCLK  -> GPIO15 (WS)     A1
+      DOUT   -> GPIO16 (DIN)    A2
 */
 
 #include <stdio.h>
@@ -33,15 +33,17 @@
 #include "esp_timer.h"
 
 #include "driver/i2s_std.h"
+#include "driver/i2c.h"
 #include "config_store.h"
 #include "wifi_mqtt.h"
+#include "temp_humidity.h"
 
 /* ================= USER CONFIG ================= */
 
 // I2S pin mapping (safe pins for ESP32-S3)
-#define I2S_BCLK_GPIO   GPIO_NUM_6
-#define I2S_WS_GPIO     GPIO_NUM_5
-#define I2S_DIN_GPIO    GPIO_NUM_4
+#define I2S_BCLK_GPIO   GPIO_NUM_14     //Bit Clock from ESP32
+#define I2S_WS_GPIO     GPIO_NUM_15     //Word Select or LRCL on ICS-43434
+#define I2S_DIN_GPIO    GPIO_NUM_16     //Data is sent to EPS from ICS-43434 over DOUT
 
 // Audio sample rate
 #define SAMPLE_RATE_HZ  48000
@@ -50,7 +52,7 @@
 #define I2S_FRAMES_PER_READ  512
 
 // One-shot recording duration in seconds.
-#define RECORD_SECONDS 20
+#define RECORD_SECONDS 20 
 // Audio is stored in fixed-size chunks to avoid one large contiguous allocation.
 #define AUDIO_CHUNK_SAMPLES 2048
 #define CAL_OFFSET_DB  94.0f   // placeholder until calibrated
@@ -60,6 +62,14 @@
 #define PROVISION_WIFI_PASS   "LD4PBSMT"
 #define PROVISION_MQTT_URI    "mqtt://192.168.5.38:1883"
 #define PROVISION_MQTT_TOPIC  "sdacs/node/node01/features"
+
+// HDC302x temp/humidity sensor (ESP32-S3 common I2C pins)
+#define TH_I2C_PORT        I2C_NUM_0
+#define TH_I2C_SDA_GPIO    GPIO_NUM_8
+#define TH_I2C_SCL_GPIO    GPIO_NUM_9
+#define TH_I2C_FREQ_HZ     100000
+#define TH_SENSOR_ADDR     0x44
+#define TH_PERIOD_MS       2000
 
 /* ============================================== */
 
@@ -352,10 +362,39 @@ static void mic_test_task(void *arg)
 ------------------------------------------------------------ */
 void app_main(void)
 {
+    const char *broker = NULL;
+    const char *base_topic = NULL;
+    char th_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 24];
+
     ESP_ERROR_CHECK(config_store_init());
     maybe_provision_network_config();
 
     ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
+    if (config_store_get_mqtt(&broker, &base_topic) == ESP_OK &&
+        base_topic && base_topic[0] != '\0') {
+        int n = snprintf(th_topic, sizeof(th_topic), "%s/temp_humidity", base_topic);
+        if (n > 0 && n < (int)sizeof(th_topic)) {
+            ESP_LOGI(TAG, "Temp/Humidity topic: '%s'", th_topic);
+        } else {
+            ESP_LOGW(TAG, "Temp/Humidity topic too long for logging.");
+        }
+    } else {
+        ESP_LOGW(TAG, "Temp/Humidity topic unavailable (MQTT base topic missing).");
+    }
+
+    ESP_LOGI(TAG, "Temp/Humidity sensor config: port=%d SDA=%d SCL=%d freq=%u addr=0x%02X period_ms=%u",
+             TH_I2C_PORT, TH_I2C_SDA_GPIO, TH_I2C_SCL_GPIO,
+             (unsigned)TH_I2C_FREQ_HZ, TH_SENSOR_ADDR, (unsigned)TH_PERIOD_MS);
+
+    bool th_ok = temp_humidity_start(TH_I2C_PORT,
+                    TH_I2C_SDA_GPIO,
+                    TH_I2C_SCL_GPIO,
+                    TH_I2C_FREQ_HZ,
+                    TH_SENSOR_ADDR,
+                    TH_PERIOD_MS);
+    if (!th_ok) {
+        ESP_LOGW(TAG, "temp_humidity_start failed; continuing without sensor telemetry");
+    }
 
     i2s_mic_init();
 

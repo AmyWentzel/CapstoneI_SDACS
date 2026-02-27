@@ -11,6 +11,7 @@ idf_component_register(
         "mic_test.c"
         "wifi_mqtt.c"
         "config_store.c"
+        "temp_humidity.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_wifi
@@ -18,5 +19,6 @@ idf_component_register(
         mqtt
         nvs_flash
     PRIV_REQUIRES
+        driver
         esp_driver_i2s
 )
