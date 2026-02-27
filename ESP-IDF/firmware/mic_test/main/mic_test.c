@@ -61,6 +61,7 @@
 #define PROVISION_WIFI_PASS   "LD4PBSMT"
 #define PROVISION_MQTT_URI    "mqtt://192.168.5.38:1883"
 #define PROVISION_MQTT_TOPIC  "sdacs/node/node01/features"
+#define PROVISION_ALWAYS_SYNC_MQTT 1
 
 /* ============================================== */
 
@@ -85,14 +86,11 @@ static void maybe_provision_network_config(void)
 {
     const char *ssid = NULL;
     const char *pass = NULL;
+    const char *broker_uri = NULL;
+    const char *mqtt_topic = NULL;
     esp_err_t err = config_store_get_wifi(&ssid, &pass);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "config_store_get_wifi failed: %s", esp_err_to_name(err));
-        return;
-    }
-
-    if (ssid && ssid[0] != '\0') {
-        ESP_LOGI(TAG, "Config already provisioned; keeping existing WiFi/MQTT settings.");
         return;
     }
 
@@ -102,10 +100,33 @@ static void maybe_provision_network_config(void)
         return;
     }
 
-    ESP_ERROR_CHECK(config_store_set_wifi(PROVISION_WIFI_SSID, PROVISION_WIFI_PASS));
-    ESP_ERROR_CHECK(config_store_set_mqtt(PROVISION_MQTT_URI, PROVISION_MQTT_TOPIC));
+    if (!ssid || ssid[0] == '\0') {
+        ESP_ERROR_CHECK(config_store_set_wifi(PROVISION_WIFI_SSID, PROVISION_WIFI_PASS));
+        ESP_LOGI(TAG, "Provisioned WiFi defaults into NVS (one-time).");
+    } else {
+        ESP_LOGI(TAG, "WiFi already provisioned; keeping existing SSID.");
+    }
 
-    ESP_LOGI(TAG, "Provisioned WiFi/MQTT defaults into NVS (one-time).");
+    err = config_store_get_mqtt(&broker_uri, &mqtt_topic);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "config_store_get_mqtt failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+#if PROVISION_ALWAYS_SYNC_MQTT
+    if (!broker_uri || !mqtt_topic ||
+        strcmp(broker_uri, PROVISION_MQTT_URI) != 0 ||
+        strcmp(mqtt_topic, PROVISION_MQTT_TOPIC) != 0) {
+        ESP_ERROR_CHECK(config_store_set_mqtt(PROVISION_MQTT_URI, PROVISION_MQTT_TOPIC));
+        broker_uri = PROVISION_MQTT_URI;
+        mqtt_topic = PROVISION_MQTT_TOPIC;
+        ESP_LOGW(TAG, "Synced MQTT settings in NVS to firmware defaults.");
+    }
+#endif
+
+    ESP_LOGI(TAG, "Active MQTT config: broker=%s topic=%s",
+             broker_uri ? broker_uri : "(null)",
+             mqtt_topic ? mqtt_topic : "(null)");
 }
 
 /*
@@ -353,17 +374,20 @@ static void mic_test_task(void *arg)
 ------------------------------------------------------------ */
 void app_main(void)
 {
-    temp_humidity_start(0,
-                    47,       // SDA (example)
-                    48,       // SCL (example)
-                    400000,  // 400kHz
-                    0x44,    // typical HDC302x I2C address
-                    2000);   // reads every 2s
-    
     ESP_ERROR_CHECK(config_store_init());
     maybe_provision_network_config();
 
     ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
+
+    bool th_ok = temp_humidity_start(0,
+                    47,       // SDA
+                    48,       // SCL
+                    100000,   // 100kHz for reliable bring-up
+                    0x44,     // default HDC302x I2C address
+                    2000);    // reads every 2s
+    if (!th_ok) {
+        ESP_LOGW(TAG, "temp_humidity_start failed; continuing without temp/humidity telemetry");
+    }
 
     i2s_mic_init();
 
