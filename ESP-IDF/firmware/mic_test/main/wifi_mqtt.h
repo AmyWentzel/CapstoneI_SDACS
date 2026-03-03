@@ -17,15 +17,8 @@ typedef struct {
     uint32_t n;              // number of samples in the window
 } sdacs_features_t;
 
-typedef struct {
-    const char *ssid;
-    const char *pass;
-    const char *broker_uri;  // e.g. "mqtt://192.168.1.50"
-    const char *topic;       // e.g. "sdacs/node/node01/features"
-} wifi_mqtt_cfg_t;
-
 // Start WiFi + MQTT tasks and create internal queue
-esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg);
+esp_err_t wifi_mqtt_start(void);
 
 // Non-blocking enqueue (drops if queue is full)
 bool wifi_mqtt_try_send(const sdacs_features_t *f);

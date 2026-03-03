@@ -33,7 +33,14 @@ static esp_mqtt_client_handle_t s_mqtt = NULL;
 
 static bool s_mqtt_connected = false;
 
-static wifi_mqtt_cfg_t s_cfg = {0};
+typedef struct {
+    const char *ssid;
+    const char *pass;
+    const char *broker_uri;
+    const char *topic;
+} wifi_mqtt_runtime_cfg_t;
+
+static wifi_mqtt_runtime_cfg_t s_cfg = {0};
 
 // Keep queue small; we only publish ~1 msg/sec
 #define FEATURES_QUEUE_LEN  8
@@ -281,15 +288,13 @@ static void mqtt_publish_task(void *arg)
     }
 }
 
-esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
+esp_err_t wifi_mqtt_start(void)
 {
     const char *ssid = NULL;
     const char *pass = NULL;
     const char *broker_uri = NULL;
     const char *topic = NULL;
     esp_err_t err = ESP_OK;
-
-    (void)cfg; // Runtime settings come from config_store.
 
     err = config_store_init();
     if (err != ESP_OK) {

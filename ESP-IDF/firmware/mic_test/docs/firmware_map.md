@@ -5,7 +5,7 @@
 - Startup sequence:
   1. `config_store_init()`
   2. `maybe_provision_network_config()` (one-time provisioning if WiFi SSID is empty)
-  3. `wifi_mqtt_start(NULL)`
+3. `wifi_mqtt_start()`
   4. `i2s_mic_init()`
   5. Create `mic_test` task
 
