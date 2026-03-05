@@ -32,6 +32,12 @@
 
 #include "driver/i2s_std.h"
 
+/* SD card (FAT) support */
+#include "driver/sdmmc_host.h"
+#include "driver/sdspi_host.h"
+#include "sdmmc_cmd.h"
+#include "esp_vfs_fat.h"
+
 /* ================= USER CONFIG ================= */
 
 // I2S pin mapping (safe pins for ESP32-S3)
@@ -52,6 +58,64 @@
 
 static const char *TAG = "MIC_TEST";
 
+/* mount point for FAT filesystem */
+static const char *SD_MOUNT_POINT = "/sdcard";
+
+/*
+ * Initialize the SD card and mount FAT filesystem at SD_MOUNT_POINT.
+ * Returns ESP_OK on success, error code otherwise.
+ */
+static esp_err_t sd_card_init(void)
+{
+    esp_err_t ret;
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    sdspi_slot_config_t slot_config = SDSPI_SLOT_CONFIG_DEFAULT();
+    slot_config.gpio_cs = GPIO_NUM_5; // adjust CS pin as needed
+
+    /* mount configuration: allow format on failure and max files */
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    sdmmc_card_t *card;
+    ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to mount SD card (%s)", esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "SD card mounted at %s", SD_MOUNT_POINT);
+    return ESP_OK;
+}
+
+/*
+ * Write raw bytes to a file on the SD card at a given byte offset.
+ * The file is created if it does not exist.  Returns true on success.
+ */
+static bool sd_write_raw(const char *path, uint32_t addr, const void *buf, size_t len)
+{
+    char fullpath[64];
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", SD_MOUNT_POINT, path);
+    FILE *f = fopen(fullpath, "r+b");
+    if (!f) {
+        /* create file if it doesn't exist */
+        f = fopen(fullpath, "w+b");
+        if (!f) {
+            ESP_LOGE(TAG, "Failed to open %s", fullpath);
+            return false;
+        }
+    }
+    if (fseek(f, addr, SEEK_SET) != 0) {
+        ESP_LOGE(TAG, "fseek failed");
+        fclose(f);
+        return false;
+    }
+    size_t written = fwrite(buf, 1, len, f);
+    fclose(f);
+    return (written == len);
+}
+
 static i2s_chan_handle_t rx_chan = NULL;
 static int32_t raw[I2S_FRAMES_PER_READ];
 
@@ -59,6 +123,11 @@ static int32_t raw[I2S_FRAMES_PER_READ];
 static int32_t *g_audio_samples = NULL;
 static size_t g_audio_samples_count = 0;
 static const size_t g_audio_samples_capacity = (size_t)SAMPLE_RATE_HZ * RECORD_SECONDS;
+
+/* SD card audio address tracking (byte offsets) */
+static uint32_t g_audio_start_addr = UINT32_MAX;
+static uint32_t g_audio_end_addr = 0;
+static uint32_t g_audio_write_ptr = 0;    // current write offset in file
 
 /*
     Convert a 32-bit I2S slot word into a signed 24-bit sample.
@@ -148,11 +217,14 @@ static void mic_test_task(void *arg)
     int64_t end_us = start_us + ((int64_t)RECORD_SECONDS * 1000000LL);
     int64_t next_progress_us = start_us + 1000000LL;
 
+    /* prepare a buffer to hold decimated samples for SD write */
+    int32_t write_buf[I2S_FRAMES_PER_READ/2];
+
     while (esp_timer_get_time() < end_us && g_audio_samples_count < g_audio_samples_capacity) {
         esp_err_t err = i2s_channel_read(
             rx_chan,
             raw,
- z             sizeof(raw),
+            sizeof(raw),
             &bytes_read,
             portMAX_DELAY
         );
@@ -169,12 +241,27 @@ static void mic_test_task(void *arg)
         // Consume only LEFT-phase words from interleaved I2S stream.
         // With current packing this lands on even indices, so only every
         // second raw word is stored.
+        int write_count = 0;
         for (int i = 0; i < n_raw; i += 2) {
             int32_t s24 = i2s_word_to_s24(raw[i]);
-            if (g_audio_samples_count >= g_audio_samples_capacity) {
-                break;
+            if (g_audio_samples_count < g_audio_samples_capacity) {
+                g_audio_samples[g_audio_samples_count++] = s24;
             }
-            g_audio_samples[g_audio_samples_count++] = s24;
+            // also save to local buffer for SD write
+            write_buf[write_count++] = s24;
+        }
+
+        /* write this packet to SD if available */
+        if (write_count > 0) {
+            if (g_audio_start_addr == UINT32_MAX) {
+                g_audio_start_addr = g_audio_write_ptr;
+            }
+            size_t bytes = write_count * sizeof(int32_t);
+            if (sd_write_raw("audio.bin", g_audio_write_ptr, write_buf, bytes)) {
+                g_audio_write_ptr += bytes;
+            } else {
+                ESP_LOGW(TAG, "SD write failed at offset %u", g_audio_write_ptr);
+            }
         }
 
         int64_t now_us = esp_timer_get_time();
@@ -188,11 +275,20 @@ static void mic_test_task(void *arg)
 
     ESP_ERROR_CHECK(i2s_channel_disable(rx_chan));
 
+    /* compute final end address */
+    if (g_audio_start_addr != UINT32_MAX) {
+        g_audio_end_addr = g_audio_write_ptr;
+    }
+
     ESP_LOGI(TAG, "Recording complete: %.2f s, samples=%u",
         (float)(esp_timer_get_time() - start_us) / 1000000.0f,
         (unsigned)g_audio_samples_count);
     ESP_LOGI(TAG, "Stored stream currently uses left-phase-only decimation (i += 2).");
     ESP_LOGI(TAG, "Samples stored in g_audio_samples for later FFT/MQTT.");
+    if (g_audio_start_addr != UINT32_MAX) {
+        ESP_LOGI(TAG, "Audio data written to SD from %u to %u bytes",
+            g_audio_start_addr, g_audio_end_addr);
+    }
 
     vTaskDelete(NULL);
 }
@@ -203,6 +299,11 @@ static void mic_test_task(void *arg)
 void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
+
+    /* initialize SD card so raw write helper will work */
+    if (sd_card_init() != ESP_OK) {
+        ESP_LOGW(TAG, "SD initialization failed, continuing without storage");
+    }
 
     // Allocate enough space for up to 20 seconds of captured samples.
     // Try PSRAM first (if present), then fall back to internal RAM.
@@ -235,5 +336,11 @@ void app_main(void)
     );
 
     ESP_LOGI(TAG, "ICS-43434 one-shot capture started (%d s).", RECORD_SECONDS);
+
+    /* example usage of sd_write_raw (write zeros at offset 0) */
+    uint8_t zeros[512] = {0};
+    if (sd_write_raw("data.bin", 0, zeros, sizeof(zeros))) {
+        ESP_LOGI(TAG, "Wrote 512 bytes of zeros to data.bin");
+    }
 }
 
