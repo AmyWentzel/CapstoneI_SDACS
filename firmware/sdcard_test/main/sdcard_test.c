@@ -20,6 +20,7 @@
 */
 
 #include <stdio.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,7 +37,10 @@
 #include "driver/sdmmc_host.h"
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
+
 #include "esp_vfs_fat.h"
+#include <string.h>
+#include "mqtt_client.h"
 
 /* ================= USER CONFIG ================= */
 
@@ -69,7 +73,9 @@ static esp_err_t sd_card_init(void)
 {
     esp_err_t ret;
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    sdspi_slot_config_t slot_config = SDSPI_SLOT_CONFIG_DEFAULT();
+    // Use SPI mode for SD card
+#include "driver/sdspi_host.h"
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = GPIO_NUM_5; // adjust CS pin as needed
 
     /* mount configuration: allow format on failure and max files */
@@ -117,12 +123,10 @@ static bool sd_write_raw(const char *path, uint32_t addr, const void *buf, size_
 }
 
 static i2s_chan_handle_t rx_chan = NULL;
-static int32_t raw[I2S_FRAMES_PER_READ];
 
-// Recorded audio for later FFT/MQTT pipeline.
-static int32_t *g_audio_samples = NULL;
-static size_t g_audio_samples_count = 0;
-static const size_t g_audio_samples_capacity = (size_t)SAMPLE_RATE_HZ * RECORD_SECONDS;
+#define WAV_CHUNK_SIZE 512
+
+static int32_t raw[I2S_FRAMES_PER_READ];
 
 /* SD card audio address tracking (byte offsets) */
 static uint32_t g_audio_start_addr = UINT32_MAX;
@@ -210,6 +214,11 @@ static void i2s_mic_init(void)
 /* ------------------------------------------------------------
    Microphone test task
 ------------------------------------------------------------ */
+// Dummy MQTT symbols for build (replace with real values/initialization as needed)
+#define MQTT_TOPIC_AUDIO "audio"
+#define NODE_ID "Node01"
+void *mqtt_client = NULL;
+
 static void mic_test_task(void *arg)
 {
     size_t bytes_read = 0;
@@ -217,10 +226,9 @@ static void mic_test_task(void *arg)
     int64_t end_us = start_us + ((int64_t)RECORD_SECONDS * 1000000LL);
     int64_t next_progress_us = start_us + 1000000LL;
 
-    /* prepare a buffer to hold decimated samples for SD write */
     int32_t write_buf[I2S_FRAMES_PER_READ/2];
 
-    while (esp_timer_get_time() < end_us && g_audio_samples_count < g_audio_samples_capacity) {
+    while (esp_timer_get_time() < end_us) {
         esp_err_t err = i2s_channel_read(
             rx_chan,
             raw,
@@ -228,30 +236,17 @@ static void mic_test_task(void *arg)
             &bytes_read,
             portMAX_DELAY
         );
-
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "I2S read failed: %s", esp_err_to_name(err));
             continue;
         }
-
-        // Raw 32-bit words delivered by I2S DMA.
         int n_raw = bytes_read / sizeof(int32_t);
         if (n_raw <= 0) continue;
-
-        // Consume only LEFT-phase words from interleaved I2S stream.
-        // With current packing this lands on even indices, so only every
-        // second raw word is stored.
         int write_count = 0;
         for (int i = 0; i < n_raw; i += 2) {
             int32_t s24 = i2s_word_to_s24(raw[i]);
-            if (g_audio_samples_count < g_audio_samples_capacity) {
-                g_audio_samples[g_audio_samples_count++] = s24;
-            }
-            // also save to local buffer for SD write
             write_buf[write_count++] = s24;
         }
-
-        /* write this packet to SD if available */
         if (write_count > 0) {
             if (g_audio_start_addr == UINT32_MAX) {
                 g_audio_start_addr = g_audio_write_ptr;
@@ -260,36 +255,35 @@ static void mic_test_task(void *arg)
             if (sd_write_raw("audio.bin", g_audio_write_ptr, write_buf, bytes)) {
                 g_audio_write_ptr += bytes;
             } else {
-                ESP_LOGW(TAG, "SD write failed at offset %u", g_audio_write_ptr);
+                ESP_LOGW(TAG, "SD write failed at offset %lu", (unsigned long)g_audio_write_ptr);
+            }
+            // Stream chunk over MQTT
+            if (mqtt_client != NULL) {
+                char topic[64];
+                snprintf(topic, sizeof(topic), "%s/%s", MQTT_TOPIC_AUDIO, NODE_ID);
+                int msg_id = esp_mqtt_client_publish(mqtt_client, topic, (const char*)write_buf, bytes, 0, 0);
+                if (msg_id < 0) {
+                    ESP_LOGW(TAG, "MQTT publish failed");
+                }
             }
         }
-
         int64_t now_us = esp_timer_get_time();
         if (now_us >= next_progress_us) {
             next_progress_us += 1000000LL;
-            ESP_LOGI(TAG, "Recording... %u/%u samples",
-                (unsigned)g_audio_samples_count,
-                (unsigned)g_audio_samples_capacity);
+            ESP_LOGI(TAG, "Recording... %lu bytes written", (unsigned long)g_audio_write_ptr);
         }
     }
-
     ESP_ERROR_CHECK(i2s_channel_disable(rx_chan));
-
-    /* compute final end address */
     if (g_audio_start_addr != UINT32_MAX) {
         g_audio_end_addr = g_audio_write_ptr;
     }
-
-    ESP_LOGI(TAG, "Recording complete: %.2f s, samples=%u",
+    ESP_LOGI(TAG, "Recording complete: %.2f s, bytes=%lu",
         (float)(esp_timer_get_time() - start_us) / 1000000.0f,
-        (unsigned)g_audio_samples_count);
-    ESP_LOGI(TAG, "Stored stream currently uses left-phase-only decimation (i += 2).");
-    ESP_LOGI(TAG, "Samples stored in g_audio_samples for later FFT/MQTT.");
+        (unsigned long)g_audio_write_ptr);
     if (g_audio_start_addr != UINT32_MAX) {
-        ESP_LOGI(TAG, "Audio data written to SD from %u to %u bytes",
-            g_audio_start_addr, g_audio_end_addr);
+        ESP_LOGI(TAG, "Audio data written to SD from %lu to %lu bytes",
+            (unsigned long)g_audio_start_addr, (unsigned long)g_audio_end_addr);
     }
-
     vTaskDelete(NULL);
 }
 
@@ -303,24 +297,6 @@ void app_main(void)
     /* initialize SD card so raw write helper will work */
     if (sd_card_init() != ESP_OK) {
         ESP_LOGW(TAG, "SD initialization failed, continuing without storage");
-    }
-
-    // Allocate enough space for up to 20 seconds of captured samples.
-    // Try PSRAM first (if present), then fall back to internal RAM.
-    g_audio_samples = (int32_t *)heap_caps_malloc(
-        g_audio_samples_capacity * sizeof(int32_t),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-    );
-    if (g_audio_samples == NULL) {
-        g_audio_samples = (int32_t *)heap_caps_malloc(
-            g_audio_samples_capacity * sizeof(int32_t),
-            MALLOC_CAP_8BIT
-        );
-    }
-    if (g_audio_samples == NULL) {
-        ESP_LOGE(TAG, "Audio buffer allocation failed (%u samples).",
-            (unsigned)g_audio_samples_capacity);
-        return;
     }
 
     i2s_mic_init();
@@ -342,5 +318,99 @@ void app_main(void)
     if (sd_write_raw("data.bin", 0, zeros, sizeof(zeros))) {
         ESP_LOGI(TAG, "Wrote 512 bytes of zeros to data.bin");
     }
+}
+
+// WAV file header structure
+typedef struct {
+    char riff[4];
+    uint32_t file_size;
+    char wave[4];
+    char fmt[4];
+    uint32_t fmt_size;
+    uint16_t format;
+    uint16_t channels;
+    uint32_t sample_rate;
+    uint32_t byte_rate;
+    uint16_t block_align;
+    uint16_t bits_per_sample;
+    char data[4];
+    uint32_t data_size;
+} wav_header_t;
+
+void convert_raw_to_wav(const char *raw_filename, const char *node_id) {
+    // Get current time for filename
+    time_t now = time(NULL);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    char date_time[20];
+    strftime(date_time, sizeof(date_time), "%Y%m%d_%H%M%S", &timeinfo);
+    char wav_filename[64];
+    snprintf(wav_filename, sizeof(wav_filename), "%s_%s.wav", node_id, date_time);
+
+    char raw_path[128];
+    snprintf(raw_path, sizeof(raw_path), "%s/%s", SD_MOUNT_POINT, raw_filename);
+    char wav_path[128];
+    snprintf(wav_path, sizeof(wav_path), "%s/%s", SD_MOUNT_POINT, wav_filename);
+
+    FILE *raw_file = fopen(raw_path, "rb");
+    if (!raw_file) {
+        ESP_LOGE(TAG, "Failed to open raw file %s", raw_path);
+        return;
+    }
+    fseek(raw_file, 0, SEEK_END);
+    size_t raw_size = ftell(raw_file);
+    fseek(raw_file, 0, SEEK_SET);
+    if (raw_size == 0) {
+        ESP_LOGE(TAG, "Raw file is empty");
+        fclose(raw_file);
+        return;
+    }
+
+    FILE *wav_file = fopen(wav_path, "wb");
+    if (!wav_file) {
+        ESP_LOGE(TAG, "Failed to create WAV file %s", wav_path);
+        fclose(raw_file);
+        return;
+    }
+
+    // Prepare WAV header (24-bit mono PCM)
+    size_t num_samples = raw_size / sizeof(int32_t);
+    wav_header_t header;
+    memcpy(header.riff, "RIFF", 4);
+    header.file_size = 36 + num_samples * 3;
+    memcpy(header.wave, "WAVE", 4);
+    memcpy(header.fmt, "fmt ", 4);
+    header.fmt_size = 16;
+    header.format = 1;
+    header.channels = 1;
+    header.sample_rate = SAMPLE_RATE_HZ;
+    header.byte_rate = SAMPLE_RATE_HZ * 3;
+    header.block_align = 3;
+    header.bits_per_sample = 24;
+    memcpy(header.data, "data", 4);
+    header.data_size = num_samples * 3;
+
+    fwrite(&header, sizeof(wav_header_t), 1, wav_file);
+
+    // Convert and write in chunks
+    int32_t chunk_buf[WAV_CHUNK_SIZE];
+    size_t samples_left = num_samples;
+    while (samples_left > 0) {
+        size_t to_read = (samples_left > WAV_CHUNK_SIZE) ? WAV_CHUNK_SIZE : samples_left;
+        size_t read = fread(chunk_buf, sizeof(int32_t), to_read, raw_file);
+        if (read == 0) break;
+        for (size_t i = 0; i < read; ++i) {
+            int32_t sample = chunk_buf[i];
+            uint8_t bytes[3];
+            bytes[0] = sample & 0xFF;
+            bytes[1] = (sample >> 8) & 0xFF;
+            bytes[2] = (sample >> 16) & 0xFF;
+            fwrite(bytes, 1, 3, wav_file);
+        }
+        samples_left -= read;
+    }
+    fclose(raw_file);
+    fclose(wav_file);
+    ESP_LOGI(TAG, "WAV file created: %s", wav_filename);
 }
 
