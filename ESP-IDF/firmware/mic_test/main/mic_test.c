@@ -57,9 +57,9 @@
 #define CAL_OFFSET_DB  94.0f   // placeholder until calibrated
 
 // Temporary first-boot provisioning values (stored into NVS if wifi is empty).
-#define PROVISION_WIFI_SSID   "195BSMT_2.4GHz"
-#define PROVISION_WIFI_PASS   "LD4PBSMT"
-#define PROVISION_MQTT_URI    "mqtt://192.168.5.38:1883"
+#define PROVISION_WIFI_SSID   "Cheerios & Shreddies"
+#define PROVISION_WIFI_PASS   "JesusisLord"
+#define PROVISION_MQTT_URI    "mqtt://172.20.10.5:1883"
 #define PROVISION_MQTT_TOPIC  "sdacs/node/node01/features"
 #define PROVISION_ALWAYS_SYNC_MQTT 1
 
