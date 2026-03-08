@@ -19,4 +19,7 @@ idf_component_register(
         nvs_flash
     PRIV_REQUIRES
         esp_driver_i2s
+        esp_driver_sdspi
+        fatfs
+        sdmmc
 )
