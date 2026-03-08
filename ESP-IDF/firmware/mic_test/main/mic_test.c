@@ -34,6 +34,7 @@
 
 #include "config_store.h"
 #include "wifi_mqtt.h"
+#include "temp_humidity.h"
 
 /* ================= USER CONFIG ================= */
 
@@ -46,6 +47,7 @@
 #define RECORD_SECONDS        20
 #define AUDIO_CHUNK_SAMPLES   2048
 #define CAL_OFFSET_DB         94.0f
+#define I2S_READ_TIMEOUT_MS   100
 
 #define NODE_ID               "node01"
 #define SD_MOUNT_POINT        "/sdcard"
@@ -536,6 +538,9 @@ static void mic_test_task(void *arg)
     } else {
         ESP_LOGI(TAG, "WiFi+MQTT ready. Starting stream + SD logging.");
     }
+    if (werr == ESP_OK) {
+        (void)temp_humidity_publish_latest_once("start");
+    }
 
     size_t bytes_read = 0;
     int64_t start_us = esp_timer_get_time();
@@ -560,8 +565,17 @@ static void mic_test_task(void *arg)
     size_t chunk_fill = 0;
 
     while (esp_timer_get_time() < end_us) {
-        esp_err_t err = i2s_channel_read(rx_chan, raw, sizeof(raw), &bytes_read, portMAX_DELAY);
+        esp_err_t err = i2s_channel_read(
+            rx_chan,
+            raw,
+            sizeof(raw),
+            &bytes_read,
+            pdMS_TO_TICKS(I2S_READ_TIMEOUT_MS)
+        );
         if (err != ESP_OK) {
+            if (err == ESP_ERR_TIMEOUT) {
+                continue;
+            }
             ESP_LOGE(TAG, "I2S read failed: %s", esp_err_to_name(err));
             continue;
         }
@@ -618,9 +632,14 @@ static void mic_test_task(void *arg)
             float peak_norm = (float)peak_abs / 8388608.0f;
             float peak_db = 20.0f * log10f(peak_norm + 1e-12f) + CAL_OFFSET_DB;
 
-            // Temp/humidity and FFT peak placeholders if sensors/FFT pipeline are unavailable.
             float temp_c = NAN;
             float humidity = NAN;
+            temp_humidity_reading_t th = {0};
+            if (temp_humidity_get_latest(&th)) {
+                temp_c = th.temp_c;
+                humidity = th.rh_percent;
+            }
+
             float fft_peak_hz = 0.0f;
             append_metrics_csv(laeq_db, peak_db, temp_c, humidity, fft_peak_hz);
 
@@ -655,12 +674,19 @@ static void mic_test_task(void *arg)
 
     ESP_ERROR_CHECK(i2s_channel_disable(rx_chan));
 
+    // Stop temp/humidity sampling as soon as capture ends.
+    temp_humidity_stop();
+
     // 2) Algorithm validation artifact: generate WAV from raw.
     convert_raw_to_wav();
 
     ESP_LOGI(TAG, "Recording complete: %.2f s, chunk_msgs=%u",
              (float)(esp_timer_get_time() - start_us) / 1000000.0f,
              (unsigned)hdr.seq);
+
+    if (wifi_mqtt_is_connected()) {
+        (void)temp_humidity_publish_latest_once("end");
+    }
 
     // On-device verification without removing SD card.
     verify_run_outputs();
@@ -683,6 +709,19 @@ void app_main(void)
     }
 
     ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
+
+    bool th_ok = temp_humidity_start(
+        0,       // I2C_NUM_0
+        47,      // SDA
+        48,      // SCL
+        100000,  // 100kHz
+        0x44,    // HDC302x default address
+        2000     // sample period ms
+    );
+    if (!th_ok) {
+        ESP_LOGW(TAG, "temp_humidity_start failed; metrics will show NAN for temp/humidity");
+    }
+
     i2s_mic_init();
 
     xTaskCreatePinnedToCore(
