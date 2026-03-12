@@ -27,6 +27,7 @@
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "esp_rom_crc.h"
+#include "esp_dsp.h"
 #include "esp_netif_sntp.h"
 
 #include "driver/i2s_std.h"
@@ -49,6 +50,7 @@
 #define I2S_FRAMES_PER_READ   512
 #define RECORD_SECONDS        20
 #define AUDIO_CHUNK_SAMPLES   2048
+#define FFT_SIZE              1024
 #define CAL_OFFSET_DB         94.0f
 #define I2S_READ_TIMEOUT_MS   100
 
@@ -68,6 +70,11 @@ static const char *TAG = "MIC_TEST";
 static i2s_chan_handle_t rx_chan = NULL;
 static int32_t raw[I2S_FRAMES_PER_READ];
 static sdmmc_card_t *g_card = NULL;
+static float fft_in[FFT_SIZE * 2];
+static float fft_mag[FFT_SIZE];
+static float hann_window[FFT_SIZE];
+static int32_t fft_buffer[FFT_SIZE];
+static int fft_index = 0;
 
 static char g_run_dir[160] = {0};
 static char g_raw_path[256] = {0};
@@ -189,6 +196,39 @@ static void refresh_run_output_timestamps(void)
     refresh_path_timestamp(g_cal_offset_path, now);
     refresh_path_timestamp(g_wav_path, now);
     refresh_path_timestamp(g_run_dir, now);
+}
+
+static float compute_fft_peak_hz(void)
+{
+    int start = fft_index;
+
+    for (int i = 0; i < FFT_SIZE; i++) {
+        int buf_index = (start + i) % FFT_SIZE;
+        float sample = (float)fft_buffer[buf_index] / 8388608.0f;
+        fft_in[2 * i] = sample * hann_window[i];
+        fft_in[(2 * i) + 1] = 0.0f;
+    }
+
+    dsps_fft2r_fc32(fft_in, FFT_SIZE);
+    dsps_bit_rev_fc32(fft_in, FFT_SIZE);
+    dsps_cplx2reC_fc32(fft_in, FFT_SIZE);
+
+    for (int i = 5; i < FFT_SIZE / 2; i++) {
+        float real = fft_in[2 * i];
+        float imag = fft_in[(2 * i) + 1];
+        fft_mag[i] = sqrtf((real * real) + (imag * imag));
+    }
+
+    int peak_bin = 5;
+    float peak_val = fft_mag[5];
+    for (int i = 6; i < FFT_SIZE / 2; i++) {
+        if (fft_mag[i] > peak_val) {
+            peak_val = fft_mag[i];
+            peak_bin = i;
+        }
+    }
+
+    return ((float)peak_bin * SAMPLE_RATE_HZ) / FFT_SIZE;
 }
 
 static bool sd_append_file(const char *fullpath, const void *buf, size_t len)
@@ -670,6 +710,10 @@ static void mic_test_task(void *arg)
         for (int i = 0; i < n_raw; i++) {
             int32_t s24 = i2s_word_to_s24(raw[i]);
             chunk[chunk_fill++] = s24;
+            fft_buffer[fft_index++] = s24;
+            if (fft_index >= FFT_SIZE) {
+                fft_index = 0;
+            }
 
             int32_t a = (s24 < 0) ? -s24 : s24;
             if (a > peak_abs) {
@@ -723,7 +767,7 @@ static void mic_test_task(void *arg)
                 humidity = th.rh_percent;
             }
 
-            float fft_peak_hz = 0.0f;
+            float fft_peak_hz = compute_fft_peak_hz();
             append_metrics_csv(laeq_db, peak_db, dbfs, rms_norm, temp_c, humidity, fft_peak_hz);
 
             static uint32_t metrics_seq = 0;
@@ -802,6 +846,10 @@ void app_main(void)
     maybe_provision_network_config();
     ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
     sync_system_time_from_sntp(WIFI_TIME_SYNC_WAIT_MS);
+    ESP_ERROR_CHECK(dsps_fft2r_init_fc32(NULL, FFT_SIZE));
+    for (int i = 0; i < FFT_SIZE; i++) {
+        hann_window[i] = 0.5f * (1.0f - cosf((2.0f * (float)M_PI * i) / (FFT_SIZE - 1)));
+    }
 
     if (sd_card_init() != ESP_OK) {
         ESP_LOGE(TAG, "SD initialization failed");

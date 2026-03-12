@@ -213,6 +213,7 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"rms\":%.6f,"
           "\"dbfs\":%.2f,"
           "\"db_spl\":%.2f,"
+          "\"fft_peak_Hz\":%.1f,"
           "\"f_peak_hz\":%.1f,"
           "\"p2p_raw\":%" PRId32 ","
           "\"zeros\":%d"
@@ -224,6 +225,7 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->rms,
         f->dbfs,
         f->db_spl,
+        f->f_peak_hz,
         f->f_peak_hz,
         f->p2p_raw,
         f->zeros
