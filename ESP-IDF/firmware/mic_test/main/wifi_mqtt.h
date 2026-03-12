@@ -39,6 +39,11 @@ bool wifi_mqtt_is_connected(void);
 /* ======================== ADDED FOR STREAMING STABILITY ======================== */
 
 /**
+ * @brief Block until WiFi got IP, or timeout.
+ */
+esp_err_t wifi_mqtt_wait_wifi(uint32_t timeout_ms);
+
+/**
  * @brief Block until WiFi got IP and MQTT connected, or timeout.
  */
 esp_err_t wifi_mqtt_wait_connected(uint32_t timeout_ms);

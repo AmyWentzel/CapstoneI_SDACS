@@ -343,22 +343,29 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
 
 /* ======================== ADDED FOR STREAMING STABILITY ======================== */
 
+esp_err_t wifi_mqtt_wait_wifi(uint32_t timeout_ms)
+{
+    EventBits_t bits = xEventGroupWaitBits(
+        s_wifi_event_group,
+        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+        pdFALSE,
+        pdFALSE,
+        pdMS_TO_TICKS(timeout_ms)
+    );
+
+    if (bits & WIFI_FAIL_BIT) return ESP_FAIL;
+    if (!(bits & WIFI_CONNECTED_BIT)) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}
+
 esp_err_t wifi_mqtt_wait_connected(uint32_t timeout_ms)
 {
     const TickType_t start = xTaskGetTickCount();
     const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
 
     /* Wait for WiFi connected (got IP) */
-    EventBits_t bits = xEventGroupWaitBits(
-        s_wifi_event_group,
-        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-        pdFALSE,
-        pdFALSE,
-        timeout_ticks
-    );
-
-    if (bits & WIFI_FAIL_BIT) return ESP_FAIL;
-    if (!(bits & WIFI_CONNECTED_BIT)) return ESP_ERR_TIMEOUT;
+    esp_err_t err = wifi_mqtt_wait_wifi(timeout_ms);
+    if (err != ESP_OK) return err;
 
     /* Then wait for MQTT connection */
     while (!s_mqtt_connected) {

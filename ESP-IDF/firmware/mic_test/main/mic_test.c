@@ -16,7 +16,9 @@
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/unistd.h>
+#include <utime.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +27,7 @@
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "esp_rom_crc.h"
+#include "esp_netif_sntp.h"
 
 #include "driver/i2s_std.h"
 #include "driver/sdspi_host.h"
@@ -103,12 +106,89 @@ typedef struct __attribute__((packed)) {
 
 #define SDACS_MAGIC 0x43414453u  // 'SDAC' little-endian
 
+#define VALID_UNIX_TIME_EPOCH   1700000000
+#define WIFI_TIME_SYNC_WAIT_MS  15000
+
 static void get_iso8601_now(char *out, size_t out_len)
 {
     time_t now = time(NULL);
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
     strftime(out, out_len, "%Y-%m-%dT%H:%M:%S", &timeinfo);
+}
+
+static bool system_time_is_valid(void)
+{
+    return time(NULL) > VALID_UNIX_TIME_EPOCH;
+}
+
+static void log_current_time(const char *prefix)
+{
+    time_t now = time(NULL);
+    struct tm timeinfo;
+    char buf[32] = "invalid";
+    if (localtime_r(&now, &timeinfo) != NULL) {
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    }
+    ESP_LOGI(TAG, "%s%s", prefix, buf);
+}
+
+static void sync_system_time_from_sntp(uint32_t wait_ms)
+{
+    if (system_time_is_valid()) {
+        log_current_time("System time already valid: ");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Waiting for WiFi before SNTP time sync...");
+    esp_err_t err = wifi_mqtt_wait_wifi(wait_ms);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi not ready for SNTP sync: %s", esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "Starting SNTP time sync...");
+    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_netif_sntp_init(&sntp_cfg);
+    err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(wait_ms));
+    if (err == ESP_OK && system_time_is_valid()) {
+        log_current_time("SNTP synced time: ");
+    } else {
+        ESP_LOGW(TAG, "SNTP sync timed out; SD timestamps may still be inaccurate.");
+    }
+    esp_netif_sntp_deinit();
+}
+
+static void refresh_path_timestamp(const char *path, time_t now)
+{
+    if (!path || path[0] == '\0') {
+        return;
+    }
+
+    struct utimbuf times = {
+        .actime = now,
+        .modtime = now,
+    };
+    if (utime(path, &times) != 0) {
+        ESP_LOGW(TAG, "Failed to update timestamp for %s (errno=%d: %s)",
+                 path, errno, strerror(errno));
+    }
+}
+
+static void refresh_run_output_timestamps(void)
+{
+    if (!system_time_is_valid()) {
+        ESP_LOGW(TAG, "Skipping SD timestamp refresh because system time is not valid.");
+        return;
+    }
+
+    time_t now = time(NULL);
+    refresh_path_timestamp(g_raw_path, now);
+    refresh_path_timestamp(g_csv_path, now);
+    refresh_path_timestamp(g_cal_csv_path, now);
+    refresh_path_timestamp(g_cal_offset_path, now);
+    refresh_path_timestamp(g_wav_path, now);
+    refresh_path_timestamp(g_run_dir, now);
 }
 
 static bool sd_append_file(const char *fullpath, const void *buf, size_t len)
@@ -129,6 +209,8 @@ static bool sd_append_file(const char *fullpath, const void *buf, size_t len)
 
 static void append_metrics_csv(float laeq_db,
                                float peak_db,
+                               float dbfs,
+                               float rms,
                                float temp_c,
                                float humidity,
                                float fft_peak_hz)
@@ -138,8 +220,8 @@ static void append_metrics_csv(float laeq_db,
 
     FILE *f = fopen(g_csv_path, "a");
     if (f) {
-        fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.2f,%.1f\n",
-                ts, NODE_ID, laeq_db, peak_db, temp_c, humidity, fft_peak_hz);
+        fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f\n",
+                ts, NODE_ID, laeq_db, peak_db, dbfs, rms, temp_c, humidity, fft_peak_hz);
         fclose(f);
     } else {
         ESP_LOGW(TAG, "Could not append metrics.csv");
@@ -148,8 +230,8 @@ static void append_metrics_csv(float laeq_db,
     // Duplicate into a calibration CSV for traceability.
     f = fopen(g_cal_csv_path, "a");
     if (f) {
-        fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.2f,%.1f\n",
-                ts, NODE_ID, laeq_db, peak_db, temp_c, humidity, fft_peak_hz);
+        fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f\n",
+                ts, NODE_ID, laeq_db, peak_db, dbfs, rms, temp_c, humidity, fft_peak_hz);
         fclose(f);
     }
 }
@@ -267,7 +349,7 @@ static esp_err_t create_run_directory(void)
 {
     time_t now = time(NULL);
     char ts[32];
-    if (now > 1700000000) {
+    if (now > VALID_UNIX_TIME_EPOCH) {
         struct tm timeinfo;
         localtime_r(&now, &timeinfo);
         strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &timeinfo);
@@ -324,7 +406,7 @@ static esp_err_t create_run_directory(void)
         ESP_LOGE(TAG, "Failed to create metrics CSV");
         return ESP_FAIL;
     }
-    fprintf(csv, "timestamp,node_id,LAeq_dB,peak_dB,temp_C,humidity,fft_peak_Hz\n");
+    fprintf(csv, "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz\n");
     fclose(csv);
 
     FILE *cal_csv = fopen(g_cal_csv_path, "w");
@@ -332,7 +414,7 @@ static esp_err_t create_run_directory(void)
         ESP_LOGE(TAG, "Failed to create calibration_run1.csv");
         return ESP_FAIL;
     }
-    fprintf(cal_csv, "timestamp,node_id,LAeq_dB,peak_dB,temp_C,humidity,fft_peak_Hz\n");
+    fprintf(cal_csv, "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz\n");
     fclose(cal_csv);
 
     FILE *cal_txt = fopen(g_cal_offset_path, "w");
@@ -628,6 +710,7 @@ static void mic_test_task(void *arg)
         if (now_us >= next_metrics_us && count > 0) {
             float rms = sqrtf((float)(sum_sq / (double)count));
             float rms_norm = rms / 8388608.0f;
+            float dbfs = 20.0f * log10f(rms_norm + 1e-12f);
             float laeq_db = 20.0f * log10f(rms_norm + 1e-12f) + CAL_OFFSET_DB;
             float peak_norm = (float)peak_abs / 8388608.0f;
             float peak_db = 20.0f * log10f(peak_norm + 1e-12f) + CAL_OFFSET_DB;
@@ -641,7 +724,25 @@ static void mic_test_task(void *arg)
             }
 
             float fft_peak_hz = 0.0f;
-            append_metrics_csv(laeq_db, peak_db, temp_c, humidity, fft_peak_hz);
+            append_metrics_csv(laeq_db, peak_db, dbfs, rms_norm, temp_c, humidity, fft_peak_hz);
+
+            static uint32_t metrics_seq = 0;
+
+            sdacs_features_t feat = {0};
+            strncpy(feat.node_id, NODE_ID, sizeof(feat.node_id) - 1);
+            feat.seq = metrics_seq++;
+            feat.t_us = (uint64_t)now_us;
+            feat.n = count;
+            feat.rms = rms_norm;
+            feat.dbfs = dbfs;
+            feat.db_spl = laeq_db;
+            feat.f_peak_hz = fft_peak_hz;
+            feat.p2p_raw = peak_abs * 2;
+            feat.zeros = 0;
+
+            if (!wifi_mqtt_try_send(&feat)) {
+                ESP_LOGW(TAG, "Failed to enqueue 1 Hz features");
+            }
 
             ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB streamed=%u",
                      laeq_db, peak_db, (unsigned)samples_streamed);
@@ -679,6 +780,7 @@ static void mic_test_task(void *arg)
 
     // 2) Algorithm validation artifact: generate WAV from raw.
     convert_raw_to_wav();
+    refresh_run_output_timestamps();
 
     ESP_LOGI(TAG, "Recording complete: %.2f s, chunk_msgs=%u",
              (float)(esp_timer_get_time() - start_us) / 1000000.0f,
@@ -698,6 +800,8 @@ void app_main(void)
 {
     ESP_ERROR_CHECK(config_store_init());
     maybe_provision_network_config();
+    ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
+    sync_system_time_from_sntp(WIFI_TIME_SYNC_WAIT_MS);
 
     if (sd_card_init() != ESP_OK) {
         ESP_LOGE(TAG, "SD initialization failed");
@@ -707,8 +811,6 @@ void app_main(void)
         ESP_LOGE(TAG, "Failed to create run folder");
         return;
     }
-
-    ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
 
     bool th_ok = temp_humidity_start(
         0,       // I2C_NUM_0
