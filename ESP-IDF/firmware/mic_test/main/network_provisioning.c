@@ -16,6 +16,8 @@ esp_err_t network_provisioning_apply_defaults(void)
     const char *pass = NULL;
     const char *broker_uri = NULL;
     const char *mqtt_topic = NULL;
+    bool have_wifi_defaults = false;
+    bool have_mqtt_defaults = false;
 
     esp_err_t err = config_store_get_wifi(&ssid, &pass);
     if (err != ESP_OK) {
@@ -23,18 +25,21 @@ esp_err_t network_provisioning_apply_defaults(void)
         return err;
     }
 
-    if (strcmp(SDACS_PROVISION_WIFI_SSID, "YOUR_WIFI_SSID") == 0 ||
-        strcmp(SDACS_PROVISION_WIFI_PASS, "YOUR_WIFI_PASSWORD") == 0) {
-        ESP_LOGW(TAG, "Provisioning skipped: update SDACS_PROVISION_WIFI_* in sdacs_config.h");
-        return ESP_OK;
-    }
+    have_wifi_defaults = (SDACS_PROVISION_WIFI_SSID[0] != '\0' &&
+                          SDACS_PROVISION_WIFI_PASS[0] != '\0');
+    have_mqtt_defaults = (SDACS_PROVISION_MQTT_URI[0] != '\0' &&
+                          SDACS_PROVISION_MQTT_TOPIC[0] != '\0');
 
     if (!ssid || ssid[0] == '\0') {
-        ESP_RETURN_ON_ERROR(
-            config_store_set_wifi(SDACS_PROVISION_WIFI_SSID, SDACS_PROVISION_WIFI_PASS),
-            TAG,
-            "Failed to provision WiFi defaults");
-        ESP_LOGI(TAG, "Provisioned WiFi defaults into NVS.");
+        if (!have_wifi_defaults) {
+            ESP_LOGW(TAG, "No default WiFi credentials compiled in; skipping WiFi provisioning.");
+        } else {
+            ESP_RETURN_ON_ERROR(
+                config_store_set_wifi(SDACS_PROVISION_WIFI_SSID, SDACS_PROVISION_WIFI_PASS),
+                TAG,
+                "Failed to provision WiFi defaults");
+            ESP_LOGI(TAG, "Provisioned WiFi defaults into NVS.");
+        }
     } else {
         ESP_LOGI(TAG, "WiFi already provisioned; keeping existing SSID.");
     }
@@ -46,9 +51,10 @@ esp_err_t network_provisioning_apply_defaults(void)
     }
 
 #if SDACS_PROVISION_ALWAYS_SYNC_MQTT
-    if (!broker_uri || !mqtt_topic ||
-        strcmp(broker_uri, SDACS_PROVISION_MQTT_URI) != 0 ||
-        strcmp(mqtt_topic, SDACS_PROVISION_MQTT_TOPIC) != 0) {
+    if (have_mqtt_defaults &&
+        (!broker_uri || !mqtt_topic ||
+         strcmp(broker_uri, SDACS_PROVISION_MQTT_URI) != 0 ||
+         strcmp(mqtt_topic, SDACS_PROVISION_MQTT_TOPIC) != 0)) {
         ESP_RETURN_ON_ERROR(
             config_store_set_mqtt(SDACS_PROVISION_MQTT_URI, SDACS_PROVISION_MQTT_TOPIC),
             TAG,
@@ -58,6 +64,16 @@ esp_err_t network_provisioning_apply_defaults(void)
         ESP_LOGW(TAG, "Synced MQTT settings in NVS to firmware defaults.");
     }
 #endif
+
+    if ((!broker_uri || broker_uri[0] == '\0' || !mqtt_topic || mqtt_topic[0] == '\0') && have_mqtt_defaults) {
+        ESP_RETURN_ON_ERROR(
+            config_store_set_mqtt(SDACS_PROVISION_MQTT_URI, SDACS_PROVISION_MQTT_TOPIC),
+            TAG,
+            "Failed to provision MQTT defaults");
+        broker_uri = SDACS_PROVISION_MQTT_URI;
+        mqtt_topic = SDACS_PROVISION_MQTT_TOPIC;
+        ESP_LOGI(TAG, "Provisioned MQTT defaults into NVS.");
+    }
 
     ESP_LOGI(TAG, "Active MQTT config: broker=%s topic=%s",
              broker_uri ? broker_uri : "(null)",

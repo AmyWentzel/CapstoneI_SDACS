@@ -2,6 +2,30 @@
 
 #include "driver/gpio.h"
 
+#if __has_include("sdacs_secrets.h")
+#include "sdacs_secrets.h"
+#endif
+
+#ifndef SDACS_SECRET_WIFI_SSID
+#define SDACS_SECRET_WIFI_SSID        ""
+#endif
+
+#ifndef SDACS_SECRET_WIFI_PASS
+#define SDACS_SECRET_WIFI_PASS        ""
+#endif
+
+#ifndef SDACS_SECRET_MQTT_URI
+#define SDACS_SECRET_MQTT_URI         ""
+#endif
+
+#ifndef SDACS_SECRET_MQTT_TOPIC
+#define SDACS_SECRET_MQTT_TOPIC       ""
+#endif
+
+#ifndef SDACS_SECRET_ALWAYS_SYNC_MQTT
+#define SDACS_SECRET_ALWAYS_SYNC_MQTT 0
+#endif
+
 #define SDACS_NODE_ID                    "node01"
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 
@@ -36,8 +60,8 @@
 #define SDACS_TEMP_HUMIDITY_ADDR         0x44
 #define SDACS_TEMP_HUMIDITY_PERIOD_MS    2000
 
-#define SDACS_PROVISION_WIFI_SSID        "Cheerios & Shreddies"
-#define SDACS_PROVISION_WIFI_PASS        "JesusisLord"
-#define SDACS_PROVISION_MQTT_URI         "mqtt://172.20.10.5:1883"
-#define SDACS_PROVISION_MQTT_TOPIC       "sdacs/node/node01/features"
-#define SDACS_PROVISION_ALWAYS_SYNC_MQTT 1
+#define SDACS_PROVISION_WIFI_SSID        SDACS_SECRET_WIFI_SSID
+#define SDACS_PROVISION_WIFI_PASS        SDACS_SECRET_WIFI_PASS
+#define SDACS_PROVISION_MQTT_URI         SDACS_SECRET_MQTT_URI
+#define SDACS_PROVISION_MQTT_TOPIC       SDACS_SECRET_MQTT_TOPIC
+#define SDACS_PROVISION_ALWAYS_SYNC_MQTT SDACS_SECRET_ALWAYS_SYNC_MQTT
