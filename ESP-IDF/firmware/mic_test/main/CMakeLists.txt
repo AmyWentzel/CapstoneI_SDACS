@@ -8,7 +8,13 @@ endif()
 
 idf_component_register(
     SRCS
-        "mic_test.c"
+        "app_main.c"
+        "audio_input.c"
+        "capture_task.c"
+        "fft_metrics.c"
+        "network_provisioning.c"
+        "run_storage.c"
+        "time_sync.c"
         "wifi_mqtt.c"
         "config_store.c"
         "temp_humidity.c"
