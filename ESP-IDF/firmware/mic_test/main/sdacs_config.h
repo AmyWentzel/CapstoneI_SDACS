@@ -27,6 +27,7 @@
 #endif
 
 #define SDACS_NODE_ID                    "node01"
+#define SDACS_FW_VERSION                 "0.1.0"
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_14

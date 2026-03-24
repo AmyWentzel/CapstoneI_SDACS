@@ -11,8 +11,11 @@ idf_component_register(
         "app_main.c"
         "audio_input.c"
         "capture_task.c"
+        "command_dispatcher.c"
+        "device_state.c"
         "fft_metrics.c"
         "network_provisioning.c"
+        "ota_manager.c"
         "run_storage.c"
         "time_sync.c"
         "wifi_mqtt.c"
@@ -24,6 +27,9 @@ idf_component_register(
         esp_netif
         mqtt
         nvs_flash
+        esp_https_ota
+        app_update
+        json
     PRIV_REQUIRES
         driver
         esp_driver_i2s

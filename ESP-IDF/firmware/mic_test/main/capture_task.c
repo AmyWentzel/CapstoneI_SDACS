@@ -13,6 +13,7 @@
 
 #include "audio_input.h"
 #include "config_store.h"
+#include "device_state.h"
 #include "fft_metrics.h"
 #include "sdacs_config.h"
 #include "temp_humidity.h"
@@ -60,6 +61,9 @@ static void capture_task_run(void *arg)
     static int32_t chunk[SDACS_AUDIO_CHUNK_SAMPLES];
     static uint8_t payload[sizeof(sdacs_audio_hdr_t) + (SDACS_AUDIO_CHUNK_SAMPLES * sizeof(int32_t))];
     size_t chunk_fill = 0;
+    bool fatal_error = false;
+
+    device_state_set(SDACS_MODE_CAPTURING);
 
     ESP_LOGI(TAG, "Waiting for WiFi+MQTT before streaming...");
     esp_err_t werr = wifi_mqtt_wait_connected(SDACS_WIFI_TIME_SYNC_WAIT_MS);
@@ -82,7 +86,8 @@ static void capture_task_run(void *arg)
         }
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "I2S read failed: %s", esp_err_to_name(err));
-            continue;
+            fatal_error = true;
+            break;
         }
         if (samples_read == 0) {
             continue;
@@ -186,8 +191,6 @@ static void capture_task_run(void *arg)
         hdr.seq++;
     }
 
-    audio_input_deinit();
-    temp_humidity_stop();
     (void)run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
     run_storage_refresh_timestamps(state->ctx.storage);
 
@@ -200,6 +203,7 @@ static void capture_task_run(void *arg)
     }
 
     run_storage_verify(state->ctx.storage);
+    device_state_set(fatal_error ? SDACS_MODE_ERROR : SDACS_MODE_IDLE);
     free(state);
     vTaskDelete(NULL);
 }

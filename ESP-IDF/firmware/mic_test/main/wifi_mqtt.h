@@ -24,6 +24,8 @@ typedef struct {
     const char *topic;       // e.g. "sdacs/node/node01/features"
 } wifi_mqtt_cfg_t;
 
+typedef void (*wifi_mqtt_cmd_cb_t)(const char *topic, const char *payload, int len);
+
 // Start WiFi + MQTT tasks and create internal queue
 esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg);
 
@@ -32,6 +34,9 @@ bool wifi_mqtt_try_send(const sdacs_features_t *f);
 
 // Publish binary payload directly (returns error if MQTT is not connected)
 esp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t len, int qos, int retain);
+
+esp_err_t wifi_mqtt_set_command_callback(wifi_mqtt_cmd_cb_t cb);
+esp_err_t wifi_mqtt_publish_status_json(const char *topic, const char *json);
 
 // Optional: check if MQTT is connected (for debug/UI)
 bool wifi_mqtt_is_connected(void);

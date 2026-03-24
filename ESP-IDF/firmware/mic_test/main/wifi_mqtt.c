@@ -2,8 +2,9 @@
 #include "config_store.h"
 
 #include <inttypes.h>
-#include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,6 +18,8 @@
 #include "esp_wifi.h"
 #include "mqtt_client.h"
 #include "esp_timer.h"
+
+#include "sdacs_config.h"
 
 static const char *TAG = "WIFI_MQTT";
 
@@ -32,6 +35,7 @@ static QueueHandle_t s_feat_q = NULL;
 static esp_mqtt_client_handle_t s_mqtt = NULL;
 
 static bool s_mqtt_connected = false;
+static wifi_mqtt_cmd_cb_t s_cmd_cb = NULL;
 
 static wifi_mqtt_cfg_t s_cfg = {0};
 
@@ -123,16 +127,45 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 {
     (void)handler_args;
     (void)base;
-    (void)event_data;
+
+    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
 
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             s_mqtt_connected = true;
+            if (s_mqtt) {
+                char node_cmd_topic[160];
+
+                snprintf(node_cmd_topic, sizeof(node_cmd_topic), "sdacs/node/%s/cmd", SDACS_NODE_ID);
+                (void)esp_mqtt_client_subscribe(s_mqtt, node_cmd_topic, 1);
+                (void)esp_mqtt_client_subscribe(s_mqtt, "sdacs/group/all/cmd", 1);
+            }
             ESP_LOGI(TAG, "MQTT connected");
+            ESP_LOGI(TAG, "Subscribed to command topics");
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_mqtt_connected = false;
             ESP_LOGW(TAG, "MQTT disconnected");
+            break;
+        case MQTT_EVENT_DATA:
+            if (s_cmd_cb && event && event->data && event->topic &&
+                event->data_len >= 0 && event->topic_len > 0) {
+                char *topic = calloc(1, (size_t)event->topic_len + 1U);
+                char *payload = calloc(1, (size_t)event->data_len + 1U);
+
+                if (!topic || !payload) {
+                    ESP_LOGE(TAG, "Failed to allocate MQTT command buffers");
+                    free(topic);
+                    free(payload);
+                    break;
+                }
+
+                memcpy(topic, event->topic, (size_t)event->topic_len);
+                memcpy(payload, event->data, (size_t)event->data_len);
+                s_cmd_cb(topic, payload, event->data_len);
+                free(topic);
+                free(payload);
+            }
             break;
         case MQTT_EVENT_ERROR:
             s_mqtt_connected = false;
@@ -401,6 +434,25 @@ esp_err_t wifi_mqtt_publish_raw(const char *topic,
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t wifi_mqtt_set_command_callback(wifi_mqtt_cmd_cb_t cb)
+{
+    s_cmd_cb = cb;
+    return ESP_OK;
+}
+
+esp_err_t wifi_mqtt_publish_status_json(const char *topic, const char *json)
+{
+    if (!topic || !json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_mqtt || !s_mqtt_connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt, topic, json, 0, 1, 1);
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
 
 bool wifi_mqtt_try_send(const sdacs_features_t *f)
 {
