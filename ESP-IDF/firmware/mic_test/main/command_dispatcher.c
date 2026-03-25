@@ -157,6 +157,7 @@ static void handle_ota_update(const cJSON *root, const char *request_id)
 
 static void handle_report_status(const char *request_id)
 {
+    (void)wifi_mqtt_publish_heartbeat("online");
     publish_response("report_status", request_id, "ok", "status_report");
 }
 
@@ -167,6 +168,7 @@ static void handle_reboot(const char *request_id)
         return;
     }
 
+    (void)wifi_mqtt_publish_heartbeat("restarting");
     publish_response("reboot", request_id, "accepted", "rebooting");
     esp_restart();
 }

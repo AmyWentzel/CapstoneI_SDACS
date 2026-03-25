@@ -67,6 +67,8 @@ static void ota_task(void *arg)
     };
 
     device_state_set(SDACS_MODE_OTA);
+    (void)wifi_mqtt_set_ota_state(false, true);
+    (void)wifi_mqtt_publish_heartbeat("updating");
     publish_ota_status("starting", "OTA starting", req->target_version);
 
     if (running && boot) {
@@ -80,6 +82,7 @@ static void ota_task(void *arg)
     publish_ota_status("downloading", "Downloading image", req->target_version);
     err = esp_https_ota(&ota_config);
     if (err == ESP_OK) {
+        (void)wifi_mqtt_publish_heartbeat("restarting");
         publish_ota_status("verifying", "Verifying and rebooting", req->target_version);
         s_running = false;
         free(req);
@@ -89,6 +92,8 @@ static void ota_task(void *arg)
 
     ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(err));
     device_state_set(SDACS_MODE_IDLE);
+    (void)wifi_mqtt_set_ota_state(true, false);
+    (void)wifi_mqtt_publish_heartbeat("ota_failed");
     publish_ota_status("failed", esp_err_to_name(err), req->target_version);
     s_running = false;
     free(req);

@@ -15,6 +15,7 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "mqtt_client.h"
 #include "esp_timer.h"
@@ -35,9 +36,18 @@ static QueueHandle_t s_feat_q = NULL;
 static esp_mqtt_client_handle_t s_mqtt = NULL;
 
 static bool s_mqtt_connected = false;
+static bool s_wifi_connected = false;
 static wifi_mqtt_cmd_cb_t s_cmd_cb = NULL;
 
 static wifi_mqtt_cfg_t s_cfg = {0};
+static char s_node_id[CONFIG_STORE_MAX_NODE_ID_LEN + 1];
+static char s_base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1];
+static char s_heartbeat_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 32];
+static char s_lwt_payload[160];
+static bool s_heartbeat_task_started = false;
+static volatile bool s_ota_in_progress = false;
+static volatile bool s_ota_ready = true;
+static int64_t s_boot_time_us = 0;
 
 // Keep queue small; we only publish ~1 msg/sec
 #define FEATURES_QUEUE_LEN  8
@@ -54,6 +64,146 @@ static const char *authmode_to_str(wifi_auth_mode_t authmode)
         case WIFI_AUTH_WPA3_PSK: return "WPA3_PSK";
         case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2_WPA3_PSK";
         default: return "UNKNOWN";
+    }
+}
+
+static bool strip_topic_suffix(char *topic, const char *suffix)
+{
+    size_t topic_len = 0;
+    size_t suffix_len = 0;
+
+    if (!topic || !suffix) {
+        return false;
+    }
+
+    topic_len = strlen(topic);
+    suffix_len = strlen(suffix);
+    if (topic_len < suffix_len) {
+        return false;
+    }
+
+    if (strcmp(topic + topic_len - suffix_len, suffix) != 0) {
+        return false;
+    }
+
+    topic[topic_len - suffix_len] = '\0';
+    return true;
+}
+
+static void normalize_base_topic(const char *configured_topic, char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (!configured_topic || configured_topic[0] == '\0') {
+        return;
+    }
+
+    strncpy(out, configured_topic, out_sz - 1);
+    out[out_sz - 1] = '\0';
+
+    if (strip_topic_suffix(out, "/status/heartbeat")) return;
+    if (strip_topic_suffix(out, "/status")) return;
+    if (strip_topic_suffix(out, "/features")) return;
+    if (strip_topic_suffix(out, "/audio")) return;
+    if (strip_topic_suffix(out, "/temp_humidity")) return;
+}
+
+static void build_status_topic(char *out, size_t out_sz, const char *suffix)
+{
+    int len = 0;
+
+    if (!out || out_sz == 0) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (s_base_topic[0] == '\0') {
+        return;
+    }
+
+    len = snprintf(out, out_sz, "%s%s", s_base_topic, suffix ? suffix : "");
+    if (len <= 0 || len >= (int)out_sz) {
+        out[0] = '\0';
+    }
+}
+
+static int get_wifi_rssi_dbm(void)
+{
+    wifi_ap_record_t ap_info = {0};
+
+    if (!s_wifi_connected) {
+        return 0;
+    }
+
+    if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) {
+        return 0;
+    }
+
+    return (int)ap_info.rssi;
+}
+
+static esp_err_t publish_heartbeat_now(const char *status)
+{
+    char payload[384];
+    uint64_t uptime_s = 0;
+    int payload_len = 0;
+    int msg_id = -1;
+
+    if (!s_mqtt || !s_mqtt_connected || s_heartbeat_topic[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_boot_time_us <= 0) {
+        s_boot_time_us = esp_timer_get_time();
+    }
+    uptime_s = (uint64_t)((esp_timer_get_time() - s_boot_time_us) / 1000000LL);
+
+    payload_len = snprintf(
+        payload,
+        sizeof(payload),
+        "{"
+        "\"node_id\":\"%s\","
+        "\"status\":\"%s\","
+        "\"fw_version\":\"%s\","
+        "\"uptime_s\":%" PRIu64 ","
+        "\"rssi_dbm\":%d,"
+        "\"free_heap\":%u,"
+        "\"wifi_connected\":%s,"
+        "\"mqtt_connected\":%s,"
+        "\"ota_ready\":%s,"
+        "\"ota_in_progress\":%s"
+        "}",
+        s_node_id[0] ? s_node_id : SDACS_NODE_ID,
+        status ? status : "online",
+        SDACS_FW_VERSION,
+        uptime_s,
+        get_wifi_rssi_dbm(),
+        (unsigned)esp_get_free_heap_size(),
+        s_wifi_connected ? "true" : "false",
+        s_mqtt_connected ? "true" : "false",
+        s_ota_ready ? "true" : "false",
+        s_ota_in_progress ? "true" : "false"
+    );
+    if (payload_len <= 0 || payload_len >= (int)sizeof(payload)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    msg_id = esp_mqtt_client_publish(s_mqtt, s_heartbeat_topic, payload, 0, 1, 1);
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
+
+static void heartbeat_task(void *arg)
+{
+    (void)arg;
+
+    while (1) {
+        if (s_mqtt_connected) {
+            (void)publish_heartbeat_now("online");
+        }
+        vTaskDelay(pdMS_TO_TICKS(SDACS_HEARTBEAT_INTERVAL_MS));
     }
 }
 
@@ -80,9 +230,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        s_wifi_connected = false;
         esp_wifi_connect();
         ESP_LOGI(TAG, "WiFi STA start -> connect");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        s_wifi_connected = true;
         wifi_event_sta_connected_t *evt = (wifi_event_sta_connected_t *)event_data;
         if (evt) {
             ESP_LOGI(TAG,
@@ -103,6 +255,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         ESP_LOGW(TAG, "WiFi disconnected (reason=%d)", disc ? disc->reason : -1);
 
+        s_wifi_connected = false;
         s_mqtt_connected = false;
 
         if (s_retry_num < WIFI_MAX_RETRY) {
@@ -136,12 +289,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             if (s_mqtt) {
                 char node_cmd_topic[160];
 
-                snprintf(node_cmd_topic, sizeof(node_cmd_topic), "sdacs/node/%s/cmd", SDACS_NODE_ID);
+                snprintf(node_cmd_topic, sizeof(node_cmd_topic), "%s/cmd", s_base_topic);
                 (void)esp_mqtt_client_subscribe(s_mqtt, node_cmd_topic, 1);
                 (void)esp_mqtt_client_subscribe(s_mqtt, "sdacs/group/all/cmd", 1);
             }
             ESP_LOGI(TAG, "MQTT connected");
             ESP_LOGI(TAG, "Subscribed to command topics");
+            (void)publish_heartbeat_now("online");
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_mqtt_connected = false;
@@ -218,7 +372,10 @@ static esp_err_t mqtt_start_client(const char *broker_uri)
 {
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = broker_uri,
-        // you can add username/password here later if needed
+        .session.last_will.topic = s_heartbeat_topic,
+        .session.last_will.msg = s_lwt_payload,
+        .session.last_will.qos = 1,
+        .session.last_will.retain = 1,
     };
 
     s_mqtt = esp_mqtt_client_init(&mqtt_cfg);
@@ -322,6 +479,7 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
     const char *pass = NULL;
     const char *broker_uri = NULL;
     const char *topic = NULL;
+    const char *node_id = NULL;
     esp_err_t err = ESP_OK;
 
     (void)cfg; // Runtime settings come from config_store.
@@ -344,6 +502,12 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
         return err;
     }
 
+    err = config_store_get_node_id(&node_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "config_store_get_node_id failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
     if (!ssid || !pass || !broker_uri || !topic ||
         ssid[0] == '\0' || broker_uri[0] == '\0' || topic[0] == '\0') {
         ESP_LOGE(TAG, "Missing WiFi/MQTT settings in config_store.");
@@ -354,6 +518,32 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
     s_cfg.pass = pass;
     s_cfg.broker_uri = broker_uri;
     s_cfg.topic = topic;
+    strncpy(s_node_id, (node_id && node_id[0] != '\0') ? node_id : SDACS_NODE_ID, sizeof(s_node_id) - 1);
+    s_node_id[sizeof(s_node_id) - 1] = '\0';
+    normalize_base_topic(topic, s_base_topic, sizeof(s_base_topic));
+
+    if (s_base_topic[0] == '\0') {
+        ESP_LOGE(TAG, "Unable to derive MQTT base topic from '%s'", topic);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    build_status_topic(s_heartbeat_topic, sizeof(s_heartbeat_topic), "/status/heartbeat");
+    if (s_heartbeat_topic[0] == '\0') {
+        ESP_LOGE(TAG, "Heartbeat topic is invalid");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (snprintf(s_lwt_payload,
+                 sizeof(s_lwt_payload),
+                 "{\"node_id\":\"%s\",\"status\":\"offline\",\"reason\":\"lwt\"}",
+                 s_node_id) >= (int)sizeof(s_lwt_payload)) {
+        ESP_LOGE(TAG, "LWT payload too long");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (s_boot_time_us <= 0) {
+        s_boot_time_us = esp_timer_get_time();
+    }
 
     if (!s_feat_q) {
         s_feat_q = xQueueCreate(FEATURES_QUEUE_LEN, sizeof(sdacs_features_t));
@@ -372,6 +562,21 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
         NULL,
         0
     );
+
+    if (!s_heartbeat_task_started) {
+        BaseType_t ok = xTaskCreate(
+            heartbeat_task,
+            "heartbeat_task",
+            SDACS_HEARTBEAT_TASK_STACK_SIZE,
+            NULL,
+            SDACS_HEARTBEAT_TASK_PRIORITY,
+            NULL
+        );
+        if (ok != pdPASS) {
+            return ESP_FAIL;
+        }
+        s_heartbeat_task_started = true;
+    }
 
     return ESP_OK;
 }
@@ -454,6 +659,18 @@ esp_err_t wifi_mqtt_publish_status_json(const char *topic, const char *json)
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t wifi_mqtt_publish_heartbeat(const char *status)
+{
+    return publish_heartbeat_now(status);
+}
+
+esp_err_t wifi_mqtt_set_ota_state(bool ota_ready, bool ota_in_progress)
+{
+    s_ota_ready = ota_ready;
+    s_ota_in_progress = ota_in_progress;
+    return ESP_OK;
+}
+
 bool wifi_mqtt_try_send(const sdacs_features_t *f)
 {
     if (!s_feat_q || !f) return false;
@@ -464,4 +681,20 @@ bool wifi_mqtt_try_send(const sdacs_features_t *f)
 bool wifi_mqtt_is_connected(void)
 {
     return s_mqtt_connected;
+}
+
+esp_err_t wifi_mqtt_get_base_topic(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    out[0] = '\0';
+    if (s_base_topic[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    strncpy(out, s_base_topic, out_sz - 1);
+    out[out_sz - 1] = '\0';
+    return ESP_OK;
 }

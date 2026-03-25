@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "esp_log.h"
 
 #include "audio_input.h"
@@ -16,48 +18,60 @@
 static const char *TAG = "app_main";
 static run_storage_t s_storage = {0};
 
-static void publish_boot_status(const char *base_topic)
+static void load_base_topic(char *out, size_t out_sz)
 {
-    char topic[160];
-    char payload[256];
+    const char *broker_uri = NULL;
+    const char *configured_topic = NULL;
+    const char *suffixes[] = {
+        "/status/heartbeat",
+        "/status",
+        "/features",
+        "/audio",
+        "/temp_humidity",
+    };
+    size_t i = 0;
 
-    if (!base_topic || base_topic[0] == '\0') {
-        ESP_LOGW(TAG, "Skipping boot status publish; base topic missing");
+    if (!out || out_sz == 0) {
         return;
     }
 
-    if (snprintf(topic, sizeof(topic), "%s/status", base_topic) >= (int)sizeof(topic)) {
-        ESP_LOGW(TAG, "Status topic too long");
+    out[0] = '\0';
+    if (config_store_get_mqtt(&broker_uri, &configured_topic) != ESP_OK) {
+        return;
+    }
+    (void)broker_uri;
+
+    if (!configured_topic || configured_topic[0] == '\0') {
         return;
     }
 
-    if (snprintf(payload,
-                 sizeof(payload),
-                 "{\"node\":\"%s\",\"mode\":\"%s\",\"fw_version\":\"%s\",\"ota_capable\":true}",
-                 SDACS_NODE_ID,
-                 device_state_to_str(device_state_get()),
-                 SDACS_FW_VERSION) >= (int)sizeof(payload)) {
-        ESP_LOGW(TAG, "Boot status payload too long");
-        return;
-    }
+    strncpy(out, configured_topic, out_sz - 1);
+    out[out_sz - 1] = '\0';
 
-    esp_err_t err = wifi_mqtt_publish_status_json(topic, payload);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Boot status publish failed: %s", esp_err_to_name(err));
+    for (i = 0; i < (sizeof(suffixes) / sizeof(suffixes[0])); ++i) {
+        size_t topic_len = strlen(out);
+        size_t suffix_len = strlen(suffixes[i]);
+
+        if (topic_len >= suffix_len &&
+            strcmp(out + topic_len - suffix_len, suffixes[i]) == 0) {
+            out[topic_len - suffix_len] = '\0';
+            break;
+        }
     }
 }
 
 void app_main(void)
 {
-    const char *base_topic = NULL;
-    const char *broker_uri = NULL;
+    char base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1] = {0};
 
     ESP_ERROR_CHECK(config_store_init());
     ESP_ERROR_CHECK(network_provisioning_apply_defaults());
     ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
+
     time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
 
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
+    ESP_ERROR_CHECK(run_storage_create_session(&s_storage, SDACS_NODE_ID));
 
     bool th_ok = temp_humidity_start(
         SDACS_TEMP_HUMIDITY_I2C_PORT,
@@ -73,18 +87,19 @@ void app_main(void)
 
     ESP_ERROR_CHECK(audio_input_init());
     ESP_ERROR_CHECK(fft_metrics_init());
-    ESP_ERROR_CHECK(config_store_get_mqtt(&broker_uri, &base_topic));
-    (void)broker_uri;
-
     device_state_init();
+    load_base_topic(base_topic, sizeof(base_topic));
     command_dispatcher_init(&s_storage, SDACS_NODE_ID, base_topic);
     ESP_ERROR_CHECK(wifi_mqtt_set_command_callback(command_dispatcher_handle));
 
-    if (wifi_mqtt_wait_connected(SDACS_WIFI_TIME_SYNC_WAIT_MS) == ESP_OK) {
-        publish_boot_status(base_topic);
-    } else {
-        ESP_LOGW(TAG, "MQTT not connected yet; boot status will be published after a status request");
-    }
+    capture_context_t ctx = {
+        .storage = &s_storage,
+        .node_id = SDACS_NODE_ID,
+        .base_topic = base_topic,
+        .cal_offset_db = SDACS_CAL_OFFSET_DB,
+        .record_seconds = SDACS_RECORD_SECONDS,
+    };
 
-    ESP_LOGI(TAG, "System initialized. Entering IDLE state and waiting for commands.");
+    ESP_ERROR_CHECK(capture_task_start(&ctx));
+    ESP_LOGI(TAG, "Capture started (%d s): MQTT stream + SD logging", SDACS_RECORD_SECONDS);
 }

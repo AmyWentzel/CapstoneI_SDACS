@@ -27,7 +27,7 @@
 #endif
 
 #define SDACS_NODE_ID                    "node01"
-#define SDACS_FW_VERSION                 "0.1.0"
+#define SDACS_FW_VERSION                 "ota-enable-v1"
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_14
@@ -44,12 +44,15 @@
 #define SDACS_RECORD_SECONDS             20
 #define SDACS_AUDIO_CHUNK_SAMPLES        2048
 #define SDACS_FFT_SIZE                   1024
-#define SDACS_CAL_OFFSET_DB              94.0f
+#define SDACS_CAL_OFFSET_DB              0.0f
 #define SDACS_I2S_READ_TIMEOUT_MS        100
 #define SDACS_WAV_CHUNK_SIZE             1024
 
 #define SDACS_VALID_UNIX_TIME_EPOCH      1700000000
 #define SDACS_WIFI_TIME_SYNC_WAIT_MS     15000
+#define SDACS_HEARTBEAT_INTERVAL_MS      15000
+#define SDACS_HEARTBEAT_TASK_STACK_SIZE  4096
+#define SDACS_HEARTBEAT_TASK_PRIORITY    4
 #define SDACS_CAPTURE_TASK_STACK_SIZE    8192
 #define SDACS_CAPTURE_TASK_PRIORITY      5
 #define SDACS_CAPTURE_TASK_CORE_ID       1

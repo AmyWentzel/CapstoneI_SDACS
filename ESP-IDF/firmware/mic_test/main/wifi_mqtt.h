@@ -37,6 +37,9 @@ esp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t l
 
 esp_err_t wifi_mqtt_set_command_callback(wifi_mqtt_cmd_cb_t cb);
 esp_err_t wifi_mqtt_publish_status_json(const char *topic, const char *json);
+esp_err_t wifi_mqtt_publish_heartbeat(const char *status);
+esp_err_t wifi_mqtt_set_ota_state(bool ota_ready, bool ota_in_progress);
+esp_err_t wifi_mqtt_get_base_topic(char *out, size_t out_sz);
 
 // Optional: check if MQTT is connected (for debug/UI)
 bool wifi_mqtt_is_connected(void);
