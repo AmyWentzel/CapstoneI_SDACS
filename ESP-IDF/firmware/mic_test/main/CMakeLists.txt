@@ -20,6 +20,7 @@ idf_component_register(
         "temp_humidity.c"
     INCLUDE_DIRS "."
     REQUIRES
+        fuel_gauge
         esp_wifi
         esp_netif
         mqtt
