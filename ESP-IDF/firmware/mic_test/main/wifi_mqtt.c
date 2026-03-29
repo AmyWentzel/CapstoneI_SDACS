@@ -2,6 +2,7 @@
 #include "config_store.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #include "mqtt_client.h"
 #include "esp_timer.h"
 
+#include "fuel_gauge.h"
 #include "sdacs_config.h"
 
 static const char *TAG = "WIFI_MQTT";
@@ -148,9 +150,14 @@ static int get_wifi_rssi_dbm(void)
 static esp_err_t publish_heartbeat_now(const char *status)
 {
     char payload[384];
+    char batt_soc_buf[24] = "null";
+    char batt_voltage_buf[24] = "null";
+    char batt_rate_buf[24] = "null";
     uint64_t uptime_s = 0;
     int payload_len = 0;
     int msg_id = -1;
+    fuel_gauge_reading_t batt = {0};
+    bool batt_valid = fuel_gauge_get_latest(&batt);
 
     if (!s_mqtt || !s_mqtt_connected || s_heartbeat_topic[0] == '\0') {
         return ESP_ERR_INVALID_STATE;
@@ -161,6 +168,13 @@ static esp_err_t publish_heartbeat_now(const char *status)
     }
     uptime_s = (uint64_t)((esp_timer_get_time() - s_boot_time_us) / 1000000LL);
 
+    if (batt_valid) {
+        (void)snprintf(batt_soc_buf, sizeof(batt_soc_buf), "%.2f", (double)batt.soc_percent);
+        (void)snprintf(batt_voltage_buf, sizeof(batt_voltage_buf), "%.4f", (double)batt.voltage_v);
+        (void)snprintf(batt_rate_buf, sizeof(batt_rate_buf), "%.2f", (double)batt.charge_rate_percent_per_hr);
+    }
+
+    // Node-RED heartbeat parsing now includes batt_soc_percent, batt_voltage_v, and batt_charge_rate_pct_per_hr.
     payload_len = snprintf(
         payload,
         sizeof(payload),
@@ -174,7 +188,11 @@ static esp_err_t publish_heartbeat_now(const char *status)
         "\"wifi_connected\":%s,"
         "\"mqtt_connected\":%s,"
         "\"ota_ready\":%s,"
-        "\"ota_in_progress\":%s"
+        "\"ota_in_progress\":%s,"
+        "\"batt_soc_percent\":%s,"
+        "\"batt_voltage_v\":%s,"
+        "\"batt_charge_rate_pct_per_hr\":%s,"
+        "\"batt_valid\":%s"
         "}",
         s_node_id[0] ? s_node_id : SDACS_NODE_ID,
         status ? status : "online",
@@ -185,7 +203,11 @@ static esp_err_t publish_heartbeat_now(const char *status)
         s_wifi_connected ? "true" : "false",
         s_mqtt_connected ? "true" : "false",
         s_ota_ready ? "true" : "false",
-        s_ota_in_progress ? "true" : "false"
+        s_ota_in_progress ? "true" : "false",
+        batt_soc_buf,
+        batt_voltage_buf,
+        batt_rate_buf,
+        batt_valid ? "true" : "false"
     );
     if (payload_len <= 0 || payload_len >= (int)sizeof(payload)) {
         return ESP_ERR_INVALID_SIZE;
@@ -392,8 +414,22 @@ static esp_err_t mqtt_start_client(const char *broker_uri)
 // Builds JSON without cJSON to keep dependencies simple.
 static int build_features_json(char *out, size_t out_sz, const sdacs_features_t *f)
 {
+    char batt_soc_buf[24] = "null";
+    char batt_voltage_buf[24] = "null";
+    char batt_rate_buf[24] = "null";
+
+    if (isfinite(f->batt_soc_percent)) {
+        (void)snprintf(batt_soc_buf, sizeof(batt_soc_buf), "%.2f", (double)f->batt_soc_percent);
+    }
+    if (isfinite(f->batt_voltage_v)) {
+        (void)snprintf(batt_voltage_buf, sizeof(batt_voltage_buf), "%.4f", (double)f->batt_voltage_v);
+    }
+    if (isfinite(f->batt_charge_rate_pct_per_hr)) {
+        (void)snprintf(batt_rate_buf, sizeof(batt_rate_buf), "%.2f", (double)f->batt_charge_rate_pct_per_hr);
+    }
+
     // Keep it compact; Node-RED can parse JSON easily.
-    // Blutooth HERE???
+    // Node-RED should also parse batt_soc_percent, batt_voltage_v, and batt_charge_rate_pct_per_hr.
     return snprintf(out, out_sz,
         "{"
           "\"node\":\"%s\","
@@ -406,7 +442,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"fft_peak_Hz\":%.1f,"
           "\"f_peak_hz\":%.1f,"
           "\"p2p_raw\":%" PRId32 ","
-          "\"zeros\":%d"
+          "\"zeros\":%d,"
+          "\"batt_soc_percent\":%s,"
+          "\"batt_voltage_v\":%s,"
+          "\"batt_charge_rate_pct_per_hr\":%s"
         "}",
         f->node_id,
         (unsigned)f->seq,
@@ -418,7 +457,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->f_peak_hz,
         f->f_peak_hz,
         f->p2p_raw,
-        f->zeros
+        f->zeros,
+        batt_soc_buf,
+        batt_voltage_buf,
+        batt_rate_buf
     );
 }
 

@@ -8,6 +8,7 @@
 #include "config_store.h"
 #include "device_state.h"
 #include "fft_metrics.h"
+#include "fuel_gauge.h"
 #include "network_provisioning.h"
 #include "run_storage.h"
 #include "sdacs_config.h"
@@ -84,6 +85,20 @@ void app_main(void)
     if (!th_ok) {
         ESP_LOGW(TAG, "temp_humidity_start failed; metrics will show NAN");
     }
+
+#if SDACS_FUEL_GAUGE_ENABLED
+    bool fg_ok = fuel_gauge_start(
+        SDACS_FUEL_GAUGE_I2C_PORT,
+        SDACS_FUEL_GAUGE_SDA_GPIO,
+        SDACS_FUEL_GAUGE_SCL_GPIO,
+        SDACS_FUEL_GAUGE_FREQ_HZ,
+        SDACS_FUEL_GAUGE_ADDR,
+        SDACS_FUEL_GAUGE_PERIOD_MS
+    );
+    if (!fg_ok) {
+        ESP_LOGW(TAG, "fuel_gauge_start failed; battery metrics will be unavailable");
+    }
+#endif
 
     ESP_ERROR_CHECK(audio_input_init());
     ESP_ERROR_CHECK(fft_metrics_init());

@@ -9,11 +9,13 @@ endif()
 idf_component_register(
     SRCS
         "app_main.c"
+       
         "audio_input.c"
         "capture_task.c"
         "command_dispatcher.c"
         "device_state.c"
         "fft_metrics.c"
+        "fuel_gauge.c"
         "network_provisioning.c"
         "ota_manager.c"
         "run_storage.c"

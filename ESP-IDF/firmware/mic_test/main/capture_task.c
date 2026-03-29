@@ -15,6 +15,7 @@
 #include "config_store.h"
 #include "device_state.h"
 #include "fft_metrics.h"
+#include "fuel_gauge.h"
 #include "sdacs_config.h"
 #include "temp_humidity.h"
 #include "time_sync.h"
@@ -72,6 +73,7 @@ static void capture_task_run(void *arg)
     } else {
         ESP_LOGI(TAG, "WiFi+MQTT ready. Starting stream + SD logging.");
         (void)temp_humidity_publish_latest_once("start");
+        (void)fuel_gauge_publish_latest_once("start");
     }
 
     while (esp_timer_get_time() < end_us) {
@@ -129,11 +131,20 @@ static void capture_task_run(void *arg)
             audio_metrics_t metrics = {0};
             if (fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db)) {
                 temp_humidity_reading_t th = {0};
+                fuel_gauge_reading_t batt = {0};
                 float temp_c = NAN;
                 float humidity = NAN;
+                float batt_soc_percent = NAN;
+                float batt_voltage_v = NAN;
+                float batt_charge_rate_pct_per_hr = NAN;
                 if (temp_humidity_get_latest(&th)) {
                     temp_c = th.temp_c;
                     humidity = th.rh_percent;
+                }
+                if (fuel_gauge_get_latest(&batt)) {
+                    batt_soc_percent = batt.soc_percent;
+                    batt_voltage_v = batt.voltage_v;
+                    batt_charge_rate_pct_per_hr = batt.charge_rate_percent_per_hr;
                 }
 
                 metrics_record_t record = {0};
@@ -159,6 +170,10 @@ static void capture_task_run(void *arg)
                 feat.f_peak_hz = metrics.fft_peak_hz;
                 feat.p2p_raw = metrics.peak_abs * 2;
                 feat.zeros = 0;
+                // Node-RED should parse the new battery fields alongside temp/humidity and audio metrics.
+                feat.batt_soc_percent = batt_soc_percent;
+                feat.batt_voltage_v = batt_voltage_v;
+                feat.batt_charge_rate_pct_per_hr = batt_charge_rate_pct_per_hr;
 
                 if (!wifi_mqtt_try_send(&feat)) {
                     ESP_LOGW(TAG, "Failed to enqueue 1 Hz features");
@@ -200,6 +215,7 @@ static void capture_task_run(void *arg)
 
     if (wifi_mqtt_is_connected()) {
         (void)temp_humidity_publish_latest_once("end");
+        (void)fuel_gauge_publish_latest_once("end");
     }
 
     run_storage_verify(state->ctx.storage);
