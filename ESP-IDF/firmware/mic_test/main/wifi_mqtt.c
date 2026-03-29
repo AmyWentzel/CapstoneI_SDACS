@@ -149,7 +149,7 @@ static int get_wifi_rssi_dbm(void)
 
 static esp_err_t publish_heartbeat_now(const char *status)
 {
-    char payload[384];
+    char payload[512];
     char batt_soc_buf[24] = "null";
     char batt_voltage_buf[24] = "null";
     char batt_rate_buf[24] = "null";
@@ -192,6 +192,9 @@ static esp_err_t publish_heartbeat_now(const char *status)
         "\"batt_soc_percent\":%s,"
         "\"batt_voltage_v\":%s,"
         "\"batt_charge_rate_pct_per_hr\":%s,"
+        "\"batt_sample_count\":%u,"
+        "\"batt_error_count\":%u,"
+        "\"batt_last_sample_time_us\":%" PRIi64 ","
         "\"batt_valid\":%s"
         "}",
         s_node_id[0] ? s_node_id : SDACS_NODE_ID,
@@ -207,6 +210,9 @@ static esp_err_t publish_heartbeat_now(const char *status)
         batt_soc_buf,
         batt_voltage_buf,
         batt_rate_buf,
+        (unsigned)batt.sample_count,
+        (unsigned)batt.error_count,
+        (int64_t)batt.last_sample_time_us,
         batt_valid ? "true" : "false"
     );
     if (payload_len <= 0 || payload_len >= (int)sizeof(payload)) {
@@ -417,6 +423,7 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
     char batt_soc_buf[24] = "null";
     char batt_voltage_buf[24] = "null";
     char batt_rate_buf[24] = "null";
+    const char *batt_valid_str = f->batt_valid ? "true" : "false";
 
     if (isfinite(f->batt_soc_percent)) {
         (void)snprintf(batt_soc_buf, sizeof(batt_soc_buf), "%.2f", (double)f->batt_soc_percent);
@@ -445,7 +452,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"zeros\":%d,"
           "\"batt_soc_percent\":%s,"
           "\"batt_voltage_v\":%s,"
-          "\"batt_charge_rate_pct_per_hr\":%s"
+          "\"batt_charge_rate_pct_per_hr\":%s,"
+          "\"batt_valid\":%s"
         "}",
         f->node_id,
         (unsigned)f->seq,
@@ -460,7 +468,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->zeros,
         batt_soc_buf,
         batt_voltage_buf,
-        batt_rate_buf
+        batt_rate_buf,
+        batt_valid_str
     );
 }
 

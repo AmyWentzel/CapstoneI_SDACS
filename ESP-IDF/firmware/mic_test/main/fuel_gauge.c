@@ -14,12 +14,14 @@
 #include "esp_timer.h"
 
 #include "config_store.h"
+#include "sdacs_config.h"
 #include "wifi_mqtt.h"
 
 static const char *TAG = "fuel_gauge";
 
 #define MAX17048_REG_VCELL 0x02
 #define MAX17048_REG_SOC   0x04
+#define MAX17048_REG_VER   0x08
 #define MAX17048_REG_CRATE 0x16
 
 typedef struct
@@ -33,6 +35,8 @@ typedef struct
 
     fuel_gauge_reading_t latest;
     bool running;
+    bool charge_rate_supported;
+    bool charge_rate_warned;
     char topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];
     char node_id[CONFIG_STORE_MAX_NODE_ID_LEN + 1];
 } fuel_gauge_ctx_t;
@@ -199,19 +203,76 @@ static esp_err_t fuel_gauge_read_sensor(int port, uint8_t addr, fuel_gauge_readi
         return err;
     }
 
-    err = max17048_read_reg16(port, addr, MAX17048_REG_CRATE, &raw_crate);
-    if (err != ESP_OK) {
-        return err;
-    }
-
     out->voltage_v = (float)raw_vcell * 78.125e-6f;
     out->soc_percent = (float)raw_soc / 256.0f;
+    out->charge_rate_percent_per_hr = 0.0f;
 
-    // TODO: Confirm MAX17048 charge-rate register support and scaling for this exact board/chip.
-    // The placeholder assumes a signed 0.208 %/hr LSB, which is common for MAX1704x-family CRATE.
-    out->charge_rate_percent_per_hr = (float)((int16_t)raw_crate) * 0.208f;
+    if (g_ctx.charge_rate_supported) {
+        err = max17048_read_reg16(port, addr, MAX17048_REG_CRATE, &raw_crate);
+        if (err == ESP_OK) {
+            // TODO: Confirm MAX17048 charge-rate register support and scaling for this exact board/chip.
+            // The placeholder assumes a signed 0.208 %/hr LSB, which is common for MAX1704x-family CRATE.
+            out->charge_rate_percent_per_hr = (float)((int16_t)raw_crate) * 0.208f;
+        } else {
+            g_ctx.charge_rate_supported = false;
+            if (!g_ctx.charge_rate_warned) {
+                ESP_LOGW(TAG, "Charge-rate register unavailable (%s); continuing with voltage/SOC only",
+                         esp_err_to_name(err));
+                g_ctx.charge_rate_warned = true;
+            }
+        }
+    }
+
     out->valid = true;
     return ESP_OK;
+}
+
+static void fuel_gauge_publish_sample(const fuel_gauge_reading_t *snap, const char *phase)
+{
+    char payload[320];
+    int len = 0;
+
+    if (!snap || !snap->valid) {
+        return;
+    }
+    if (g_ctx.topic[0] == '\0') {
+        return;
+    }
+    if (!wifi_mqtt_is_connected()) {
+        return;
+    }
+
+    if (!phase) {
+        phase = "periodic";
+    }
+
+    len = snprintf(
+        payload, sizeof(payload),
+        "{"
+        "\"node_id\":\"%s\","
+        "\"phase\":\"%s\","
+        "\"soc_percent\":%.2f,"
+        "\"voltage_v\":%.4f,"
+        "\"charge_rate_percent_per_hr\":%.2f,"
+        "\"sample_count\":%u,"
+        "\"error_count\":%u,"
+        "\"valid\":%s,"
+        "\"t_us\":%" PRIi64
+        "}",
+        g_ctx.node_id,
+        phase,
+        (double)snap->soc_percent,
+        (double)snap->voltage_v,
+        (double)snap->charge_rate_percent_per_hr,
+        (unsigned)snap->sample_count,
+        (unsigned)snap->error_count,
+        snap->valid ? "true" : "false",
+        (int64_t)snap->last_sample_time_us
+    );
+
+    if (len > 0 && len < (int)sizeof(payload)) {
+        (void)wifi_mqtt_publish_status_json(g_ctx.topic, payload);
+    }
 }
 
 static void fuel_gauge_task(void *arg)
@@ -220,6 +281,13 @@ static void fuel_gauge_task(void *arg)
 
     ESP_LOGI(TAG, "Task started (period=%ums, addr=0x%02X)",
              (unsigned)g_ctx.period_ms, g_ctx.addr);
+    ESP_LOGI(TAG, "Fuel gauge configured: port=%d sda=%d scl=%d addr=0x%02X period=%u ms topic=%s",
+             g_ctx.i2c_port,
+             SDACS_FUEL_GAUGE_SDA_GPIO,
+             SDACS_FUEL_GAUGE_SCL_GPIO,
+             g_ctx.addr,
+             (unsigned)g_ctx.period_ms,
+             g_ctx.topic[0] ? g_ctx.topic : "(none)");
     if (g_ctx.topic[0] != '\0') {
         ESP_LOGI(TAG, "Battery snapshots available on topic '%s'", g_ctx.topic);
     } else {
@@ -253,6 +321,7 @@ static void fuel_gauge_task(void *arg)
                      (double)snap.voltage_v,
                      (double)snap.charge_rate_percent_per_hr,
                      (unsigned)snap.sample_count);
+            fuel_gauge_publish_sample(&snap, "periodic");
         } else {
             ESP_LOGW(TAG, "Fuel gauge read failed: %s (err_count=%u)",
                      esp_err_to_name(err), (unsigned)snap.error_count);
@@ -275,6 +344,7 @@ bool fuel_gauge_start(int i2c_port,
 {
     esp_err_t err = ESP_OK;
     BaseType_t ok = pdFAIL;
+    uint16_t version = 0;
 
     if (g_ctx.running) {
         ESP_LOGW(TAG, "Already running");
@@ -296,6 +366,8 @@ bool fuel_gauge_start(int i2c_port,
     g_ctx.i2c_port = i2c_port;
     g_ctx.addr = sensor_addr;
     g_ctx.period_ms = period_ms;
+    g_ctx.charge_rate_supported = true;
+    g_ctx.charge_rate_warned = false;
     build_publish_topic(g_ctx.topic, sizeof(g_ctx.topic));
     load_node_id(g_ctx.node_id, sizeof(g_ctx.node_id));
 
@@ -330,6 +402,14 @@ bool fuel_gauge_start(int i2c_port,
         vSemaphoreDelete(g_ctx.lock);
         g_ctx.lock = NULL;
         return false;
+    }
+
+    err = max17048_read_reg16(i2c_port, sensor_addr, MAX17048_REG_VER, &version);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "MAX17048 probe OK, version=0x%04X", version);
+    } else {
+        ESP_LOGW(TAG, "MAX17048 version probe failed at addr 0x%02X: %s",
+                 sensor_addr, esp_err_to_name(err));
     }
 
     return true;

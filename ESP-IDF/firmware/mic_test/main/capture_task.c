@@ -137,6 +137,7 @@ static void capture_task_run(void *arg)
                 float batt_soc_percent = NAN;
                 float batt_voltage_v = NAN;
                 float batt_charge_rate_pct_per_hr = NAN;
+                bool batt_valid = false;
                 if (temp_humidity_get_latest(&th)) {
                     temp_c = th.temp_c;
                     humidity = th.rh_percent;
@@ -145,6 +146,7 @@ static void capture_task_run(void *arg)
                     batt_soc_percent = batt.soc_percent;
                     batt_voltage_v = batt.voltage_v;
                     batt_charge_rate_pct_per_hr = batt.charge_rate_percent_per_hr;
+                    batt_valid = true;
                 }
 
                 metrics_record_t record = {0};
@@ -174,6 +176,7 @@ static void capture_task_run(void *arg)
                 feat.batt_soc_percent = batt_soc_percent;
                 feat.batt_voltage_v = batt_voltage_v;
                 feat.batt_charge_rate_pct_per_hr = batt_charge_rate_pct_per_hr;
+                feat.batt_valid = batt_valid;
 
                 if (!wifi_mqtt_try_send(&feat)) {
                     ESP_LOGW(TAG, "Failed to enqueue 1 Hz features");
