@@ -12,6 +12,7 @@
 #include "network_provisioning.h"
 #include "run_storage.h"
 #include "sdacs_config.h"
+#include "shared_i2c_bus.h"
 #include "temp_humidity.h"
 #include "time_sync.h"
 #include "wifi_mqtt.h"
@@ -64,6 +65,12 @@ static void load_base_topic(char *out, size_t out_sz)
 void app_main(void)
 {
     char base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1] = {0};
+    shared_i2c_bus_config_t i2c_cfg = {
+        .port = SDACS_SENSOR_I2C_PORT,
+        .sda_gpio = SDACS_SENSOR_I2C_SDA_GPIO,
+        .scl_gpio = SDACS_SENSOR_I2C_SCL_GPIO,
+        .freq_hz = SDACS_SENSOR_I2C_FREQ_HZ,
+    };
 
     ESP_ERROR_CHECK(config_store_init());
     ESP_ERROR_CHECK(network_provisioning_apply_defaults());
@@ -73,12 +80,10 @@ void app_main(void)
 
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
     ESP_ERROR_CHECK(run_storage_create_session(&s_storage, SDACS_NODE_ID));
+    ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
 
     bool th_ok = temp_humidity_start(
         SDACS_TEMP_HUMIDITY_I2C_PORT,
-        SDACS_TEMP_HUMIDITY_SDA_GPIO,
-        SDACS_TEMP_HUMIDITY_SCL_GPIO,
-        SDACS_TEMP_HUMIDITY_FREQ_HZ,
         SDACS_TEMP_HUMIDITY_ADDR,
         SDACS_TEMP_HUMIDITY_PERIOD_MS
     );
@@ -89,9 +94,6 @@ void app_main(void)
 #if SDACS_FUEL_GAUGE_ENABLED
     bool fg_ok = fuel_gauge_start(
         SDACS_FUEL_GAUGE_I2C_PORT,
-        SDACS_FUEL_GAUGE_SDA_GPIO,
-        SDACS_FUEL_GAUGE_SCL_GPIO,
-        SDACS_FUEL_GAUGE_FREQ_HZ,
         SDACS_FUEL_GAUGE_ADDR,
         SDACS_FUEL_GAUGE_PERIOD_MS
     );

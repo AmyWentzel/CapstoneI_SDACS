@@ -19,6 +19,7 @@ idf_component_register(
         "network_provisioning.c"
         "ota_manager.c"
         "run_storage.c"
+        "shared_i2c_bus.c"
         "time_sync.c"
         "wifi_mqtt.c"
         "config_store.c"

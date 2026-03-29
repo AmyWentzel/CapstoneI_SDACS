@@ -19,9 +19,6 @@ typedef struct
 } fuel_gauge_reading_t;
 
 bool fuel_gauge_start(int i2c_port,
-                      int sda_gpio,
-                      int scl_gpio,
-                      uint32_t i2c_freq_hz,
                       uint8_t sensor_addr,
                       uint32_t period_ms);
 
