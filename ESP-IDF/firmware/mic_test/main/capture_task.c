@@ -172,6 +172,8 @@ static void capture_task_run(void *arg)
                 feat.f_peak_hz = metrics.fft_peak_hz;
                 feat.p2p_raw = metrics.peak_abs * 2;
                 feat.zeros = 0;
+                feat.temp_c = temp_c;
+                feat.rh_percent = humidity;
                 // Node-RED should parse the new battery fields alongside temp/humidity and audio metrics.
                 feat.batt_soc_percent = batt_soc_percent;
                 feat.batt_voltage_v = batt_voltage_v;

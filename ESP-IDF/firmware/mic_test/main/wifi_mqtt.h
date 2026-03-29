@@ -15,6 +15,8 @@ typedef struct {
     int32_t p2p_raw;         // peak-to-peak raw counts
     int zeros;               // count of exact zero samples in window
     uint32_t n;              // number of samples in the window
+    float temp_c;
+    float rh_percent;
     float batt_soc_percent;
     float batt_voltage_v;
     float batt_charge_rate_pct_per_hr;

@@ -420,11 +420,19 @@ static esp_err_t mqtt_start_client(const char *broker_uri)
 // Builds JSON without cJSON to keep dependencies simple.
 static int build_features_json(char *out, size_t out_sz, const sdacs_features_t *f)
 {
+    char temp_c_buf[24] = "null";
+    char rh_percent_buf[24] = "null";
     char batt_soc_buf[24] = "null";
     char batt_voltage_buf[24] = "null";
     char batt_rate_buf[24] = "null";
     const char *batt_valid_str = f->batt_valid ? "true" : "false";
 
+    if (isfinite(f->temp_c)) {
+        (void)snprintf(temp_c_buf, sizeof(temp_c_buf), "%.2f", (double)f->temp_c);
+    }
+    if (isfinite(f->rh_percent)) {
+        (void)snprintf(rh_percent_buf, sizeof(rh_percent_buf), "%.2f", (double)f->rh_percent);
+    }
     if (isfinite(f->batt_soc_percent)) {
         (void)snprintf(batt_soc_buf, sizeof(batt_soc_buf), "%.2f", (double)f->batt_soc_percent);
     }
@@ -450,6 +458,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"f_peak_hz\":%.1f,"
           "\"p2p_raw\":%" PRId32 ","
           "\"zeros\":%d,"
+          "\"temp_c\":%s,"
+          "\"rh_percent\":%s,"
           "\"batt_soc_percent\":%s,"
           "\"batt_voltage_v\":%s,"
           "\"batt_charge_rate_pct_per_hr\":%s,"
@@ -466,6 +476,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->f_peak_hz,
         f->p2p_raw,
         f->zeros,
+        temp_c_buf,
+        rh_percent_buf,
         batt_soc_buf,
         batt_voltage_buf,
         batt_rate_buf,

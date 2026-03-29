@@ -14,6 +14,7 @@
 
 #include "driver/i2c.h"
 #include "config_store.h"
+#include "shared_i2c_bus.h"
 #include "wifi_mqtt.h"
 
 static const char *TAG = "temp_humidity";
@@ -68,37 +69,14 @@ static void load_node_id(char *out, size_t out_sz)
     }
 }
 
-static esp_err_t i2c_bus_init(int port, int sda_gpio, int scl_gpio, uint32_t freq_hz)
-{
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = sda_gpio,
-        .scl_io_num = scl_gpio,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = freq_hz,
-        .clk_flags = 0,
-    };
-
-    esp_err_t err = i2c_param_config(port, &conf);
-    if (err != ESP_OK) return err;
-
-    err = i2c_driver_install(port, conf.mode, 0, 0, 0);
-    if (err == ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "I2C driver already installed on port %d; continuing", port);
-        return ESP_OK;
-    }
-    return err;
-}
-
 static esp_err_t i2c_write(int port, uint8_t addr, const uint8_t *data, size_t len)
 {
-    return i2c_master_write_to_device(port, addr, data, len, pdMS_TO_TICKS(250));
+    return shared_i2c_write(port, addr, data, len, pdMS_TO_TICKS(250));
 }
 
 static esp_err_t i2c_read(int port, uint8_t addr, uint8_t *data, size_t len)
 {
-    return i2c_master_read_from_device(port, addr, data, len, pdMS_TO_TICKS(250));
+    return shared_i2c_read(port, addr, data, len, pdMS_TO_TICKS(250));
 }
 
 static uint8_t hdc302x_crc8(const uint8_t *data, size_t len)
@@ -198,9 +176,6 @@ static void temp_humidity_task(void *arg)
 }
 
 bool temp_humidity_start(int i2c_port,
-                         int sda_gpio,
-                         int scl_gpio,
-                         uint32_t i2c_freq_hz,
                          uint8_t sensor_addr,
                          uint32_t period_ms)
 {
@@ -209,14 +184,13 @@ bool temp_humidity_start(int i2c_port,
         return true;
     }
 
-    if (period_ms < 200 || period_ms > 60000) {
-        ESP_LOGE(TAG, "Invalid period_ms=%u", (unsigned)period_ms);
+    if (!shared_i2c_bus_is_ready()) {
+        ESP_LOGE(TAG, "Shared I2C bus not initialized");
         return false;
     }
 
-    esp_err_t err = i2c_bus_init(i2c_port, sda_gpio, scl_gpio, i2c_freq_hz);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "I2C init failed: %s", esp_err_to_name(err));
+    if (period_ms < 200 || period_ms > 60000) {
+        ESP_LOGE(TAG, "Invalid period_ms=%u", (unsigned)period_ms);
         return false;
     }
 
