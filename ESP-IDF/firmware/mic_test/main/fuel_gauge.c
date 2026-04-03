@@ -266,8 +266,8 @@ static void fuel_gauge_task(void *arg)
              (unsigned)g_ctx.period_ms, g_ctx.addr);
     ESP_LOGI(TAG, "Fuel gauge configured: port=%d sda=%d scl=%d addr=0x%02X period=%u ms topic=%s",
              g_ctx.i2c_port,
-             SDACS_FUEL_GAUGE_SDA_GPIO,
-             SDACS_FUEL_GAUGE_SCL_GPIO,
+             SDACS_TEMP_HUMIDITY_SDA_GPIO,
+             SDACS_TEMP_HUMIDITY_SCL_GPIO,
              g_ctx.addr,
              (unsigned)g_ctx.period_ms,
              g_ctx.topic[0] ? g_ctx.topic : "(none)");

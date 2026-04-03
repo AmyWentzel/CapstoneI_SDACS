@@ -66,10 +66,10 @@ void app_main(void)
 {
     char base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1] = {0};
     shared_i2c_bus_config_t i2c_cfg = {
-        .port = SDACS_SENSOR_I2C_PORT,
-        .sda_gpio = SDACS_SENSOR_I2C_SDA_GPIO,
-        .scl_gpio = SDACS_SENSOR_I2C_SCL_GPIO,
-        .freq_hz = SDACS_SENSOR_I2C_FREQ_HZ,
+        .port = SDACS_TEMP_HUMIDITY_I2C_PORT,
+        .sda_gpio = SDACS_TEMP_HUMIDITY_SDA_GPIO,
+        .scl_gpio = SDACS_TEMP_HUMIDITY_SCL_GPIO,
+        .freq_hz = SDACS_TEMP_HUMIDITY_FREQ_HZ,
     };
 
     ESP_ERROR_CHECK(config_store_init());
