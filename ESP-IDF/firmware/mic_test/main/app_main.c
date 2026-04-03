@@ -98,7 +98,11 @@ void app_main(void)
         SDACS_FUEL_GAUGE_PERIOD_MS
     );
     if (!fg_ok) {
-        ESP_LOGW(TAG, "fuel_gauge_start failed; battery metrics will be unavailable");
+        ESP_LOGE(TAG, "fuel_gauge_start failed; battery metrics unavailable");
+    } else {
+        ESP_LOGI(TAG, "Fuel gauge started on I2C port %d addr 0x%02X",
+                 SDACS_FUEL_GAUGE_I2C_PORT,
+                 SDACS_FUEL_GAUGE_ADDR);
     }
 #endif
 
