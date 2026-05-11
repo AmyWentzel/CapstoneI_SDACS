@@ -14,6 +14,7 @@
 #include "audio_input.h"
 #include "config_store.h"
 #include "fft_metrics.h"
+#include "run_storage.h"
 #include "sdacs_config.h"
 #include "temp_humidity.h"
 #include "time_sync.h"
@@ -44,9 +45,6 @@ static void capture_task_run(void *arg)
     size_t samples_read = 0;
     int64_t start_us = esp_timer_get_time();
     int64_t end_us = start_us + ((int64_t)state->ctx.record_seconds * 1000000LL);
-    int64_t next_metrics_us = start_us + 1000000LL;
-    uint32_t samples_streamed = 0;
-    uint32_t metrics_seq = 0;
 
     sdacs_audio_hdr_t hdr = {
         .magic = SDACS_MAGIC,
@@ -98,73 +96,121 @@ static void capture_task_run(void *arg)
                     ESP_LOGW(TAG, "Failed SD append for raw chunk");
                 }
 
-                hdr.n = (uint32_t)chunk_fill;
-                hdr.t_us = (uint64_t)esp_timer_get_time();
-                memcpy(payload, &hdr, sizeof(hdr));
-                memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));
-                err = wifi_mqtt_publish_raw(
-                    state->audio_topic,
-                    payload,
-                    sizeof(hdr) + (chunk_fill * sizeof(int32_t)),
-                    0,
-                    0
-                );
-                if (err != ESP_OK && (hdr.seq % 20u == 0u)) {
-                    ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(err));
-                }
-
-                samples_streamed += (uint32_t)chunk_fill;
                 hdr.seq++;
                 chunk_fill = 0;
             }
         }
 
-        int64_t now_us = esp_timer_get_time();
-        if (now_us >= next_metrics_us) {
-            audio_metrics_t metrics = {0};
-            if (fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db)) {
-                temp_humidity_reading_t th = {0};
-                float temp_c = NAN;
-                float humidity = NAN;
-                if (temp_humidity_get_latest(&th)) {
-                    temp_c = th.temp_c;
-                    humidity = th.rh_percent;
+        // Removed real-time metrics calculation - will be done after recording
+    }
+
+    // Post-recording audio streaming: read from SD card and send over MQTT
+    ESP_LOGI(TAG, "Starting post-recording audio streaming...");
+    
+    FILE *raw_file = fopen(state->ctx.storage->raw_path, "rb");
+    if (!raw_file) {
+        ESP_LOGE(TAG, "Failed to open raw file for streaming: %s", state->ctx.storage->raw_path);
+    } else {
+        fseek(raw_file, 0, SEEK_END);
+        long raw_size_l = ftell(raw_file);
+        fseek(raw_file, 0, SEEK_SET);
+        
+        if (raw_size_l > 0) {
+            size_t total_samples = (size_t)raw_size_l / sizeof(int32_t);
+            size_t samples_streamed = 0;
+            uint32_t chunk_seq = 0;
+            
+            ESP_LOGI(TAG, "Streaming %zu samples in %d-sample chunks", total_samples, SDACS_AUDIO_CHUNK_SAMPLES);
+            
+            while (samples_streamed < total_samples) {
+                size_t samples_to_read = SDACS_AUDIO_CHUNK_SAMPLES;
+                if (samples_streamed + samples_to_read > total_samples) {
+                    samples_to_read = total_samples - samples_streamed;
                 }
-
-                metrics_record_t record = {0};
-                time_sync_get_iso8601(record.timestamp, sizeof(record.timestamp));
-                strncpy(record.node_id, state->ctx.node_id, sizeof(record.node_id) - 1);
-                record.laeq_db = metrics.laeq_db;
-                record.peak_db = metrics.peak_db;
-                record.dbfs = metrics.dbfs;
-                record.rms = metrics.rms_norm;
-                record.temp_c = temp_c;
-                record.humidity = humidity;
-                record.fft_peak_hz = metrics.fft_peak_hz;
-                (void)run_storage_append_metrics(state->ctx.storage, &record);
-
-                sdacs_features_t feat = {0};
-                strncpy(feat.node_id, state->ctx.node_id, sizeof(feat.node_id) - 1);
-                feat.seq = metrics_seq++;
-                feat.t_us = (uint64_t)now_us;
-                feat.n = metrics.sample_count;
-                feat.rms = metrics.rms_norm;
-                feat.dbfs = metrics.dbfs;
-                feat.db_spl = metrics.laeq_db;
-                feat.f_peak_hz = metrics.fft_peak_hz;
-                feat.p2p_raw = metrics.peak_abs * 2;
-                feat.zeros = 0;
-
-                if (!wifi_mqtt_try_send(&feat)) {
-                    ESP_LOGW(TAG, "Failed to enqueue 1 Hz features");
+                
+                size_t rd = fread(chunk, sizeof(int32_t), samples_to_read, raw_file);
+                if (rd == 0) {
+                    break;
                 }
-
-                ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB streamed=%u",
-                         metrics.laeq_db, metrics.peak_db, (unsigned)samples_streamed);
+                
+                // Send chunk over MQTT
+                hdr.n = (uint32_t)rd;
+                hdr.t_us = (uint64_t)esp_timer_get_time();
+                hdr.seq = chunk_seq;
+                memcpy(payload, &hdr, sizeof(hdr));
+                memcpy(payload + sizeof(hdr), chunk, rd * sizeof(int32_t));
+                
+                esp_err_t err = wifi_mqtt_publish_raw(
+                    state->audio_topic,
+                    payload,
+                    sizeof(hdr) + (rd * sizeof(int32_t)),
+                    0,
+                    0
+                );
+                if (err != ESP_OK && (chunk_seq % 20u == 0u)) {
+                    ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(err));
+                }
+                
+                samples_streamed += rd;
+                chunk_seq++;
+                
+                // Small delay to avoid overwhelming MQTT
+                vTaskDelay(pdMS_TO_TICKS(10));
             }
-
-            next_metrics_us += 1000000LL;
+            
+            ESP_LOGI(TAG, "Audio streaming complete: %u chunks sent", chunk_seq);
         }
+        
+        fclose(raw_file);
+    }
+
+    // Post-recording analysis: compute FFT, SPL, and other metrics
+    ESP_LOGI(TAG, "Starting post-recording analysis...");
+    
+    audio_metrics_t final_metrics = {0};
+    if (fft_metrics_compute_and_reset(&final_metrics, state->ctx.cal_offset_db)) {
+        temp_humidity_reading_t th = {0};
+        float temp_c = NAN;
+        float humidity = NAN;
+        if (temp_humidity_get_latest(&th)) {
+            temp_c = th.temp_c;
+            humidity = th.rh_percent;
+        }
+
+        // Store final metrics record
+        metrics_record_t record = {0};
+        time_sync_get_iso8601(record.timestamp, sizeof(record.timestamp));
+        strncpy(record.node_id, state->ctx.node_id, sizeof(record.node_id) - 1);
+        record.laeq_db = final_metrics.laeq_db;
+        record.peak_db = final_metrics.peak_db;
+        record.dbfs = final_metrics.dbfs;
+        record.rms = final_metrics.rms_norm;
+        record.temp_c = temp_c;
+        record.humidity = humidity;
+        record.fft_peak_hz = final_metrics.fft_peak_hz;
+        (void)run_storage_append_metrics(state->ctx.storage, &record);
+
+        // Send final features via MQTT
+        sdacs_features_t feat = {0};
+        strncpy(feat.node_id, state->ctx.node_id, sizeof(feat.node_id) - 1);
+        feat.seq = 0;  // Final analysis
+        feat.t_us = (uint64_t)esp_timer_get_time();
+        feat.n = final_metrics.sample_count;
+        feat.rms = final_metrics.rms_norm;
+        feat.dbfs = final_metrics.dbfs;
+        feat.db_spl = final_metrics.laeq_db;
+        feat.f_peak_hz = final_metrics.fft_peak_hz;
+        feat.p2p_raw = final_metrics.peak_abs * 2;
+        feat.zeros = 0;
+
+        if (wifi_mqtt_try_send(&feat)) {
+            ESP_LOGI(TAG, "Final analysis sent: LAeq=%.2f dB, Peak=%.2f dB, FFT Peak=%.1f Hz",
+                     final_metrics.laeq_db, final_metrics.peak_db, final_metrics.fft_peak_hz);
+        } else {
+            ESP_LOGW(TAG, "Failed to send final analysis");
+        }
+    } else {
+        ESP_LOGW(TAG, "No audio data collected for analysis");
     }
 
     if (chunk_fill > 0) {

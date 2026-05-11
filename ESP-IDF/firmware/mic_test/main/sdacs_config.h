@@ -41,7 +41,7 @@
 #define SDACS_SAMPLE_RATE_HZ             48000
 #define SDACS_I2S_FRAMES_PER_READ        512
 #define SDACS_RECORD_SECONDS             20
-#define SDACS_AUDIO_CHUNK_SAMPLES        2048
+#define SDACS_AUDIO_CHUNK_SAMPLES        9600  // 48000 * 0.2 = 9600 samples for 200ms chunks
 #define SDACS_FFT_SIZE                   1024
 #define SDACS_CAL_OFFSET_DB              94.0f
 #define SDACS_I2S_READ_TIMEOUT_MS        100
