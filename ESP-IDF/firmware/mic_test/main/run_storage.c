@@ -54,19 +54,31 @@ static void refresh_path_timestamp(const char *path, time_t now)
     }
 }
 
-static bool append_file(const char *fullpath, const void *buf, size_t len)
+/*
+ * Write raw bytes to a file on the SD card at a given byte offset.
+ * The file is created if it does not exist.  Returns true on success.
+ */
+static bool sd_write_raw(const char *path, uint32_t addr, const void *buf, size_t len)
 {
-    FILE *f = fopen(fullpath, "ab");
+    char fullpath[64];
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", SDACS_SD_MOUNT_POINT, path);
+    FILE *f = fopen(fullpath, "r+b");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open %s", fullpath);
+        /* create file if it doesn't exist */
+        f = fopen(fullpath, "w+b");
+        if (!f) {
+            ESP_LOGE(TAG, "Failed to open %s", fullpath);
+            return false;
+        }
+    }
+    if (fseek(f, addr, SEEK_SET) != 0) {
+        ESP_LOGE(TAG, "fseek failed");
+        fclose(f);
         return false;
     }
-
     size_t written = fwrite(buf, 1, len, f);
-    fflush(f);
-    fsync(fileno(f));
     fclose(f);
-    return written == len;
+    return (written == len);
 }
 
 static void log_file_stat(const char *path)
@@ -170,16 +182,13 @@ esp_err_t run_storage_init(run_storage_t *rs)
 
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
 {
-    char ts[32];
-    time_t now;
-    bool dir_created = false;
-    static const char *header = "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz\n";
-
     if (!rs || !node_id) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    now = time(NULL);
+    char ts[32];
+    time_t now = time(NULL);
+
     if (time_sync_is_valid()) {
         struct tm timeinfo;
         localtime_r(&now, &timeinfo);
@@ -189,59 +198,51 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
         snprintf(ts, sizeof(ts), "boot_%lld", (long long)boot_ms);
     }
 
-    for (int suffix = 0; suffix < 100; ++suffix) {
-        int n = 0;
-        if (suffix == 0) {
-            n = snprintf(rs->run_dir, sizeof(rs->run_dir), "%s/%s_%s", SDACS_SD_MOUNT_POINT, node_id, ts);
-        } else {
-            n = snprintf(rs->run_dir, sizeof(rs->run_dir), "%s/%s_%s_%02d", SDACS_SD_MOUNT_POINT, node_id, ts, suffix);
-        }
+    // Build run directory name: <node_id>_<timestamp>
+    snprintf(rs->run_dir, sizeof(rs->run_dir),
+             "%s/%s_%s",
+             SDACS_SD_MOUNT_POINT, node_id, ts);
 
-        if (n < 0 || n >= (int)sizeof(rs->run_dir)) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-        if (mkdir(rs->run_dir, 0775) == 0) {
-            dir_created = true;
-            break;
-        }
+    // Create directory
+    if (mkdir(rs->run_dir, 0777) != 0) {
         if (errno != EEXIST) {
-            ESP_LOGE(TAG, "Failed to create run directory: %s (errno=%d: %s)",
-                     rs->run_dir, errno, strerror(errno));
+            ESP_LOGE(TAG, "Failed to create run directory %s", rs->run_dir);
             return ESP_FAIL;
         }
     }
 
-    if (!dir_created) {
-        ESP_LOGE(TAG, "Could not find unique run directory name for base '%s'", ts);
-        return ESP_FAIL;
-    }
+    // Build file paths inside run directory
+    snprintf(rs->raw_path, sizeof(rs->raw_path),
+             "%s/audio.raw", rs->run_dir);
 
-    if (snprintf(rs->raw_path, sizeof(rs->raw_path), "%s/audio.raw", rs->run_dir) >= (int)sizeof(rs->raw_path) ||
-        snprintf(rs->wav_path, sizeof(rs->wav_path), "%s/audio_%s.wav", rs->run_dir, ts) >= (int)sizeof(rs->wav_path) ||
-        snprintf(rs->csv_path, sizeof(rs->csv_path), "%s/metrics_%s.csv", rs->run_dir, ts) >= (int)sizeof(rs->csv_path) ||
-        snprintf(rs->cal_csv_path, sizeof(rs->cal_csv_path), "%s/calibration_run1.csv", rs->run_dir) >= (int)sizeof(rs->cal_csv_path) ||
-        snprintf(rs->cal_offset_path, sizeof(rs->cal_offset_path), "%s/calibration_offset.txt", rs->run_dir) >= (int)sizeof(rs->cal_offset_path)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
+    snprintf(rs->wav_path, sizeof(rs->wav_path),
+             "%s/audio.wav", rs->run_dir);
+
+    snprintf(rs->csv_path, sizeof(rs->csv_path),
+             "%s/metrics.csv", rs->run_dir);
+
+    snprintf(rs->cal_csv_path, sizeof(rs->cal_csv_path),
+             "%s/calibration.csv", rs->run_dir);
+
+    snprintf(rs->cal_offset_path, sizeof(rs->cal_offset_path),
+             "%s/calibration_offset.txt", rs->run_dir);
+
+    // Create CSV files with header
+    static const char *header =
+        "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz\n";
 
     FILE *csv = fopen(rs->csv_path, "w");
-    if (!csv) {
-        return ESP_FAIL;
-    }
+    if (!csv) return ESP_FAIL;
     fputs(header, csv);
     fclose(csv);
 
     FILE *cal_csv = fopen(rs->cal_csv_path, "w");
-    if (!cal_csv) {
-        return ESP_FAIL;
-    }
+    if (!cal_csv) return ESP_FAIL;
     fputs(header, cal_csv);
     fclose(cal_csv);
 
     FILE *cal_txt = fopen(rs->cal_offset_path, "w");
-    if (!cal_txt) {
-        return ESP_FAIL;
-    }
+    if (!cal_txt) return ESP_FAIL;
     fprintf(cal_txt, "node_id=%s\n", node_id);
     fprintf(cal_txt, "sample_rate_hz=%d\n", SDACS_SAMPLE_RATE_HZ);
     fprintf(cal_txt, "record_seconds=%d\n", SDACS_RECORD_SECONDS);
@@ -263,7 +264,7 @@ bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t co
         return false;
     }
 
-    return append_file(rs->raw_path, samples, count * sizeof(int32_t));
+    return sd_write_raw(rs->raw_path, 0, samples, count * sizeof(int32_t));
 }
 
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)

@@ -26,7 +26,7 @@ static const char *TAG = "WIFI_MQTT";
 
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
-static const int WIFI_MAX_RETRY = 10;
+static const int WIFI_MAX_RETRY = 3;  // Reduced from 10 to fail faster
 
 static QueueHandle_t s_feat_q = NULL;
 static esp_mqtt_client_handle_t s_mqtt = NULL;

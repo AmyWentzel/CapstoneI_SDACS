@@ -1,5 +1,6 @@
 #include "capture_task.h"
 
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,13 +60,16 @@ static void capture_task_run(void *arg)
     static uint8_t payload[sizeof(sdacs_audio_hdr_t) + (SDACS_AUDIO_CHUNK_SAMPLES * sizeof(int32_t))];
     size_t chunk_fill = 0;
 
-    ESP_LOGI(TAG, "Waiting for WiFi+MQTT before streaming...");
+    // Try WiFi/MQTT with a short timeout; if unavailable, record locally only
+    ESP_LOGI(TAG, "Checking WiFi+MQTT availability (timeout=%dms)...", SDACS_WIFI_TIME_SYNC_WAIT_MS);
     esp_err_t werr = wifi_mqtt_wait_connected(SDACS_WIFI_TIME_SYNC_WAIT_MS);
-    if (werr != ESP_OK) {
-        ESP_LOGW(TAG, "MQTT not ready (%s). Continuing with local SD logging.", esp_err_to_name(werr));
-    } else {
-        ESP_LOGI(TAG, "WiFi+MQTT ready. Starting stream + SD logging.");
+    bool mqtt_available = (werr == ESP_OK);
+    
+    if (mqtt_available) {
+        ESP_LOGI(TAG, "WiFi+MQTT ready. Streaming + SD logging.");
         (void)temp_humidity_publish_latest_once("start");
+    } else {
+        ESP_LOGI(TAG, "WiFi+MQTT unavailable (%s). Recording to SD only.", esp_err_to_name(werr));
     }
 
     while (esp_timer_get_time() < end_us) {
@@ -86,9 +90,7 @@ static void capture_task_run(void *arg)
             continue;
         }
 
-        fft_metrics_push_samples(read_buf, samples_read);
-        fft_metrics_accumulate_block(read_buf, samples_read);
-
+        // Record audio to SD only - no processing during recording
         for (size_t i = 0; i < samples_read; ++i) {
             chunk[chunk_fill++] = read_buf[i];
             if (chunk_fill >= SDACS_AUDIO_CHUNK_SAMPLES) {
@@ -104,70 +106,34 @@ static void capture_task_run(void *arg)
         // Removed real-time metrics calculation - will be done after recording
     }
 
-    // Post-recording audio streaming: read from SD card and send over MQTT
-    ESP_LOGI(TAG, "Starting post-recording audio streaming...");
-    
-    FILE *raw_file = fopen(state->ctx.storage->raw_path, "rb");
-    if (!raw_file) {
-        ESP_LOGE(TAG, "Failed to open raw file for streaming: %s", state->ctx.storage->raw_path);
-    } else {
-        fseek(raw_file, 0, SEEK_END);
-        long raw_size_l = ftell(raw_file);
-        fseek(raw_file, 0, SEEK_SET);
-        
-        if (raw_size_l > 0) {
-            size_t total_samples = (size_t)raw_size_l / sizeof(int32_t);
-            size_t samples_streamed = 0;
-            uint32_t chunk_seq = 0;
-            
-            ESP_LOGI(TAG, "Streaming %zu samples in %d-sample chunks", total_samples, SDACS_AUDIO_CHUNK_SAMPLES);
-            
-            while (samples_streamed < total_samples) {
-                size_t samples_to_read = SDACS_AUDIO_CHUNK_SAMPLES;
-                if (samples_streamed + samples_to_read > total_samples) {
-                    samples_to_read = total_samples - samples_streamed;
-                }
-                
-                size_t rd = fread(chunk, sizeof(int32_t), samples_to_read, raw_file);
-                if (rd == 0) {
-                    break;
-                }
-                
-                // Send chunk over MQTT
-                hdr.n = (uint32_t)rd;
-                hdr.t_us = (uint64_t)esp_timer_get_time();
-                hdr.seq = chunk_seq;
-                memcpy(payload, &hdr, sizeof(hdr));
-                memcpy(payload + sizeof(hdr), chunk, rd * sizeof(int32_t));
-                
-                esp_err_t err = wifi_mqtt_publish_raw(
-                    state->audio_topic,
-                    payload,
-                    sizeof(hdr) + (rd * sizeof(int32_t)),
-                    0,
-                    0
-                );
-                if (err != ESP_OK && (chunk_seq % 20u == 0u)) {
-                    ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(err));
-                }
-                
-                samples_streamed += rd;
-                chunk_seq++;
-                
-                // Small delay to avoid overwhelming MQTT
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-            
-            ESP_LOGI(TAG, "Audio streaming complete: %u chunks sent", chunk_seq);
-        }
-        
-        fclose(raw_file);
-    }
+    audio_input_deinit();
+    temp_humidity_stop();
+    (void)run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
+    run_storage_refresh_timestamps(state->ctx.storage);
 
-    // Post-recording analysis: compute FFT, SPL, and other metrics
-    ESP_LOGI(TAG, "Starting post-recording analysis...");
+    ESP_LOGI(TAG, "PHASE 1 COMPLETE: Recording done. %.2f s recorded to SD",
+             (float)(esp_timer_get_time() - start_us) / 1000000.0f);
+
+    // === PHASE 2: Analysis (read SD, compute metrics) ===
+    ESP_LOGI(TAG, "PHASE 2: Starting post-recording analysis...");
     
     audio_metrics_t final_metrics = {0};
+    
+    // Read the recorded audio file and compute metrics
+    FILE *analysis_file = fopen(state->ctx.storage->raw_path, "rb");
+    if (analysis_file) {
+        int32_t sample_buf[512];
+        size_t n;
+        while ((n = fread(sample_buf, sizeof(int32_t), 512, analysis_file)) > 0) {
+            fft_metrics_push_samples(sample_buf, n);
+            fft_metrics_accumulate_block(sample_buf, n);
+        }
+        fclose(analysis_file);
+        ESP_LOGI(TAG, "Audio analysis complete");
+    } else {
+        ESP_LOGE(TAG, "Failed to open raw file for analysis");
+    }
+
     if (fft_metrics_compute_and_reset(&final_metrics, state->ctx.cal_offset_db)) {
         temp_humidity_reading_t th = {0};
         float temp_c = NAN;
@@ -177,7 +143,7 @@ static void capture_task_run(void *arg)
             humidity = th.rh_percent;
         }
 
-        // Store final metrics record
+        // Store final metrics record to CSV
         metrics_record_t record = {0};
         time_sync_get_iso8601(record.timestamp, sizeof(record.timestamp));
         strncpy(record.node_id, state->ctx.node_id, sizeof(record.node_id) - 1);
@@ -190,59 +156,93 @@ static void capture_task_run(void *arg)
         record.fft_peak_hz = final_metrics.fft_peak_hz;
         (void)run_storage_append_metrics(state->ctx.storage, &record);
 
-        // Send final features via MQTT
-        sdacs_features_t feat = {0};
-        strncpy(feat.node_id, state->ctx.node_id, sizeof(feat.node_id) - 1);
-        feat.seq = 0;  // Final analysis
-        feat.t_us = (uint64_t)esp_timer_get_time();
-        feat.n = final_metrics.sample_count;
-        feat.rms = final_metrics.rms_norm;
-        feat.dbfs = final_metrics.dbfs;
-        feat.db_spl = final_metrics.laeq_db;
-        feat.f_peak_hz = final_metrics.fft_peak_hz;
-        feat.p2p_raw = final_metrics.peak_abs * 2;
-        feat.zeros = 0;
+        ESP_LOGI(TAG, "PHASE 2 COMPLETE: Analysis Results - LAeq=%.2f dB, Peak=%.2f dB, FFT Peak=%.1f Hz",
+                 final_metrics.laeq_db, final_metrics.peak_db, final_metrics.fft_peak_hz);
 
-        if (wifi_mqtt_try_send(&feat)) {
-            ESP_LOGI(TAG, "Final analysis sent: LAeq=%.2f dB, Peak=%.2f dB, FFT Peak=%.1f Hz",
-                     final_metrics.laeq_db, final_metrics.peak_db, final_metrics.fft_peak_hz);
-        } else {
-            ESP_LOGW(TAG, "Failed to send final analysis");
+        // Send metrics summary via MQTT if available
+        if (mqtt_available) {
+            sdacs_features_t feat = {0};
+            strncpy(feat.node_id, state->ctx.node_id, sizeof(feat.node_id) - 1);
+            feat.seq = 0;
+            feat.t_us = (uint64_t)esp_timer_get_time();
+            feat.n = final_metrics.sample_count;
+            feat.rms = final_metrics.rms_norm;
+            feat.dbfs = final_metrics.dbfs;
+            feat.db_spl = final_metrics.laeq_db;
+            feat.f_peak_hz = final_metrics.fft_peak_hz;
+            feat.p2p_raw = final_metrics.peak_abs * 2;
+            feat.zeros = 0;
+
+            if (wifi_mqtt_try_send(&feat)) {
+                ESP_LOGI(TAG, "Metrics summary sent via MQTT");
+            }
         }
     } else {
-        ESP_LOGW(TAG, "No audio data collected for analysis");
+        ESP_LOGW(TAG, "Failed to compute metrics");
     }
 
-    if (chunk_fill > 0) {
-        if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
-            ESP_LOGW(TAG, "Failed final SD append");
+    // === PHASE 3: Streaming (send audio to MQTT if available) ===
+    if (mqtt_available) {
+        ESP_LOGI(TAG, "PHASE 3: Starting post-recording audio streaming...");
+        
+        FILE *stream_file = fopen(state->ctx.storage->raw_path, "rb");
+        if (!stream_file) {
+            ESP_LOGE(TAG, "Failed to open raw file for streaming");
+        } else {
+            fseek(stream_file, 0, SEEK_END);
+            long raw_size_l = ftell(stream_file);
+            fseek(stream_file, 0, SEEK_SET);
+            
+            if (raw_size_l > 0) {
+                size_t total_samples = (size_t)raw_size_l / sizeof(int32_t);
+                size_t samples_streamed = 0;
+                uint32_t chunk_seq = 0;
+                
+                ESP_LOGI(TAG, "Streaming %zu samples in %d-sample chunks", total_samples, SDACS_AUDIO_CHUNK_SAMPLES);
+                
+                while (samples_streamed < total_samples) {
+                    size_t samples_to_read = SDACS_AUDIO_CHUNK_SAMPLES;
+                    if (samples_streamed + samples_to_read > total_samples) {
+                        samples_to_read = total_samples - samples_streamed;
+                    }
+                    
+                    size_t rd = fread(chunk, sizeof(int32_t), samples_to_read, stream_file);
+                    if (rd == 0) {
+                        break;
+                    }
+                    
+                    // Send chunk over MQTT
+                    hdr.n = (uint32_t)rd;
+                    hdr.t_us = (uint64_t)esp_timer_get_time();
+                    hdr.seq = chunk_seq;
+                    memcpy(payload, &hdr, sizeof(hdr));
+                    memcpy(payload + sizeof(hdr), chunk, rd * sizeof(int32_t));
+                    
+                    esp_err_t err = wifi_mqtt_publish_raw(
+                        state->audio_topic,
+                        payload,
+                        sizeof(hdr) + (rd * sizeof(int32_t)),
+                        0,
+                        0
+                    );
+                    if (err != ESP_OK && (chunk_seq % 20u == 0u)) {
+                        ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(err));
+                    }
+                    
+                    samples_streamed += rd;
+                    chunk_seq++;
+                    
+                    // Small delay to avoid overwhelming MQTT
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+                
+                ESP_LOGI(TAG, "PHASE 3 COMPLETE: Audio streaming done - %" PRIu32 " chunks sent", chunk_seq);
+            }
+            
+            fclose(stream_file);
         }
-
-        hdr.n = (uint32_t)chunk_fill;
-        hdr.t_us = (uint64_t)esp_timer_get_time();
-        memcpy(payload, &hdr, sizeof(hdr));
-        memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));
-        (void)wifi_mqtt_publish_raw(
-            state->audio_topic,
-            payload,
-            sizeof(hdr) + (chunk_fill * sizeof(int32_t)),
-            0,
-            0
-        );
-        hdr.seq++;
-    }
-
-    audio_input_deinit();
-    temp_humidity_stop();
-    (void)run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
-    run_storage_refresh_timestamps(state->ctx.storage);
-
-    ESP_LOGI(TAG, "Recording complete: %.2f s, chunk_msgs=%u",
-             (float)(esp_timer_get_time() - start_us) / 1000000.0f,
-             (unsigned)hdr.seq);
-
-    if (wifi_mqtt_is_connected()) {
-        (void)temp_humidity_publish_latest_once("end");
+    } else {
+        ESP_LOGI(TAG, "PHASE 3 SKIPPED: MQTT unavailable");
     }
 
     run_storage_verify(state->ctx.storage);
