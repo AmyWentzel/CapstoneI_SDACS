@@ -1,4 +1,4 @@
-#include "run_storage.h"
+    #include "run_storage.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -12,6 +12,8 @@
 
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_rom_crc.h"
 #include "esp_timer.h"
@@ -54,31 +56,32 @@ static void refresh_path_timestamp(const char *path, time_t now)
     }
 }
 
-/*
- * Write raw bytes to a file on the SD card at a given byte offset.
- * The file is created if it does not exist.  Returns true on success.
- */
-static bool sd_write_raw(const char *path, uint32_t addr, const void *buf, size_t len)
+static bool sd_append_raw(const char *path, const void *buf, size_t len)
 {
-    char fullpath[64];
-    snprintf(fullpath, sizeof(fullpath), "%s/%s", SDACS_SD_MOUNT_POINT, path);
-    FILE *f = fopen(fullpath, "r+b");
-    if (!f) {
-        /* create file if it doesn't exist */
-        f = fopen(fullpath, "w+b");
-        if (!f) {
-            ESP_LOGE(TAG, "Failed to open %s", fullpath);
-            return false;
-        }
+    char fullpath[256];
+    if (path[0] == '/') {
+        snprintf(fullpath, sizeof(fullpath), "%s", path);
+    } else {
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", SDACS_SD_MOUNT_POINT, path);
     }
-    if (fseek(f, addr, SEEK_SET) != 0) {
-        ESP_LOGE(TAG, "fseek failed");
-        fclose(f);
+
+    FILE *f = fopen(fullpath, "ab");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open %s (errno=%d: %s)",
+                 fullpath, errno, strerror(errno));
         return false;
     }
+
     size_t written = fwrite(buf, 1, len, f);
+    fflush(f);
+    fsync(fileno(f));
     fclose(f);
-    return (written == len);
+    if (written != len) {
+        ESP_LOGE(TAG, "Short raw write to %s (%u/%u bytes)",
+                 fullpath, (unsigned)written, (unsigned)len);
+        return false;
+    }
+    return true;
 }
 
 static void log_file_stat(const char *path)
@@ -162,13 +165,24 @@ esp_err_t run_storage_init(run_storage_t *rs)
         .allocation_unit_size = 16 * 1024,
     };
 
-    ret = esp_vfs_fat_sdspi_mount(
-        SDACS_SD_MOUNT_POINT,
-        &host,
-        &slot_config,
-        &mount_config,
-        &rs->card
-    );
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        ret = esp_vfs_fat_sdspi_mount(
+            SDACS_SD_MOUNT_POINT,
+            &host,
+            &slot_config,
+            &mount_config,
+            &rs->card
+        );
+        if (ret == ESP_OK) {
+            break;
+        }
+
+        ESP_LOGW(TAG, "SD mount attempt %d/5 failed: %s", attempt, esp_err_to_name(ret));
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to mount SD card: %s", esp_err_to_name(ret));
         spi_bus_free(host.slot);
@@ -192,23 +206,34 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     if (time_sync_is_valid()) {
         struct tm timeinfo;
         localtime_r(&now, &timeinfo);
-        strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &timeinfo);
+        strftime(ts, sizeof(ts), "%Y%m%d", &timeinfo);
     } else {
         int64_t boot_ms = esp_timer_get_time() / 1000;
         snprintf(ts, sizeof(ts), "boot_%lld", (long long)boot_ms);
     }
 
-    // Build run directory name: <node_id>_<timestamp>
-    snprintf(rs->run_dir, sizeof(rs->run_dir),
-             "%s/%s_%s",
-             SDACS_SD_MOUNT_POINT, node_id, ts);
+    bool created = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        snprintf(rs->run_dir, sizeof(rs->run_dir),
+                 "%s/%s_%s_%02d",
+                 SDACS_SD_MOUNT_POINT, node_id, ts, attempt);
 
-    // Create directory
-    if (mkdir(rs->run_dir, 0777) != 0) {
-        if (errno != EEXIST) {
-            ESP_LOGE(TAG, "Failed to create run directory %s", rs->run_dir);
-            return ESP_FAIL;
+        if (mkdir(rs->run_dir, 0777) == 0) {
+            created = true;
+            break;
         }
+
+        if (errno == EEXIST) {
+            continue;
+        }
+
+        ESP_LOGW(TAG, "Failed to create run directory %s (errno=%d: %s)",
+                 rs->run_dir, errno, strerror(errno));
+    }
+
+    if (!created) {
+        ESP_LOGE(TAG, "Could not create a unique run directory under %s", SDACS_SD_MOUNT_POINT);
+        return ESP_FAIL;
     }
 
     // Build file paths inside run directory
@@ -264,7 +289,7 @@ bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t co
         return false;
     }
 
-    return sd_write_raw(rs->raw_path, 0, samples, count * sizeof(int32_t));
+    return sd_append_raw(rs->raw_path, samples, count * sizeof(int32_t));
 }
 
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
@@ -320,11 +345,14 @@ esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate
     FILE *wav_file = fopen(rs->wav_path, "wb");
     if (!wav_file) {
         fclose(raw_file);
-        ESP_LOGE(TAG, "Failed to create WAV file %s", rs->wav_path);
+        ESP_LOGE(TAG, "Failed to create WAV file %s (errno=%d: %s)",
+                 rs->wav_path, errno, strerror(errno));
         return ESP_FAIL;
     }
 
     size_t num_samples = (size_t)raw_size_l / sizeof(int32_t);
+    ESP_LOGI(TAG, "Converting raw to WAV: %ld raw bytes, %u samples",
+             raw_size_l, (unsigned)num_samples);
     wav_header_t header = {0};
     memcpy(header.riff, "RIFF", 4);
     memcpy(header.wave, "WAVE", 4);
@@ -341,7 +369,7 @@ esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate
     header.data_size = (uint32_t)(num_samples * 3);
     fwrite(&header, sizeof(header), 1, wav_file);
 
-    int32_t chunk_buf[SDACS_WAV_CHUNK_SIZE];
+    static int32_t chunk_buf[SDACS_WAV_CHUNK_SIZE];
     size_t samples_left = num_samples;
     while (samples_left > 0) {
         size_t to_read = (samples_left > SDACS_WAV_CHUNK_SIZE) ? SDACS_WAV_CHUNK_SIZE : samples_left;

@@ -22,10 +22,10 @@ static audio_input_t s_audio = {0};
 static inline int32_t i2s_word_to_s24(int32_t word)
 {
     int32_t sample = (int32_t)((uint32_t)word >> 8);
-    if (sample & 0x00800000) {
-        sample |= ~0x00FFFFFF;
+    if (sample & 0x00400000) {
+        sample |= ~0x007FFFFF;
     }
-    return sample;
+    return sample << 1;
 }
 
 esp_err_t audio_input_init(void)

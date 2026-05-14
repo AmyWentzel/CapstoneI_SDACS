@@ -14,7 +14,7 @@
 
 #include "driver/i2c.h"
 #include "config_store.h"
-#include "wifi_mqtt.h"
+#include "mqtt_publish.h"
 
 static const char *TAG = "temp_humidity";
 
@@ -308,7 +308,7 @@ bool temp_humidity_publish_latest_once(const char *phase)
         return false;
     }
 
-    esp_err_t perr = wifi_mqtt_publish_raw(g_ctx.topic, payload, (size_t)len, 0, 0);
+    esp_err_t perr = mqtt_publish_raw(g_ctx.topic, payload, (size_t)len, 0, 0);
     if (perr != ESP_OK) {
         ESP_LOGW(TAG, "Temp/humidity %s publish failed: %s", phase, esp_err_to_name(perr));
         return false;

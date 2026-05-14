@@ -8,7 +8,7 @@
 #include "esp_netif_sntp.h"
 
 #include "sdacs_config.h"
-#include "wifi_mqtt.h"
+#include "wifi_station.h"
 
 static const char *TAG = "time_sync";
 
@@ -51,7 +51,7 @@ void time_sync_try_sntp(uint32_t wait_ms)
     }
 
     ESP_LOGI(TAG, "Waiting for WiFi before SNTP time sync...");
-    esp_err_t err = wifi_mqtt_wait_wifi(wait_ms);
+    esp_err_t err = sdacs_wifi_station_wait_connected(wait_ms);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "WiFi not ready for SNTP sync: %s", esp_err_to_name(err));
         return;

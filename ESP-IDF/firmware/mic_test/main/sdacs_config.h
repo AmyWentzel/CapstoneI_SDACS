@@ -7,11 +7,11 @@
 #endif
 
 #ifndef SDACS_SECRET_WIFI_SSID
-#define SDACS_SECRET_WIFI_SSID        ""
+#define SDACS_SECRET_WIFI_SSID        "ElevatorNetwork24Router"
 #endif
 
 #ifndef SDACS_SECRET_WIFI_PASS
-#define SDACS_SECRET_WIFI_PASS        ""
+#define SDACS_SECRET_WIFI_PASS        "helloworld"
 #endif
 
 #ifndef SDACS_SECRET_MQTT_URI

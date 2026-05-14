@@ -1,4 +1,5 @@
 #include "esp_log.h"
+#include "esp_err.h"
 
 #include "audio_input.h"
 #include "capture_task.h"
@@ -8,8 +9,6 @@
 #include "run_storage.h"
 #include "sdacs_config.h"
 #include "temp_humidity.h"
-#include "time_sync.h"
-#include "wifi_mqtt.h"
 
 static const char *TAG = "app_main";
 static run_storage_t s_storage = {0};
@@ -21,8 +20,6 @@ void app_main(void)
 
     ESP_ERROR_CHECK(config_store_init());
     ESP_ERROR_CHECK(network_provisioning_apply_defaults());
-    ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
-    time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
 
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
     ESP_ERROR_CHECK(run_storage_create_session(&s_storage, SDACS_NODE_ID));
@@ -53,5 +50,5 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(capture_task_start(&ctx));
-    ESP_LOGI(TAG, "Capture started (%d s): MQTT stream + SD logging", SDACS_RECORD_SECONDS);
+    ESP_LOGI(TAG, "Capture started (%d s): local record, analyze, then post-file MQTT", SDACS_RECORD_SECONDS);
 }
