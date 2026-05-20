@@ -45,7 +45,7 @@
 #define SDACS_FFT_SIZE                   1024
 #define SDACS_CAL_OFFSET_DB              94.0f
 #define SDACS_I2S_READ_TIMEOUT_MS        100
-#define SDACS_WAV_CHUNK_SIZE             1024
+#define SDACS_RAW_CHUNK_SIZE             1024
 
 #define SDACS_VALID_UNIX_TIME_EPOCH      1700000000
 #define SDACS_WIFI_TIME_SYNC_WAIT_MS     15000

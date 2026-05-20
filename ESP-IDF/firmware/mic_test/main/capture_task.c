@@ -29,7 +29,7 @@ typedef struct {
 
 static const char *TAG = "capture_task";
 
-static int32_t wav_s24_to_i32(const uint8_t bytes[3])
+static int32_t raw_s24_to_i32(const uint8_t bytes[3])
 {
     int32_t sample = (int32_t)bytes[0] |
                      ((int32_t)bytes[1] << 8) |
@@ -40,36 +40,36 @@ static int32_t wav_s24_to_i32(const uint8_t bytes[3])
     return sample;
 }
 
-static bool analyze_wav_file(const char *path)
+static bool analyze_raw_file(const char *path)
 {
-    static uint8_t wav_bytes[SDACS_WAV_CHUNK_SIZE * 3];
-    static int32_t sample_buf[SDACS_WAV_CHUNK_SIZE];
+    static uint8_t raw_bytes[SDACS_RAW_CHUNK_SIZE * 3];
+    static int32_t sample_buf[SDACS_RAW_CHUNK_SIZE];
     FILE *f = fopen(path, "rb");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open WAV file for analysis: %s", path);
+        ESP_LOGE(TAG, "Failed to open RAW file for analysis: %s", path);
         return false;
     }
 
     if (fseek(f, 44, SEEK_SET) != 0) {
         fclose(f);
-        ESP_LOGE(TAG, "Failed to seek past WAV header: %s", path);
+        ESP_LOGE(TAG, "Failed to seek past RAW header: %s", path);
         return false;
     }
 
     while (1) {
-        size_t bytes_read = fread(wav_bytes, 1, sizeof(wav_bytes), f);
+        size_t bytes_read = fread(raw_bytes, 1, sizeof(raw_bytes), f);
         if (bytes_read == 0) {
             break;
         }
 
         size_t samples_read = bytes_read / 3;
         for (size_t i = 0; i < samples_read; ++i) {
-            sample_buf[i] = wav_s24_to_i32(&wav_bytes[i * 3]);
+            sample_buf[i] = raw_s24_to_i32(&raw_bytes[i * 3]);
         }
         fft_metrics_push_samples(sample_buf, samples_read);
         fft_metrics_accumulate_block(sample_buf, samples_read);
 
-        if (bytes_read < sizeof(wav_bytes)) {
+        if (bytes_read < sizeof(raw_bytes)) {
             break;
         }
     }
@@ -78,37 +78,6 @@ static bool analyze_wav_file(const char *path)
     return true;
 }
 
-static void stream_file_to_mqtt(const char *topic, const char *path)
-{
-    static uint8_t payload[2048];
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        ESP_LOGE(TAG, "Failed to open file for MQTT streaming: %s", path);
-        return;
-    }
-
-    uint32_t chunk_seq = 0;
-    size_t total_bytes = 0;
-    while (1) {
-        size_t rd = fread(payload, 1, sizeof(payload), f);
-        if (rd == 0) {
-            break;
-        }
-
-        esp_err_t err = mqtt_publish_raw(topic, payload, rd, 0, 0);
-        if (err != ESP_OK && (chunk_seq % 20u == 0u)) {
-            ESP_LOGW(TAG, "File stream chunk dropped: %s", esp_err_to_name(err));
-        }
-
-        total_bytes += rd;
-        chunk_seq++;
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    fclose(f);
-    ESP_LOGI(TAG, "Streamed %u bytes from %s to %s",
-             (unsigned)total_bytes, path, topic);
-}
 
 static void capture_task_run(void *arg)
 {
@@ -190,27 +159,19 @@ static void capture_task_run(void *arg)
         humidity = th.rh_percent;
     }
     temp_humidity_stop();
-    ESP_LOGI(TAG, "Recording complete; converting raw audio to WAV...");
-    int64_t wav_start_us = esp_timer_get_time();
-    esp_err_t wav_err = run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
-    int64_t wav_end_us = esp_timer_get_time();
-    if (wav_err != ESP_OK) {
-        ESP_LOGE(TAG, "WAV conversion failed: %s", esp_err_to_name(wav_err));
-    } else {
-        ESP_LOGI(TAG, "WAV conversion complete in %.2f s",
-                 (float)(wav_end_us - wav_start_us) / 1000000.0f);
-    }
+    ESP_LOGI(TAG, "Recording complete.");
+
     run_storage_refresh_timestamps(state->ctx.storage);
 
     ESP_LOGI(TAG, "PHASE 1 COMPLETE: Recording done. %.2f s recorded to SD",
              (float)(recording_end_us - start_us) / 1000000.0f);
 
     // === PHASE 2: Analysis (read SD, compute metrics) ===
-    ESP_LOGI(TAG, "PHASE 2: Reading WAV and computing post-recording metrics...");
+    ESP_LOGI(TAG, "PHASE 2: Reading RAW and computing post-recording metrics...");
     
     audio_metrics_t final_metrics = {0};
     
-    if (analyze_wav_file(state->ctx.storage->wav_path)) {
+    if (analyze_raw_file(state->ctx.storage->raw_path)) {
         ESP_LOGI(TAG, "Audio analysis complete");
     } else {
         ESP_LOGE(TAG, "Audio analysis failed");
@@ -280,7 +241,7 @@ static void capture_task_run(void *arg)
             }
         }
 
-        stream_file_to_mqtt(state->audio_topic, state->ctx.storage->wav_path);
+
         ESP_LOGI(TAG, "PHASE 3 COMPLETE: Post-file MQTT streaming done");
     } else {
         ESP_LOGI(TAG, "PHASE 3 SKIPPED: MQTT unavailable (%s)", esp_err_to_name(werr));

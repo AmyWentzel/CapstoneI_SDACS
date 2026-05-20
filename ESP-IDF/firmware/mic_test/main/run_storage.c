@@ -22,21 +22,6 @@
 #include "sdacs_config.h"
 #include "time_sync.h"
 
-typedef struct __attribute__((packed)) {
-    char riff[4];
-    uint32_t file_size;
-    char wave[4];
-    char fmt[4];
-    uint32_t fmt_size;
-    uint16_t format;
-    uint16_t channels;
-    uint32_t sample_rate;
-    uint32_t byte_rate;
-    uint16_t block_align;
-    uint16_t bits_per_sample;
-    char data[4];
-    uint32_t data_size;
-} wav_header_t;
 
 static const char *TAG = "run_storage";
 
@@ -263,9 +248,6 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     snprintf(rs->raw_path, sizeof(rs->raw_path),
              "%s/audio.raw", rs->run_dir);
 
-    snprintf(rs->wav_path, sizeof(rs->wav_path),
-             "%s/audio.wav", rs->run_dir);
-
     snprintf(rs->csv_path, sizeof(rs->csv_path),
              "%s/metrics.csv", rs->run_dir);
 
@@ -395,80 +377,6 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
     return true;
 }
 
-esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate_hz)
-{
-    if (!rs) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    FILE *raw_file = fopen(rs->raw_path, "rb");
-    if (!raw_file) {
-        ESP_LOGE(TAG, "Failed to open raw file %s", rs->raw_path);
-        return ESP_FAIL;
-    }
-
-    fseek(raw_file, 0, SEEK_END);
-    long raw_size_l = ftell(raw_file);
-    fseek(raw_file, 0, SEEK_SET);
-    if (raw_size_l <= 0) {
-        fclose(raw_file);
-        ESP_LOGE(TAG, "Raw file is empty");
-        return ESP_FAIL;
-    }
-
-    FILE *wav_file = fopen(rs->wav_path, "wb");
-    if (!wav_file) {
-        fclose(raw_file);
-        ESP_LOGE(TAG, "Failed to create WAV file %s (errno=%d: %s)",
-                 rs->wav_path, errno, strerror(errno));
-        return ESP_FAIL;
-    }
-
-    size_t num_samples = (size_t)raw_size_l / sizeof(int32_t);
-    ESP_LOGI(TAG, "Converting raw to WAV: %ld raw bytes, %u samples",
-             raw_size_l, (unsigned)num_samples);
-    wav_header_t header = {0};
-    memcpy(header.riff, "RIFF", 4);
-    memcpy(header.wave, "WAVE", 4);
-    memcpy(header.fmt, "fmt ", 4);
-    memcpy(header.data, "data", 4);
-    header.file_size = 36 + (uint32_t)(num_samples * 3);
-    header.fmt_size = 16;
-    header.format = 1;
-    header.channels = 1;
-    header.sample_rate = sample_rate_hz;
-    header.byte_rate = sample_rate_hz * 3;
-    header.block_align = 3;
-    header.bits_per_sample = 24;
-    header.data_size = (uint32_t)(num_samples * 3);
-    fwrite(&header, sizeof(header), 1, wav_file);
-
-    static int32_t chunk_buf[SDACS_WAV_CHUNK_SIZE];
-    size_t samples_left = num_samples;
-    while (samples_left > 0) {
-        size_t to_read = (samples_left > SDACS_WAV_CHUNK_SIZE) ? SDACS_WAV_CHUNK_SIZE : samples_left;
-        size_t rd = fread(chunk_buf, sizeof(int32_t), to_read, raw_file);
-        if (rd == 0) {
-            break;
-        }
-        for (size_t i = 0; i < rd; ++i) {
-            uint8_t bytes[3] = {
-                (uint8_t)(chunk_buf[i] & 0xFF),
-                (uint8_t)((chunk_buf[i] >> 8) & 0xFF),
-                (uint8_t)((chunk_buf[i] >> 16) & 0xFF),
-            };
-            fwrite(bytes, 1, sizeof(bytes), wav_file);
-        }
-        samples_left -= rd;
-    }
-
-    fclose(raw_file);
-    fflush(wav_file);
-    fsync(fileno(wav_file));
-    fclose(wav_file);
-    ESP_LOGI(TAG, "WAV file created: %s", rs->wav_path);
-    return ESP_OK;
-}
 
 void run_storage_refresh_timestamps(run_storage_t *rs)
 {
@@ -485,7 +393,6 @@ void run_storage_refresh_timestamps(run_storage_t *rs)
     refresh_path_timestamp(rs->csv_path, now);
     refresh_path_timestamp(rs->cal_csv_path, now);
     refresh_path_timestamp(rs->cal_offset_path, now);
-    refresh_path_timestamp(rs->wav_path, now);
     refresh_path_timestamp(rs->run_dir, now);
 }
 
@@ -499,9 +406,7 @@ void run_storage_verify(run_storage_t *rs)
     log_file_stat(rs->csv_path);
     log_file_stat(rs->cal_csv_path);
     log_file_stat(rs->cal_offset_path);
-    log_file_stat(rs->wav_path);
     log_dir_listing(rs->run_dir);
     log_file_crc32(rs->raw_path);
     log_file_crc32(rs->csv_path);
-    log_file_crc32(rs->wav_path);
 }
