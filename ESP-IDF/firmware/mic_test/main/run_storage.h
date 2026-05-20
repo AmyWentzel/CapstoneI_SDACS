@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "esp_err.h"
 #include "sdmmc_cmd.h"
@@ -21,6 +22,7 @@ typedef struct {
 
 typedef struct {
     sdmmc_card_t *card;
+    FILE *raw_file;
     char run_dir[160];
     char raw_path[256];
     char wav_path[256];
@@ -31,7 +33,9 @@ typedef struct {
 
 esp_err_t run_storage_init(run_storage_t *rs);
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id);
+bool run_storage_begin_raw(run_storage_t *rs);
 bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t count);
+bool run_storage_end_raw(run_storage_t *rs);
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec);
 esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate_hz);
 void run_storage_refresh_timestamps(run_storage_t *rs);

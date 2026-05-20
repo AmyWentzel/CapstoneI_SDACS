@@ -1,4 +1,4 @@
-    #include "run_storage.h"
+#include "run_storage.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -56,13 +56,25 @@ static void refresh_path_timestamp(const char *path, time_t now)
     }
 }
 
+static bool make_full_path(const char *path, char *fullpath, size_t fullpath_len)
+{
+    if (!path || !fullpath || fullpath_len == 0) {
+        return false;
+    }
+
+    if (path[0] == '/') {
+        snprintf(fullpath, fullpath_len, "%s", path);
+    } else {
+        snprintf(fullpath, fullpath_len, "%s/%s", SDACS_SD_MOUNT_POINT, path);
+    }
+    return true;
+}
+
 static bool sd_append_raw(const char *path, const void *buf, size_t len)
 {
     char fullpath[256];
-    if (path[0] == '/') {
-        snprintf(fullpath, sizeof(fullpath), "%s", path);
-    } else {
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", SDACS_SD_MOUNT_POINT, path);
+    if (!make_full_path(path, fullpath, sizeof(fullpath))) {
+        return false;
     }
 
     FILE *f = fopen(fullpath, "ab");
@@ -79,6 +91,17 @@ static bool sd_append_raw(const char *path, const void *buf, size_t len)
     if (written != len) {
         ESP_LOGE(TAG, "Short raw write to %s (%u/%u bytes)",
                  fullpath, (unsigned)written, (unsigned)len);
+        return false;
+    }
+    return true;
+}
+
+static bool sd_write_raw(FILE *f, const void *buf, size_t len)
+{
+    size_t written = fwrite(buf, 1, len, f);
+    if (written != len) {
+        ESP_LOGE(TAG, "Short raw write (%u/%u bytes)",
+                 (unsigned)written, (unsigned)len);
         return false;
     }
     return true;
@@ -283,13 +306,64 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     return ESP_OK;
 }
 
+bool run_storage_begin_raw(run_storage_t *rs)
+{
+    if (!rs) {
+        return false;
+    }
+    if (rs->raw_file) {
+        return true;
+    }
+
+    char fullpath[256];
+    if (!make_full_path(rs->raw_path, fullpath, sizeof(fullpath))) {
+        return false;
+    }
+
+    rs->raw_file = fopen(fullpath, "wb");
+    if (!rs->raw_file) {
+        ESP_LOGE(TAG, "Failed to open %s (errno=%d: %s)",
+                 fullpath, errno, strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
 bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t count)
 {
     if (!rs || !samples || count == 0) {
         return false;
     }
 
+    if (rs->raw_file) {
+        return sd_write_raw(rs->raw_file, samples, count * sizeof(int32_t));
+    }
+
     return sd_append_raw(rs->raw_path, samples, count * sizeof(int32_t));
+}
+
+bool run_storage_end_raw(run_storage_t *rs)
+{
+    bool ok = true;
+    if (!rs || !rs->raw_file) {
+        return true;
+    }
+
+    if (fflush(rs->raw_file) != 0) {
+        ESP_LOGE(TAG, "Failed to flush raw file (errno=%d: %s)", errno, strerror(errno));
+        ok = false;
+    }
+    if (fsync(fileno(rs->raw_file)) != 0) {
+        ESP_LOGE(TAG, "Failed to sync raw file (errno=%d: %s)", errno, strerror(errno));
+        ok = false;
+    }
+    if (fclose(rs->raw_file) != 0) {
+        ESP_LOGE(TAG, "Failed to close raw file (errno=%d: %s)", errno, strerror(errno));
+        ok = false;
+    }
+    rs->raw_file = NULL;
+    return ok;
 }
 
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)

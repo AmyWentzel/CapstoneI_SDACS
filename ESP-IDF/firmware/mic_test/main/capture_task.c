@@ -126,6 +126,15 @@ static void capture_task_run(void *arg)
 
     ESP_LOGI(TAG, "PHASE 1: Recording audio + temp/humidity locally for %" PRIu32 " s",
              state->ctx.record_seconds);
+    if (!run_storage_begin_raw(state->ctx.storage)) {
+        ESP_LOGE(TAG, "Failed to open raw audio file for recording");
+        audio_input_deinit();
+        temp_humidity_stop();
+        free(state);
+        vTaskDelete(NULL);
+        return;
+    }
+
     start_us = esp_timer_get_time();
     end_us = start_us + ((int64_t)state->ctx.record_seconds * 1000000LL);
 
@@ -169,6 +178,10 @@ static void capture_task_run(void *arg)
             ESP_LOGW(TAG, "Failed SD append for final raw chunk");
         }
         chunk_fill = 0;
+    }
+
+    if (!run_storage_end_raw(state->ctx.storage)) {
+        ESP_LOGW(TAG, "Failed to finalize raw audio file cleanly");
     }
 
     audio_input_deinit();
