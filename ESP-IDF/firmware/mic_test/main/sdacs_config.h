@@ -44,7 +44,7 @@
 #define SDACS_RECORD_SECONDS             20
 #define SDACS_AUDIO_CHUNK_SAMPLES        2048
 #define SDACS_FFT_SIZE                   1024
-#define SDACS_CAL_OFFSET_DB              0.0f
+#define SDACS_CAL_OFFSET_DB              96.99f
 #define SDACS_I2S_READ_TIMEOUT_MS        100
 #define SDACS_WAV_CHUNK_SIZE             1024
 
