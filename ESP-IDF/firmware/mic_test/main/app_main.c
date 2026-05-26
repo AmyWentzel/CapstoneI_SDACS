@@ -3,6 +3,7 @@
 #include "esp_log.h"
 
 #include "audio_input.h"
+#include "ble_locator.h"
 #include "capture_task.h"
 #include "command_dispatcher.h"
 #include "config_store.h"
