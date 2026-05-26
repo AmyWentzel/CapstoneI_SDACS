@@ -43,6 +43,24 @@ For more information on structure and contents of ESP-IDF projects, please refer
     * Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
     * The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
 
+## SDACS BLE Node Awareness
+
+On boot, each ESP32-S3 node loads config/NVS defaults, then runs a short BLE
+node-awareness advertisement before Wi-Fi and MQTT start. The BLE local name is
+`SDACS-<node_id>`, for example `SDACS-node01`, and the advertisement is
+non-connectable. The RPi5 gateway scans these advertisements and RSSI values,
+then publishes topology updates such as `sdacs/site/topology` and node presence
+topics over MQTT.
+
+After `SDACS_BLE_LOCATOR_DURATION_MS`, the node stops advertising, shuts down
+NimBLE, and starts the normal SDACS Wi-Fi/MQTT sensing path. The node continues
+to publish heartbeat, battery, temp/humidity, audio, and feature topics under
+`sdacs/node/<node_id>/...`, and subscribes to its node command topic plus
+`sdacs/group/all/cmd`.
+
+Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
+for BLE devices and do not receive commands over BLE.
+
 ## Technical support and feedback
 
 Please use the following feedback channels:

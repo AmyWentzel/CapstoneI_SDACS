@@ -17,7 +17,6 @@
 #include "host/util/util.h"
 
 #include "services/gap/ble_svc_gap.h"
-#include "services/gatt/ble_svc_gatt.h"
 
 #include "sdacs_config.h"
 
@@ -41,6 +40,27 @@ static void ble_on_sync(void)
     s_ble_synced = true;
 }
 
+static void sdacs_ble_stop_host(void)
+{
+    uint32_t waited_ms = 0;
+    int rc = nimble_port_stop();
+
+    if (rc != 0) {
+        ESP_LOGW(TAG, "nimble_port_stop returned %d", rc);
+    }
+
+    while (!s_ble_host_stopped && waited_ms < 3000) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        waited_ms += 100;
+    }
+
+    if (!s_ble_host_stopped) {
+        ESP_LOGW(TAG, "BLE host stop timeout; deinitializing anyway");
+    }
+
+    nimble_port_deinit();
+}
+
 static int ble_gap_event_handler(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -57,15 +77,17 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-static esp_err_t sdacs_ble_start_advertising(void)
+static esp_err_t sdacs_ble_start_advertising(const char *node_id)
 {
     char device_name[32];
+    const char *effective_node_id =
+        (node_id && node_id[0] != '\0') ? node_id : SDACS_NODE_ID;
 
     snprintf(
         device_name,
         sizeof(device_name),
         "SDACS-%s",
-        SDACS_NODE_ID
+        effective_node_id
     );
 
     int rc = ble_svc_gap_device_name_set(device_name);
@@ -95,7 +117,7 @@ static esp_err_t sdacs_ble_start_advertising(void)
         mfg_payload,
         sizeof(mfg_payload),
         "SDACS:%s",
-        SDACS_NODE_ID
+        effective_node_id
     );
 
     if (mfg_len > 0 && mfg_len < (int)sizeof(mfg_payload)) {
@@ -138,9 +160,10 @@ static esp_err_t sdacs_ble_start_advertising(void)
     return ESP_OK;
 }
 
-esp_err_t sdacs_ble_locator_advertise_for(uint32_t duration_ms)
+esp_err_t sdacs_ble_locator_advertise_for(const char *node_id, uint32_t duration_ms)
 {
 #if !SDACS_BLE_LOCATOR_ENABLED
+    (void)node_id;
     (void)duration_ms;
     return ESP_OK;
 #else
@@ -157,8 +180,6 @@ esp_err_t sdacs_ble_locator_advertise_for(uint32_t duration_ms)
     }
 
     ble_svc_gap_init();
-    ble_svc_gatt_init();
-
     ble_hs_cfg.sync_cb = ble_on_sync;
 
     nimble_port_freertos_init(ble_host_task);
@@ -171,34 +192,24 @@ esp_err_t sdacs_ble_locator_advertise_for(uint32_t duration_ms)
 
     if (!s_ble_synced) {
         ESP_LOGE(TAG, "BLE host sync timeout");
-        nimble_port_stop();
-        nimble_port_deinit();
+        sdacs_ble_stop_host();
         return ESP_ERR_TIMEOUT;
     }
 
-    err = sdacs_ble_start_advertising();
+    err = sdacs_ble_start_advertising(node_id);
     if (err != ESP_OK) {
-        nimble_port_stop();
-        nimble_port_deinit();
+        sdacs_ble_stop_host();
         return err;
     }
 
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
 
-    ble_gap_adv_stop();
-
-    int rc = nimble_port_stop();
-    if (rc != 0) {
-        ESP_LOGW(TAG, "nimble_port_stop returned %d", rc);
+    int rc = ble_gap_adv_stop();
+    if (rc != 0 && rc != BLE_HS_EALREADY) {
+        ESP_LOGW(TAG, "ble_gap_adv_stop returned %d", rc);
     }
 
-    waited_ms = 0;
-    while (!s_ble_host_stopped && waited_ms < 3000) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        waited_ms += 100;
-    }
-
-    nimble_port_deinit();
+    sdacs_ble_stop_host();
 
     ESP_LOGI(TAG, "SDACS BLE locator phase complete");
 
