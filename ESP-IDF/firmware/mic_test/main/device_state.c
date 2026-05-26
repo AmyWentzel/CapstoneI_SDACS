@@ -37,7 +37,10 @@ const char *device_state_to_str(sdacs_mode_t mode)
     switch (mode) {
         case SDACS_MODE_BOOT: return "boot";
         case SDACS_MODE_IDLE: return "idle";
+        case SDACS_MODE_ARMED: return "armed";
         case SDACS_MODE_CAPTURING: return "capturing";
+        case SDACS_MODE_FINALIZING: return "finalizing";
+        case SDACS_MODE_COMPLETE: return "complete";
         case SDACS_MODE_OTA: return "ota";
         case SDACS_MODE_ERROR: return "error";
         default: return "unknown";

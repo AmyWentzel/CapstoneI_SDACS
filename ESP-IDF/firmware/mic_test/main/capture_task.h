@@ -9,6 +9,8 @@ typedef struct {
     run_storage_t *storage;
     const char *node_id;
     const char *base_topic;
+    const char *request_id;
+    uint32_t delay_ms;
     float cal_offset_db;
     uint32_t record_seconds;
 } capture_context_t;

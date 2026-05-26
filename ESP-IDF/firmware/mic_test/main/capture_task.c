@@ -15,69 +15,181 @@
 #include "config_store.h"
 #include "device_state.h"
 #include "fft_metrics.h"
-#include "fuel_gauge.h"
 #include "sdacs_config.h"
 #include "temp_humidity.h"
 #include "time_sync.h"
 #include "wifi_mqtt.h"
 
-typedef struct __attribute__((packed)) {
-    uint32_t magic;
-    uint16_t ver;
-    uint16_t flags;
-    uint32_t seq;
-    uint64_t t_us;
-    uint32_t sample_rate;
-    uint32_t n;
-} sdacs_audio_hdr_t;
-
-#define SDACS_MAGIC 0x43414453u
-
 typedef struct {
     capture_context_t ctx;
-    char audio_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];
+    char node_id[CONFIG_STORE_MAX_NODE_ID_LEN + 1];
+    char base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1];
+    char request_id[64];
+    char status_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];
+    char complete_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 32];
 } capture_task_state_t;
 
 static const char *TAG = "capture_task";
+
+static void capture_publish_status(capture_task_state_t *state,
+                                   sdacs_mode_t mode,
+                                   const char *message)
+{
+    char payload[384];
+    int len = 0;
+
+    if (!state || state->status_topic[0] == '\0') {
+        return;
+    }
+
+    len = snprintf(
+        payload,
+        sizeof(payload),
+        "{"
+        "\"node_id\":\"%s\","
+        "\"record_type\":\"capture_status\","
+        "\"request_id\":\"%s\","
+        "\"state\":\"%s\","
+        "\"delay_ms\":%u,"
+        "\"record_seconds\":%u,"
+        "\"message\":\"%s\""
+        "}",
+        state->node_id,
+        state->request_id,
+        device_state_to_str(mode),
+        (unsigned)state->ctx.delay_ms,
+        (unsigned)state->ctx.record_seconds,
+        message ? message : ""
+    );
+
+    if (len <= 0 || len >= (int)sizeof(payload)) {
+        ESP_LOGW(TAG, "Capture status payload too long");
+        return;
+    }
+
+    esp_err_t err = wifi_mqtt_publish_status_json(state->status_topic, payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Capture status publish failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void capture_set_state(capture_task_state_t *state,
+                              sdacs_mode_t mode,
+                              const char *message)
+{
+    device_state_set(mode);
+    ESP_LOGI(TAG, "Capture state: %s (%s)",
+             device_state_to_str(mode),
+             message ? message : "");
+    capture_publish_status(state, mode, message);
+}
+
+static void capture_publish_complete(capture_task_state_t *state,
+                                     size_t raw_bytes,
+                                     size_t wav_bytes,
+                                     size_t csv_bytes)
+{
+    char payload[1024];
+    char timestamp[32];
+    int len = 0;
+
+    if (!state || state->complete_topic[0] == '\0') {
+        return;
+    }
+
+    time_sync_get_iso8601(timestamp, sizeof(timestamp));
+    len = snprintf(
+        payload,
+        sizeof(payload),
+        "{"
+        "\"node_id\":\"%s\","
+        "\"record_type\":\"capture_complete\","
+        "\"request_id\":\"%s\","
+        "\"state\":\"complete\","
+        "\"record_seconds\":%u,"
+        "\"raw_path\":\"%s\","
+        "\"wav_path\":\"%s\","
+        "\"metrics_path\":\"%s\","
+        "\"raw_bytes\":%u,"
+        "\"wav_bytes\":%u,"
+        "\"metrics_bytes\":%u,"
+        "\"timestamp\":\"%s\""
+        "}",
+        state->node_id,
+        state->request_id,
+        (unsigned)state->ctx.record_seconds,
+        state->ctx.storage->raw_path,
+        state->ctx.storage->wav_path,
+        state->ctx.storage->csv_path,
+        (unsigned)raw_bytes,
+        (unsigned)wav_bytes,
+        (unsigned)csv_bytes,
+        timestamp
+    );
+
+    if (len <= 0 || len >= (int)sizeof(payload)) {
+        ESP_LOGW(TAG, "Capture complete payload too long");
+        return;
+    }
+
+    esp_err_t err = wifi_mqtt_publish_status_json(state->complete_topic, payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "capture_complete publish failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "capture_complete published");
+    }
+}
 
 static void capture_task_run(void *arg)
 {
     capture_task_state_t *state = (capture_task_state_t *)arg;
     size_t samples_read = 0;
     int64_t start_us = esp_timer_get_time();
-    int64_t end_us = start_us + ((int64_t)state->ctx.record_seconds * 1000000LL);
-    int64_t next_metrics_us = start_us + 1000000LL;
-    uint32_t samples_streamed = 0;
-    uint32_t metrics_seq = 0;
-
-    sdacs_audio_hdr_t hdr = {
-        .magic = SDACS_MAGIC,
-        .ver = 1,
-        .flags = 0,
-        .seq = 0,
-        .sample_rate = SDACS_SAMPLE_RATE_HZ,
-    };
+    int64_t end_us = 0;
+    int64_t next_metrics_us = 0;
+    uint32_t samples_written = 0;
 
     static int32_t read_buf[SDACS_I2S_FRAMES_PER_READ];
     static int32_t chunk[SDACS_AUDIO_CHUNK_SAMPLES];
-    static uint8_t payload[sizeof(sdacs_audio_hdr_t) + (SDACS_AUDIO_CHUNK_SAMPLES * sizeof(int32_t))];
     size_t chunk_fill = 0;
     bool fatal_error = false;
+    char verify_reason[96];
+    size_t raw_bytes = 0;
+    size_t wav_bytes = 0;
+    size_t csv_bytes = 0;
+    esp_err_t err = ESP_OK;
 
-    device_state_set(SDACS_MODE_CAPTURING);
+    capture_set_state(state, SDACS_MODE_ARMED, "capture command accepted");
 
-    ESP_LOGI(TAG, "Waiting for WiFi+MQTT before streaming...");
+    ESP_LOGI(TAG, "Waiting for WiFi+MQTT before delayed capture...");
     esp_err_t werr = wifi_mqtt_wait_connected(SDACS_WIFI_TIME_SYNC_WAIT_MS);
     if (werr != ESP_OK) {
-        ESP_LOGW(TAG, "MQTT not ready (%s). Continuing with local SD logging.", esp_err_to_name(werr));
+        ESP_LOGW(TAG, "MQTT not ready (%s). Continuing with local SD capture.", esp_err_to_name(werr));
     } else {
-        ESP_LOGI(TAG, "WiFi+MQTT ready. Starting stream + SD logging.");
-        (void)temp_humidity_publish_latest_once("start");
-        (void)fuel_gauge_publish_latest_once("start");
+        ESP_LOGI(TAG, "WiFi+MQTT ready. Starting delayed SD-first capture.");
     }
 
+    ESP_LOGI(TAG, "Delay countdown: %u ms", (unsigned)state->ctx.delay_ms);
+    if (state->ctx.delay_ms > 0) {
+        vTaskDelay(pdMS_TO_TICKS(state->ctx.delay_ms));
+    }
+
+    err = run_storage_create_session(state->ctx.storage, state->node_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create SD capture session: %s", esp_err_to_name(err));
+        capture_set_state(state, SDACS_MODE_ERROR, "failed to create SD capture session");
+        goto done;
+    }
+
+    ESP_LOGI(TAG, "SD write started: %s", state->ctx.storage->run_dir);
+    capture_set_state(state, SDACS_MODE_CAPTURING, "capture started");
+
+    start_us = esp_timer_get_time();
+    end_us = start_us + ((int64_t)state->ctx.record_seconds * 1000000LL);
+    next_metrics_us = start_us + 1000000LL;
+
     while (esp_timer_get_time() < end_us) {
-        esp_err_t err = audio_input_read_s24(
+        err = audio_input_read_s24(
             read_buf,
             SDACS_I2S_FRAMES_PER_READ,
             &samples_read,
@@ -103,27 +215,16 @@ static void capture_task_run(void *arg)
             if (chunk_fill >= SDACS_AUDIO_CHUNK_SAMPLES) {
                 if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
                     ESP_LOGW(TAG, "Failed SD append for raw chunk");
+                    fatal_error = true;
+                    break;
                 }
 
-                hdr.n = (uint32_t)chunk_fill;
-                hdr.t_us = (uint64_t)esp_timer_get_time();
-                memcpy(payload, &hdr, sizeof(hdr));
-                memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));
-                err = wifi_mqtt_publish_raw(
-                    state->audio_topic,
-                    payload,
-                    sizeof(hdr) + (chunk_fill * sizeof(int32_t)),
-                    0,
-                    0
-                );
-                if (err != ESP_OK && (hdr.seq % 20u == 0u)) {
-                    ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(err));
-                }
-
-                samples_streamed += (uint32_t)chunk_fill;
-                hdr.seq++;
+                samples_written += (uint32_t)chunk_fill;
                 chunk_fill = 0;
             }
+        }
+        if (fatal_error) {
+            break;
         }
 
         int64_t now_us = esp_timer_get_time();
@@ -131,22 +232,11 @@ static void capture_task_run(void *arg)
             audio_metrics_t metrics = {0};
             if (fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db)) {
                 temp_humidity_reading_t th = {0};
-                fuel_gauge_reading_t batt = {0};
                 float temp_c = NAN;
                 float humidity = NAN;
-                float batt_soc_percent = NAN;
-                float batt_voltage_v = NAN;
-                float batt_charge_rate_pct_per_hr = NAN;
-                bool batt_valid = false;
                 if (temp_humidity_get_latest(&th)) {
                     temp_c = th.temp_c;
                     humidity = th.rh_percent;
-                }
-                if (fuel_gauge_get_latest(&batt)) {
-                    batt_soc_percent = batt.soc_percent;
-                    batt_voltage_v = batt.voltage_v;
-                    batt_charge_rate_pct_per_hr = batt.charge_rate_percent_per_hr;
-                    batt_valid = true;
                 }
 
                 metrics_record_t record = {0};
@@ -161,31 +251,8 @@ static void capture_task_run(void *arg)
                 record.fft_peak_hz = metrics.fft_peak_hz;
                 (void)run_storage_append_metrics(state->ctx.storage, &record);
 
-                sdacs_features_t feat = {0};
-                strncpy(feat.node_id, state->ctx.node_id, sizeof(feat.node_id) - 1);
-                feat.seq = metrics_seq++;
-                feat.t_us = (uint64_t)now_us;
-                feat.n = metrics.sample_count;
-                feat.rms = metrics.rms_norm;
-                feat.dbfs = metrics.dbfs;
-                feat.db_spl = metrics.laeq_db;
-                feat.f_peak_hz = metrics.fft_peak_hz;
-                feat.p2p_raw = metrics.peak_abs * 2;
-                feat.zeros = 0;
-                feat.temp_c = temp_c;
-                feat.rh_percent = humidity;
-                // Node-RED should parse the new battery fields alongside temp/humidity and audio metrics.
-                feat.batt_soc_percent = batt_soc_percent;
-                feat.batt_voltage_v = batt_voltage_v;
-                feat.batt_charge_rate_pct_per_hr = batt_charge_rate_pct_per_hr;
-                feat.batt_valid = batt_valid;
-
-                if (!wifi_mqtt_try_send(&feat)) {
-                    ESP_LOGW(TAG, "Failed to enqueue 1 Hz features");
-                }
-
-                ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB streamed=%u",
-                         metrics.laeq_db, metrics.peak_db, (unsigned)samples_streamed);
+                ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",
+                         metrics.laeq_db, metrics.peak_db, (unsigned)samples_written);
             }
 
             next_metrics_us += 1000000LL;
@@ -195,36 +262,54 @@ static void capture_task_run(void *arg)
     if (chunk_fill > 0) {
         if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
             ESP_LOGW(TAG, "Failed final SD append");
+            fatal_error = true;
+        } else {
+            samples_written += (uint32_t)chunk_fill;
         }
-
-        hdr.n = (uint32_t)chunk_fill;
-        hdr.t_us = (uint64_t)esp_timer_get_time();
-        memcpy(payload, &hdr, sizeof(hdr));
-        memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));
-        (void)wifi_mqtt_publish_raw(
-            state->audio_topic,
-            payload,
-            sizeof(hdr) + (chunk_fill * sizeof(int32_t)),
-            0,
-            0
-        );
-        hdr.seq++;
     }
 
-    (void)run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
+    capture_set_state(state, SDACS_MODE_FINALIZING, "capture finalizing");
+
+    err = run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WAV conversion failed: %s", esp_err_to_name(err));
+        fatal_error = true;
+    } else {
+        ESP_LOGI(TAG, "WAV conversion complete");
+    }
+
     run_storage_refresh_timestamps(state->ctx.storage);
+    ESP_LOGI(TAG, "SD finalization complete");
 
     ESP_LOGI(TAG, "Recording complete: %.2f s, chunk_msgs=%u",
              (float)(esp_timer_get_time() - start_us) / 1000000.0f,
-             (unsigned)hdr.seq);
-
-    if (wifi_mqtt_is_connected()) {
-        (void)temp_humidity_publish_latest_once("end");
-        (void)fuel_gauge_publish_latest_once("end");
-    }
+             (unsigned)samples_written);
 
     run_storage_verify(state->ctx.storage);
-    device_state_set(fatal_error ? SDACS_MODE_ERROR : SDACS_MODE_IDLE);
+    err = run_storage_verify_capture(
+        state->ctx.storage,
+        verify_reason,
+        sizeof(verify_reason),
+        &raw_bytes,
+        &wav_bytes,
+        &csv_bytes
+    );
+    if (err != ESP_OK) {
+        fatal_error = true;
+    }
+
+    if (fatal_error) {
+        capture_set_state(state, SDACS_MODE_ERROR,
+                          verify_reason[0] ? verify_reason : "capture failed");
+    } else {
+        capture_set_state(state, SDACS_MODE_COMPLETE, "capture complete");
+        capture_publish_complete(state, raw_bytes, wav_bytes, csv_bytes);
+    }
+
+done:
+    vTaskDelay(pdMS_TO_TICKS(250));
+    device_state_set(SDACS_MODE_IDLE);
+    ESP_LOGI(TAG, "Capture state: idle (ready)");
     free(state);
     vTaskDelete(NULL);
 }
@@ -245,8 +330,22 @@ esp_err_t capture_task_start(const capture_context_t *ctx)
     }
 
     state->ctx = *ctx;
-    topic_len = snprintf(state->audio_topic, sizeof(state->audio_topic), "%s/audio", ctx->base_topic);
-    if (topic_len <= 0 || topic_len >= (int)sizeof(state->audio_topic)) {
+    strncpy(state->node_id, ctx->node_id, sizeof(state->node_id) - 1);
+    strncpy(state->base_topic, ctx->base_topic, sizeof(state->base_topic) - 1);
+    strncpy(state->request_id,
+            (ctx->request_id && ctx->request_id[0] != '\0') ? ctx->request_id : "manual",
+            sizeof(state->request_id) - 1);
+    state->ctx.node_id = state->node_id;
+    state->ctx.base_topic = state->base_topic;
+    state->ctx.request_id = state->request_id;
+
+    topic_len = snprintf(state->status_topic, sizeof(state->status_topic), "%s/status", ctx->base_topic);
+    if (topic_len <= 0 || topic_len >= (int)sizeof(state->status_topic)) {
+        free(state);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    topic_len = snprintf(state->complete_topic, sizeof(state->complete_topic), "%s/capture_complete", ctx->base_topic);
+    if (topic_len <= 0 || topic_len >= (int)sizeof(state->complete_topic)) {
         free(state);
         return ESP_ERR_INVALID_SIZE;
     }

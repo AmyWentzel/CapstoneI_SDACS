@@ -36,3 +36,6 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec);
 esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate_hz);
 void run_storage_refresh_timestamps(run_storage_t *rs);
 void run_storage_verify(run_storage_t *rs);
+esp_err_t run_storage_get_file_size(const char *path, size_t *out_size);
+esp_err_t run_storage_verify_capture(run_storage_t *rs, char *reason, size_t reason_sz,
+                                     size_t *raw_bytes, size_t *wav_bytes, size_t *csv_bytes);

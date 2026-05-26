@@ -402,3 +402,75 @@ void run_storage_verify(run_storage_t *rs)
     log_file_crc32(rs->csv_path);
     log_file_crc32(rs->wav_path);
 }
+
+esp_err_t run_storage_get_file_size(const char *path, size_t *out_size)
+{
+    struct stat st;
+
+    if (!path || path[0] == '\0' || !out_size) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (stat(path, &st) != 0) {
+        *out_size = 0;
+        return ESP_FAIL;
+    }
+
+    if (st.st_size <= 0) {
+        *out_size = 0;
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    *out_size = (size_t)st.st_size;
+    return ESP_OK;
+}
+
+esp_err_t run_storage_verify_capture(run_storage_t *rs, char *reason, size_t reason_sz,
+                                     size_t *raw_bytes, size_t *wav_bytes, size_t *csv_bytes)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!rs) {
+        if (reason && reason_sz > 0) {
+            snprintf(reason, reason_sz, "storage not initialized");
+        }
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (reason && reason_sz > 0) {
+        reason[0] = '\0';
+    }
+
+    err = run_storage_get_file_size(rs->raw_path, raw_bytes);
+    if (err != ESP_OK) {
+        if (reason && reason_sz > 0) {
+            snprintf(reason, reason_sz, "raw file missing or empty");
+        }
+        ESP_LOGE(TAG, "Capture verification failed: %s", reason ? reason : "raw file");
+        return err;
+    }
+
+    err = run_storage_get_file_size(rs->wav_path, wav_bytes);
+    if (err != ESP_OK) {
+        if (reason && reason_sz > 0) {
+            snprintf(reason, reason_sz, "wav file missing or empty");
+        }
+        ESP_LOGE(TAG, "Capture verification failed: %s", reason ? reason : "wav file");
+        return err;
+    }
+
+    err = run_storage_get_file_size(rs->csv_path, csv_bytes);
+    if (err != ESP_OK) {
+        if (reason && reason_sz > 0) {
+            snprintf(reason, reason_sz, "metrics csv missing or empty");
+        }
+        ESP_LOGE(TAG, "Capture verification failed: %s", reason ? reason : "metrics csv");
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Capture verification passed: raw=%u wav=%u csv=%u bytes",
+             (unsigned)(raw_bytes ? *raw_bytes : 0U),
+             (unsigned)(wav_bytes ? *wav_bytes : 0U),
+             (unsigned)(csv_bytes ? *csv_bytes : 0U));
+    return ESP_OK;
+}

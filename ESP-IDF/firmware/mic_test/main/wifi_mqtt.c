@@ -23,6 +23,7 @@
 
 #include "fuel_gauge.h"
 #include "sdacs_config.h"
+#include "device_state.h"
 
 static const char *TAG = "WIFI_MQTT";
 
@@ -182,6 +183,7 @@ static esp_err_t publish_heartbeat_now(const char *status)
         "\"node_id\":\"%s\","
         "\"status\":\"%s\","
         "\"fw_version\":\"%s\","
+        "\"capture_state\":\"%s\","
         "\"uptime_s\":%" PRIu64 ","
         "\"rssi_dbm\":%d,"
         "\"free_heap\":%u,"
@@ -200,6 +202,7 @@ static esp_err_t publish_heartbeat_now(const char *status)
         s_node_id[0] ? s_node_id : SDACS_NODE_ID,
         status ? status : "online",
         SDACS_FW_VERSION,
+        device_state_to_str(device_state_get()),
         uptime_s,
         get_wifi_rssi_dbm(),
         (unsigned)esp_get_free_heap_size(),

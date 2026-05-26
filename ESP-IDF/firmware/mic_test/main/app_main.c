@@ -5,7 +5,6 @@
 
 #include "audio_input.h"
 #include "ble_locator.h"
-#include "capture_task.h"
 #include "command_dispatcher.h"
 #include "config_store.h"
 #include "device_state.h"
@@ -101,7 +100,6 @@ void app_main(void)
     time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
 
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
-    ESP_ERROR_CHECK(run_storage_create_session(&s_storage, node_id));
     ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
 
     bool th_ok = temp_humidity_start(
@@ -135,14 +133,5 @@ void app_main(void)
     command_dispatcher_init(&s_storage, node_id, base_topic);
     ESP_ERROR_CHECK(wifi_mqtt_set_command_callback(command_dispatcher_handle));
 
-    capture_context_t ctx = {
-        .storage = &s_storage,
-        .node_id = node_id,
-        .base_topic = base_topic,
-        .cal_offset_db = SDACS_CAL_OFFSET_DB,
-        .record_seconds = SDACS_RECORD_SECONDS,
-    };
-
-    ESP_ERROR_CHECK(capture_task_start(&ctx));
-    ESP_LOGI(TAG, "Capture started (%d s): MQTT stream + SD logging", SDACS_RECORD_SECONDS);
+    ESP_LOGI(TAG, "Node ready in IDLE mode; waiting for MQTT start_capture command");
 }

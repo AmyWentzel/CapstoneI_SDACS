@@ -61,6 +61,32 @@ to publish heartbeat, battery, temp/humidity, audio, and feature topics under
 Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
 for BLE devices and do not receive commands over BLE.
 
+## Delayed Synchronized Capture
+
+Branch: `feature/delayed-synched-capture`
+
+After BLE discovery and Wi-Fi/MQTT startup, the node remains idle until MQTT
+receives a `start_capture` command on either `sdacs/node/<node_id>/cmd` or
+`sdacs/group/all/cmd`.
+
+Example Node-RED group command:
+
+```json
+{
+  "cmd": "start_capture",
+  "request_id": "capture_001",
+  "delay_ms": 5000,
+  "record_seconds": 20
+}
+```
+
+Accepted commands publish capture status on `sdacs/node/<node_id>/status`, then
+the node waits `delay_ms`, records to SD, finalizes raw/WAV/metrics files,
+verifies they are non-empty, and only then publishes
+`sdacs/node/<node_id>/capture_complete`. Audio chunks and capture feature data
+are not streamed live during capture; Node-RED receives completion only after SD
+finalization succeeds.
+
 ## Technical support and feedback
 
 Please use the following feedback channels:
