@@ -23,6 +23,9 @@ bool fuel_gauge_start(int i2c_port,
                       uint32_t period_ms);
 
 bool fuel_gauge_get_latest(fuel_gauge_reading_t *out);
+bool fuel_gauge_read_once(int i2c_port,
+                          uint8_t sensor_addr,
+                          fuel_gauge_reading_t *out);
 bool fuel_gauge_publish_latest_once(const char *phase);
 void fuel_gauge_stop(void);
 

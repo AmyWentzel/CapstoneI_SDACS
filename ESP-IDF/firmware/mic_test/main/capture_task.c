@@ -15,6 +15,7 @@
 #include "config_store.h"
 #include "device_state.h"
 #include "fft_metrics.h"
+#include "fuel_gauge.h"
 #include "sdacs_config.h"
 #include "temp_humidity.h"
 #include "time_sync.h"
@@ -267,6 +268,21 @@ static void capture_task_run(void *arg)
             samples_written += (uint32_t)chunk_fill;
         }
     }
+
+    temp_humidity_reading_t final_th = {0};
+    (void)temp_humidity_read_once(
+        SDACS_TEMP_HUMIDITY_I2C_PORT,
+        SDACS_TEMP_HUMIDITY_ADDR,
+        &final_th
+    );
+#if SDACS_FUEL_GAUGE_ENABLED
+    fuel_gauge_reading_t final_batt = {0};
+    (void)fuel_gauge_read_once(
+        SDACS_FUEL_GAUGE_I2C_PORT,
+        SDACS_FUEL_GAUGE_ADDR,
+        &final_batt
+    );
+#endif
 
     capture_set_state(state, SDACS_MODE_FINALIZING, "capture finalizing");
 

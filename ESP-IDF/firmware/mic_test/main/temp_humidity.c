@@ -250,6 +250,42 @@ bool temp_humidity_get_latest(temp_humidity_reading_t *out)
     return valid;
 }
 
+bool temp_humidity_read_once(int i2c_port,
+                             uint8_t sensor_addr,
+                             temp_humidity_reading_t *out)
+{
+    float t = 0.0f;
+    float rh = 0.0f;
+    esp_err_t err = ESP_OK;
+
+    if (!out) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (!shared_i2c_bus_is_ready()) {
+        ESP_LOGE(TAG, "Shared I2C bus not initialized");
+        return false;
+    }
+
+    err = hdc302x_read_temp_rh(i2c_port, sensor_addr, &t, &rh);
+    out->sample_count = 1;
+    out->last_sample_time_us = esp_timer_get_time();
+
+    if (err != ESP_OK) {
+        out->error_count = 1;
+        ESP_LOGW(TAG, "Final capture HDC302x read failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    out->temp_c = t;
+    out->rh_percent = rh;
+    out->valid = true;
+    ESP_LOGI(TAG, "Final capture T=%.2f C, RH=%.1f %%",
+             (double)out->temp_c, (double)out->rh_percent);
+    return true;
+}
+
 bool temp_humidity_publish_latest_once(const char *phase)
 {
     if (!phase) phase = "unknown";

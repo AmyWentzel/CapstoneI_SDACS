@@ -409,6 +409,41 @@ bool fuel_gauge_get_latest(fuel_gauge_reading_t *out)
     return valid;
 }
 
+bool fuel_gauge_read_once(int i2c_port,
+                          uint8_t sensor_addr,
+                          fuel_gauge_reading_t *out)
+{
+    esp_err_t err = ESP_OK;
+
+    if (!out) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (!shared_i2c_bus_is_ready()) {
+        ESP_LOGE(TAG, "Shared I2C bus not initialized");
+        return false;
+    }
+
+    g_ctx.charge_rate_supported = true;
+    g_ctx.charge_rate_warned = false;
+    err = fuel_gauge_read_sensor(i2c_port, sensor_addr, out);
+    out->sample_count = 1;
+    out->last_sample_time_us = esp_timer_get_time();
+
+    if (err != ESP_OK) {
+        out->error_count = 1;
+        ESP_LOGW(TAG, "Final capture fuel gauge read failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Final capture SOC=%.1f %% V=%.3f rate=%.2f %%/hr",
+             (double)out->soc_percent,
+             (double)out->voltage_v,
+             (double)out->charge_rate_percent_per_hr);
+    return true;
+}
+
 bool fuel_gauge_publish_latest_once(const char *phase)
 {
     char payload[320];

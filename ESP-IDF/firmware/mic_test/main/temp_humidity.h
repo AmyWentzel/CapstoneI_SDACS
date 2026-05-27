@@ -22,6 +22,9 @@ bool temp_humidity_start(int i2c_port,
                          uint32_t period_ms);
 
 bool temp_humidity_get_latest(temp_humidity_reading_t *out);
+bool temp_humidity_read_once(int i2c_port,
+                             uint8_t sensor_addr,
+                             temp_humidity_reading_t *out);
 
 // Publish a single snapshot of the latest reading to MQTT with phase marker.
 bool temp_humidity_publish_latest_once(const char *phase);
