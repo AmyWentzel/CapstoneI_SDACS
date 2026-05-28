@@ -18,6 +18,8 @@
 
 static const char *TAG = "temp_humidity";
 
+#define TEMP_HUMIDITY_HISTORY_CAP 128
+
 typedef struct
 {
     int i2c_port;
@@ -28,6 +30,8 @@ typedef struct
     SemaphoreHandle_t lock;
 
     temp_humidity_reading_t latest;
+    temp_humidity_reading_t history[TEMP_HUMIDITY_HISTORY_CAP];
+    size_t history_count;
     bool running;
     uint32_t publish_fail_count;
     char topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];
@@ -178,6 +182,14 @@ static void temp_humidity_task(void *arg)
         }
 
         snap = g_ctx.latest;
+        if (g_ctx.history_count < TEMP_HUMIDITY_HISTORY_CAP) {
+            g_ctx.history[g_ctx.history_count++] = snap;
+        } else {
+            memmove(&g_ctx.history[0], &g_ctx.history[1],
+                    sizeof(g_ctx.history[0]) * (TEMP_HUMIDITY_HISTORY_CAP - 1));
+            g_ctx.history[TEMP_HUMIDITY_HISTORY_CAP - 1] = snap;
+        }
+
         xSemaphoreGive(g_ctx.lock);
 
         if (err == ESP_OK) {
@@ -274,6 +286,26 @@ bool temp_humidity_get_latest(temp_humidity_reading_t *out)
     xSemaphoreGive(g_ctx.lock);
 
     return valid;
+}
+
+bool temp_humidity_get_history(temp_humidity_reading_t *out, size_t max_count, size_t *out_count)
+{
+    if (!out || !out_count || !g_ctx.lock) {
+        return false;
+    }
+
+    xSemaphoreTake(g_ctx.lock, portMAX_DELAY);
+    size_t count = g_ctx.history_count;
+    if (count > max_count) {
+        count = max_count;
+    }
+    if (count > 0) {
+        memcpy(out, g_ctx.history, count * sizeof(out[0]));
+    }
+    *out_count = count;
+    xSemaphoreGive(g_ctx.lock);
+
+    return count > 0;
 }
 
 bool temp_humidity_publish_latest_once(const char *phase)

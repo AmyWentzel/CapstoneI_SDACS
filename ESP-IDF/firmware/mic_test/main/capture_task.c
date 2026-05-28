@@ -40,21 +40,90 @@ static int32_t raw_s24_to_i32(const uint8_t bytes[3])
     return sample;
 }
 
-static bool analyze_raw_file(const char *path)
+static const temp_humidity_reading_t *select_temp_humidity_for_window(
+        const temp_humidity_reading_t *history,
+        size_t history_count,
+        int64_t window_end_us,
+        size_t *history_index)
+{
+    const temp_humidity_reading_t *selected = NULL;
+    if (!history || !history_index) {
+        return NULL;
+    }
+
+    while (*history_index < history_count &&
+           history[*history_index].last_sample_time_us <= window_end_us) {
+        selected = &history[*history_index];
+        (*history_index)++;
+    }
+    return selected;
+}
+
+static bool append_metrics_record(run_storage_t *storage,
+                                  const char *node_id,
+                                  const temp_humidity_reading_t *th,
+                                  const audio_metrics_t *metrics)
+{
+    if (!storage || !node_id || !metrics) {
+        return false;
+    }
+
+    metrics_record_t record = {0};
+    time_sync_get_iso8601(record.timestamp, sizeof(record.timestamp));
+    strncpy(record.node_id, node_id, sizeof(record.node_id) - 1);
+    record.laeq_db = metrics->laeq_db;
+    record.peak_db = metrics->peak_db;
+    record.dbfs = metrics->dbfs;
+    record.rms = metrics->rms_norm;
+    record.fft_peak_hz = metrics->fft_peak_hz;
+
+    if (th && th->valid) {
+        record.temp_c = th->temp_c;
+        record.humidity = th->rh_percent;
+    } else {
+        record.temp_c = NAN;
+        record.humidity = NAN;
+    }
+
+    return run_storage_append_metrics(storage, &record);
+}
+
+static bool analyze_raw_file(const char *path,
+                             const char *node_id,
+                             const temp_humidity_reading_t *th_history,
+                             size_t th_history_count,
+                             run_storage_t *storage,
+                             float cal_offset_db,
+                             int64_t recording_start_us)
 {
     static uint8_t raw_bytes[SDACS_RAW_CHUNK_SIZE * 3];
     static int32_t sample_buf[SDACS_RAW_CHUNK_SIZE];
+    int64_t segment_duration_us = (int64_t)SDACS_SAMPLE_RATE_HZ * 500LL / 1000LL;
+    size_t segment_samples = (SDACS_SAMPLE_RATE_HZ * 500) / 1000;
+    int32_t *segment_buf = calloc(segment_samples, sizeof(*segment_buf));
+    if (!segment_buf) {
+        ESP_LOGE(TAG, "Failed to allocate segment buffer");
+        return false;
+    }
+
     FILE *f = fopen(path, "rb");
     if (!f) {
         ESP_LOGE(TAG, "Failed to open RAW file for analysis: %s", path);
+        free(segment_buf);
         return false;
     }
 
     if (fseek(f, 44, SEEK_SET) != 0) {
         fclose(f);
+        free(segment_buf);
         ESP_LOGE(TAG, "Failed to seek past RAW header: %s", path);
         return false;
     }
+
+    size_t segment_fill = 0;
+    size_t history_index = 0;
+    int64_t next_window_end_us = recording_start_us + segment_duration_us;
+    bool ok = true;
 
     while (1) {
         size_t bytes_read = fread(raw_bytes, 1, sizeof(raw_bytes), f);
@@ -66,16 +135,57 @@ static bool analyze_raw_file(const char *path)
         for (size_t i = 0; i < samples_read; ++i) {
             sample_buf[i] = raw_s24_to_i32(&raw_bytes[i * 3]);
         }
+
         fft_metrics_push_samples(sample_buf, samples_read);
         fft_metrics_accumulate_block(sample_buf, samples_read);
 
-        if (bytes_read < sizeof(raw_bytes)) {
+        for (size_t i = 0; i < samples_read; ++i) {
+            segment_buf[segment_fill++] = sample_buf[i];
+            if (segment_fill >= segment_samples) {
+                audio_metrics_t window_metrics = {0};
+                if (!fft_metrics_compute_metrics_block(segment_buf, segment_samples, &window_metrics, cal_offset_db)) {
+                    ESP_LOGW(TAG, "Failed to compute 500ms window audio metrics");
+                    ok = false;
+                    break;
+                }
+
+                const temp_humidity_reading_t *th = select_temp_humidity_for_window(
+                    th_history, th_history_count, next_window_end_us, &history_index);
+
+                if (!append_metrics_record(storage, node_id, th, &window_metrics)) {
+                    ESP_LOGW(TAG, "Failed to append 500ms metrics row to CSV");
+                    ok = false;
+                    break;
+                }
+
+                segment_fill = 0;
+                next_window_end_us += segment_duration_us;
+            }
+        }
+
+        if (!ok || bytes_read < sizeof(raw_bytes)) {
             break;
         }
     }
 
+    if (ok && segment_fill > 0) {
+        audio_metrics_t window_metrics = {0};
+        if (fft_metrics_compute_metrics_block(segment_buf, segment_fill, &window_metrics, cal_offset_db)) {
+            const temp_humidity_reading_t *th = select_temp_humidity_for_window(
+                th_history, th_history_count, next_window_end_us, &history_index);
+            if (!append_metrics_record(storage, node_id, th, &window_metrics)) {
+                ESP_LOGW(TAG, "Failed to append final partial metrics row to CSV");
+                ok = false;
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to compute final partial window audio metrics");
+            ok = false;
+        }
+    }
+
     fclose(f);
-    return true;
+    free(segment_buf);
+    return ok;
 }
 
 
@@ -154,12 +264,23 @@ static void capture_task_run(void *arg)
     }
 
     audio_input_deinit();
+
+    temp_humidity_reading_t th_history[128];
+    size_t th_history_count = 0;
+    (void)temp_humidity_get_history(th_history, sizeof(th_history) / sizeof(th_history[0]), &th_history_count);
     if (temp_humidity_get_latest(&th)) {
         temp_c = th.temp_c;
         humidity = th.rh_percent;
     }
     temp_humidity_stop();
     ESP_LOGI(TAG, "Recording complete.");
+
+    esp_err_t net_err = sdacs_wifi_station_start();
+    if (net_err == ESP_OK) {
+        time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
+    } else {
+        ESP_LOGW(TAG, "WiFi start failed before analysis; timestamps may be inaccurate: %s", esp_err_to_name(net_err));
+    }
 
     run_storage_refresh_timestamps(state->ctx.storage);
 
@@ -171,7 +292,13 @@ static void capture_task_run(void *arg)
     
     audio_metrics_t final_metrics = {0};
     
-    if (analyze_raw_file(state->ctx.storage->raw_path)) {
+    if (analyze_raw_file(state->ctx.storage->raw_path,
+                         state->ctx.node_id,
+                         th_history,
+                         th_history_count,
+                         state->ctx.storage,
+                         state->ctx.cal_offset_db,
+                         start_us)) {
         ESP_LOGI(TAG, "Audio analysis complete");
     } else {
         ESP_LOGE(TAG, "Audio analysis failed");
@@ -202,7 +329,7 @@ static void capture_task_run(void *arg)
 
     // === PHASE 3: Streaming (only after files are complete) ===
     ESP_LOGI(TAG, "PHASE 3: Files complete; starting WiFi/MQTT before streaming...");
-    esp_err_t net_err = sdacs_wifi_station_start();
+    net_err = sdacs_wifi_station_start();
     if (net_err != ESP_OK) {
         ESP_LOGW(TAG, "WiFi start failed; skipping MQTT stream: %s", esp_err_to_name(net_err));
         free(state);

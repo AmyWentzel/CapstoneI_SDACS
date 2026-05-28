@@ -102,6 +102,81 @@ void fft_metrics_accumulate_block(const int32_t *samples, size_t n)
     }
 }
 
+static float compute_fft_peak_hz_from_samples(const int32_t *samples, size_t count)
+{
+    if (!samples || count < SDACS_FFT_SIZE) {
+        return NAN;
+    }
+
+    float fft_in[SDACS_FFT_SIZE * 2];
+    float fft_mag[SDACS_FFT_SIZE];
+
+    for (int i = 0; i < SDACS_FFT_SIZE; ++i) {
+        float sample = (float)samples[i] / 8388608.0f;
+        fft_in[2 * i] = sample * s_fft.hann_window[i];
+        fft_in[(2 * i) + 1] = 0.0f;
+    }
+
+    dsps_fft2r_fc32(fft_in, SDACS_FFT_SIZE);
+    dsps_bit_rev_fc32(fft_in, SDACS_FFT_SIZE);
+    dsps_cplx2reC_fc32(fft_in, SDACS_FFT_SIZE);
+
+    for (int i = 5; i < SDACS_FFT_SIZE / 2; ++i) {
+        float real = fft_in[2 * i];
+        float imag = fft_in[(2 * i) + 1];
+        fft_mag[i] = sqrtf((real * real) + (imag * imag));
+    }
+
+    int peak_bin = 5;
+    float peak_val = fft_mag[5];
+    for (int i = 6; i < SDACS_FFT_SIZE / 2; ++i) {
+        if (fft_mag[i] > peak_val) {
+            peak_val = fft_mag[i];
+            peak_bin = i;
+        }
+    }
+
+    return ((float)peak_bin * SDACS_SAMPLE_RATE_HZ) / SDACS_FFT_SIZE;
+}
+
+bool fft_metrics_compute_metrics_block(const int32_t *samples, size_t n, audio_metrics_t *out, float cal_offset_db)
+{
+    if (!samples || n == 0 || !out) {
+        return false;
+    }
+
+    double sum_sq = 0.0;
+    int32_t peak_abs = 0;
+    for (size_t i = 0; i < n; ++i) {
+        int32_t sample = samples[i];
+        int32_t abs_sample = sample < 0 ? -sample : sample;
+        if (abs_sample > peak_abs) {
+            peak_abs = abs_sample;
+        }
+        sum_sq += (double)sample * (double)sample;
+    }
+
+    float rms = sqrtf((float)(sum_sq / (double)n));
+    float rms_norm = rms / 8388608.0f;
+    float dbfs = 20.0f * log10f(rms_norm + 1e-12f);
+    float peak_norm = (float)peak_abs / 8388608.0f;
+    const int32_t *fft_samples = samples;
+    if (n > SDACS_FFT_SIZE) {
+        fft_samples = samples + ((n - SDACS_FFT_SIZE) / 2);
+    }
+
+    *out = (audio_metrics_t){
+        .rms_norm = rms_norm,
+        .dbfs = dbfs,
+        .laeq_db = dbfs + cal_offset_db,
+        .peak_db = 20.0f * log10f(peak_norm + 1e-12f) + cal_offset_db,
+        .fft_peak_hz = compute_fft_peak_hz_from_samples(fft_samples, n),
+        .peak_abs = peak_abs,
+        .sample_count = (uint32_t)n,
+    };
+    return true;
+}
+
 bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
 {
     if (!out || s_fft.count == 0) {
