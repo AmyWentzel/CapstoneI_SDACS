@@ -21,7 +21,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
 
   Future<void> _startApp() async {
     await _apiService.checkBackendHealth();
-    await Future<void>.delayed(const Duration(milliseconds: 600));
+    await Future<void>.delayed(const Duration(milliseconds: 5000));
 
     if (!mounted) {
       return;
