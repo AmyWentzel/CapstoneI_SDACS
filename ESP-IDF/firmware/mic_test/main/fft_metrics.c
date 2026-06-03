@@ -108,30 +108,27 @@ static float compute_fft_peak_hz_from_samples(const int32_t *samples, size_t cou
         return NAN;
     }
 
-    float fft_in[SDACS_FFT_SIZE * 2];
-    float fft_mag[SDACS_FFT_SIZE];
-
     for (int i = 0; i < SDACS_FFT_SIZE; ++i) {
         float sample = (float)samples[i] / 8388608.0f;
-        fft_in[2 * i] = sample * s_fft.hann_window[i];
-        fft_in[(2 * i) + 1] = 0.0f;
+        s_fft.fft_in[2 * i] = sample * s_fft.hann_window[i];
+        s_fft.fft_in[(2 * i) + 1] = 0.0f;
     }
 
-    dsps_fft2r_fc32(fft_in, SDACS_FFT_SIZE);
-    dsps_bit_rev_fc32(fft_in, SDACS_FFT_SIZE);
-    dsps_cplx2reC_fc32(fft_in, SDACS_FFT_SIZE);
+    dsps_fft2r_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
+    dsps_bit_rev_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
+    dsps_cplx2reC_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
 
     for (int i = 5; i < SDACS_FFT_SIZE / 2; ++i) {
-        float real = fft_in[2 * i];
-        float imag = fft_in[(2 * i) + 1];
-        fft_mag[i] = sqrtf((real * real) + (imag * imag));
+        float real = s_fft.fft_in[2 * i];
+        float imag = s_fft.fft_in[(2 * i) + 1];
+        s_fft.fft_mag[i] = sqrtf((real * real) + (imag * imag));
     }
 
     int peak_bin = 5;
-    float peak_val = fft_mag[5];
+    float peak_val = s_fft.fft_mag[5];
     for (int i = 6; i < SDACS_FFT_SIZE / 2; ++i) {
-        if (fft_mag[i] > peak_val) {
-            peak_val = fft_mag[i];
+        if (s_fft.fft_mag[i] > peak_val) {
+            peak_val = s_fft.fft_mag[i];
             peak_bin = i;
         }
     }

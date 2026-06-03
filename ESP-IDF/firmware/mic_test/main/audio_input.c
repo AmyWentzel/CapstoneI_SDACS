@@ -12,12 +12,23 @@
 
 typedef struct {
     i2s_chan_handle_t rx_chan;
-    int32_t raw[SDACS_I2S_FRAMES_PER_READ];
+    uint8_t raw[SDACS_I2S_FRAMES_PER_READ * 4];
     bool initialized;
 } audio_input_t;
 
 static const char *TAG = "audio_input";
 static audio_input_t s_audio = {0};
+
+static inline int32_t raw_bytes_to_s24(const uint8_t bytes[3])
+{
+    int32_t sample = (int32_t)bytes[0] |
+                     ((int32_t)bytes[1] << 8) |
+                     ((int32_t)bytes[2] << 16);
+    if (sample & 0x00800000) {
+        sample |= ~0x00FFFFFF;
+    }
+    return sample;
+}
 
 static inline int32_t i2s_word_to_s24(int32_t word)
 {
@@ -25,7 +36,7 @@ static inline int32_t i2s_word_to_s24(int32_t word)
     if (sample & 0x00800000) {
         sample |= ~0x00FFFFFF;
     }
-    return sample << 1;
+    return sample;
 }
 
 esp_err_t audio_input_init(void)
@@ -41,7 +52,7 @@ esp_err_t audio_input_init(void)
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SDACS_SAMPLE_RATE_HZ),
         .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(
-            I2S_DATA_BIT_WIDTH_32BIT,
+            I2S_DATA_BIT_WIDTH_24BIT,
             I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
@@ -88,15 +99,30 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         return err;
     }
 
-    *samples_read = bytes_read / sizeof(int32_t);
-    if (*samples_read > max_samples) {
-        *samples_read = max_samples;
+    size_t sample_count = 0;
+    if (bytes_read % 3 == 0 && (bytes_read / 3) <= max_samples) {
+        sample_count = bytes_read / 3;
+        for (size_t i = 0; i < sample_count; ++i) {
+            dst[i] = raw_bytes_to_s24(&s_audio.raw[i * 3]);
+        }
+    } else if (bytes_read % 4 == 0 && (bytes_read / 4) <= max_samples) {
+        sample_count = bytes_read / 4;
+        for (size_t i = 0; i < sample_count; ++i) {
+            int32_t word = 0;
+            memcpy(&word, &s_audio.raw[i * 4], sizeof(word));
+            dst[i] = i2s_word_to_s24(word);
+        }
+    } else {
+        sample_count = bytes_read / 3;
+        if (sample_count > max_samples) {
+            sample_count = max_samples;
+        }
+        for (size_t i = 0; i < sample_count; ++i) {
+            dst[i] = raw_bytes_to_s24(&s_audio.raw[i * 3]);
+        }
     }
 
-    for (size_t i = 0; i < *samples_read; ++i) {
-        dst[i] = i2s_word_to_s24(s_audio.raw[i]);
-    }
-
+    *samples_read = sample_count;
     return ESP_OK;
 }
 

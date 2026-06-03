@@ -1,5 +1,8 @@
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_system.h"
+
+#include "freertos/FreeRTOS.h"
 
 #include "audio_input.h"
 #include "capture_task.h"
@@ -51,4 +54,13 @@ void app_main(void)
 
     ESP_ERROR_CHECK(capture_task_start(&ctx));
     ESP_LOGI(TAG, "Capture started (%d s): local record, analyze, then post-file MQTT", SDACS_RECORD_SECONDS);
+
+    if (capture_task_wait_complete(UINT32_MAX)) {
+        ESP_LOGI(TAG, "Capture sequence complete; exiting with code 0");
+    } else {
+        ESP_LOGW(TAG, "Capture task did not complete cleanly");
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
 }

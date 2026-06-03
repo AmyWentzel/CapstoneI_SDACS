@@ -14,3 +14,4 @@ typedef struct {
 } capture_context_t;
 
 esp_err_t capture_task_start(const capture_context_t *ctx);
+bool capture_task_wait_complete(uint32_t timeout_ms);

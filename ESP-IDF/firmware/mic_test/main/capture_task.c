@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
@@ -29,16 +30,8 @@ typedef struct {
 
 static const char *TAG = "capture_task";
 
-static int32_t raw_s24_to_i32(const uint8_t bytes[3])
-{
-    int32_t sample = (int32_t)bytes[0] |
-                     ((int32_t)bytes[1] << 8) |
-                     ((int32_t)bytes[2] << 16);
-    if (sample & 0x00800000) {
-        sample |= ~0x00FFFFFF;
-    }
-    return sample;
-}
+#define CAPTURE_TASK_DONE_BIT BIT0
+static EventGroupHandle_t s_capture_events = NULL;
 
 static const temp_humidity_reading_t *select_temp_humidity_for_window(
         const temp_humidity_reading_t *history,
@@ -96,10 +89,9 @@ static bool analyze_raw_file(const char *path,
                              float cal_offset_db,
                              int64_t recording_start_us)
 {
-    static uint8_t raw_bytes[SDACS_RAW_CHUNK_SIZE * 3];
     static int32_t sample_buf[SDACS_RAW_CHUNK_SIZE];
     static int32_t segment_buf[(SDACS_SAMPLE_RATE_HZ * 500) / 1000];
-    int64_t segment_duration_us = (int64_t)SDACS_SAMPLE_RATE_HZ * 500LL / 1000LL;
+    int64_t segment_duration_us = 500000LL;
     size_t segment_samples = sizeof(segment_buf) / sizeof(segment_buf[0]);
 
     FILE *f = fopen(path, "rb");
@@ -108,26 +100,17 @@ static bool analyze_raw_file(const char *path,
         return false;
     }
 
-    if (fseek(f, 44, SEEK_SET) != 0) {
-        fclose(f);
-        ESP_LOGE(TAG, "Failed to seek past RAW header: %s", path);
-        return false;
-    }
-
     size_t segment_fill = 0;
     size_t history_index = 0;
     int64_t next_window_end_us = recording_start_us + segment_duration_us;
+    size_t rows_written = 0;
     bool ok = true;
 
     while (1) {
-        size_t bytes_read = fread(raw_bytes, 1, sizeof(raw_bytes), f);
-        if (bytes_read == 0) {
+        size_t samples_read = fread(sample_buf, sizeof(sample_buf[0]),
+                                    sizeof(sample_buf) / sizeof(sample_buf[0]), f);
+        if (samples_read == 0) {
             break;
-        }
-
-        size_t samples_read = bytes_read / 3;
-        for (size_t i = 0; i < samples_read; ++i) {
-            sample_buf[i] = raw_s24_to_i32(&raw_bytes[i * 3]);
         }
 
         fft_metrics_push_samples(sample_buf, samples_read);
@@ -152,12 +135,13 @@ static bool analyze_raw_file(const char *path,
                     break;
                 }
 
+                rows_written++;
                 segment_fill = 0;
                 next_window_end_us += segment_duration_us;
             }
         }
 
-        if (!ok || bytes_read < sizeof(raw_bytes)) {
+        if (!ok || samples_read < sizeof(sample_buf) / sizeof(sample_buf[0])) {
             break;
         }
     }
@@ -170,6 +154,8 @@ static bool analyze_raw_file(const char *path,
             if (!append_metrics_record(storage, node_id, th, &window_metrics)) {
                 ESP_LOGW(TAG, "Failed to append final partial metrics row to CSV");
                 ok = false;
+            } else {
+                rows_written++;
             }
         } else {
             ESP_LOGW(TAG, "Failed to compute final partial window audio metrics");
@@ -178,6 +164,11 @@ static bool analyze_raw_file(const char *path,
     }
 
     fclose(f);
+    ESP_LOGI(TAG, "Wrote %u post-recording metrics rows", (unsigned)rows_written);
+    if (ok && rows_written == 0) {
+        ESP_LOGW(TAG, "RAW file contained no samples to analyze");
+        return false;
+    }
     return ok;
 }
 
@@ -202,6 +193,9 @@ static void capture_task_run(void *arg)
         ESP_LOGE(TAG, "Failed to open raw audio file for recording");
         audio_input_deinit();
         temp_humidity_stop();
+        if (s_capture_events) {
+            xEventGroupSetBits(s_capture_events, CAPTURE_TASK_DONE_BIT);
+        }
         free(state);
         vTaskDelete(NULL);
         return;
@@ -258,7 +252,7 @@ static void capture_task_run(void *arg)
 
     audio_input_deinit();
 
-    temp_humidity_reading_t th_history[128];
+    static temp_humidity_reading_t th_history[128];
     size_t th_history_count = 0;
     (void)temp_humidity_get_history(th_history, sizeof(th_history) / sizeof(th_history[0]), &th_history_count);
     if (temp_humidity_get_latest(&th)) {
@@ -267,15 +261,6 @@ static void capture_task_run(void *arg)
     }
     temp_humidity_stop();
     ESP_LOGI(TAG, "Recording complete.");
-
-    esp_err_t net_err = sdacs_wifi_station_start();
-    if (net_err == ESP_OK) {
-        time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
-    } else {
-        ESP_LOGW(TAG, "WiFi start failed before analysis; timestamps may be inaccurate: %s", esp_err_to_name(net_err));
-    }
-
-    run_storage_refresh_timestamps(state->ctx.storage);
 
     ESP_LOGI(TAG, "PHASE 1 COMPLETE: Recording done. %.2f s recorded to SD",
              (float)(recording_end_us - start_us) / 1000000.0f);
@@ -322,9 +307,12 @@ static void capture_task_run(void *arg)
 
     // === PHASE 3: Streaming (only after files are complete) ===
     ESP_LOGI(TAG, "PHASE 3: Files complete; starting WiFi/MQTT before streaming...");
-    net_err = sdacs_wifi_station_start();
+    esp_err_t net_err = sdacs_wifi_station_start();
     if (net_err != ESP_OK) {
         ESP_LOGW(TAG, "WiFi start failed; skipping MQTT stream: %s", esp_err_to_name(net_err));
+        if (s_capture_events) {
+            xEventGroupSetBits(s_capture_events, CAPTURE_TASK_DONE_BIT);
+        }
         free(state);
         vTaskDelete(NULL);
         return;
@@ -335,6 +323,9 @@ static void capture_task_run(void *arg)
     esp_err_t mqtt_err = mqtt_publish_start();
     if (mqtt_err != ESP_OK) {
         ESP_LOGW(TAG, "MQTT start failed; skipping MQTT stream: %s", esp_err_to_name(mqtt_err));
+        if (s_capture_events) {
+            xEventGroupSetBits(s_capture_events, CAPTURE_TASK_DONE_BIT);
+        }
         free(state);
         vTaskDelete(NULL);
         return;
@@ -367,6 +358,9 @@ static void capture_task_run(void *arg)
         ESP_LOGI(TAG, "PHASE 3 SKIPPED: MQTT unavailable (%s)", esp_err_to_name(werr));
     }
 
+    if (s_capture_events) {
+        xEventGroupSetBits(s_capture_events, CAPTURE_TASK_DONE_BIT);
+    }
     free(state);
     vTaskDelete(NULL);
 }
@@ -379,6 +373,13 @@ esp_err_t capture_task_start(const capture_context_t *ctx)
 
     if (!ctx || !ctx->storage || !ctx->node_id || !ctx->base_topic) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_capture_events) {
+        s_capture_events = xEventGroupCreate();
+        if (!s_capture_events) {
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     state = calloc(1, sizeof(*state));
@@ -408,4 +409,21 @@ esp_err_t capture_task_start(const capture_context_t *ctx)
     }
 
     return ESP_OK;
+}
+
+bool capture_task_wait_complete(uint32_t timeout_ms)
+{
+    if (!s_capture_events) {
+        return false;
+    }
+
+    EventBits_t bits = xEventGroupWaitBits(
+        s_capture_events,
+        CAPTURE_TASK_DONE_BIT,
+        pdTRUE,
+        pdFALSE,
+        timeout_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms)
+    );
+
+    return (bits & CAPTURE_TASK_DONE_BIT) != 0;
 }
