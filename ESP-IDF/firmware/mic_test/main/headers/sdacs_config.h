@@ -29,9 +29,9 @@
 #define SDACS_NODE_ID                    "node01"
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 
-#define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11  // Metro S3 D11
-#define SDACS_I2S_WS_GPIO                GPIO_NUM_13  // Metro S3 D13 (mic WS pin)
-#define SDACS_I2S_DIN_GPIO               GPIO_NUM_12  // Metro S3 D12 (mic SD data pin)
+#define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11  // Metro S3 D11 (ICS-43432 SCLK - clock)
+#define SDACS_I2S_WS_GPIO                GPIO_NUM_13  // Metro S3 D13 (unused for PDM)
+#define SDACS_I2S_DIN_GPIO               GPIO_NUM_12  // Metro S3 D12 (ICS-43432 SD - serial data)
 
 #define SDACS_SD_MOSI_GPIO               GPIO_NUM_42
 #define SDACS_SD_MISO_GPIO               GPIO_NUM_21

@@ -72,6 +72,8 @@ esp_err_t audio_input_init(void)
         },
     };
 
+    ESP_LOGI(TAG, "Initializing PDM RX: SCLK=%d SD=%d sample_rate=%u",
+             SDACS_I2S_BCLK_GPIO, SDACS_I2S_DIN_GPIO, SDACS_SAMPLE_RATE_HZ);
     ESP_RETURN_ON_ERROR(i2s_channel_init_pdm_rx_mode(s_audio.rx_chan, &pdm_cfg), TAG, "init pdm rx mode failed");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_audio.rx_chan), TAG, "enable failed");
 
@@ -206,6 +208,7 @@ bool recordAudio_capture(uint32_t seconds)
     size_t total_timeouts = 0;
 
     ESP_LOGI(TAG, "Starting capture: %u s target", (unsigned)seconds);
+    int64_t last_log = esp_timer_get_time();
     while (esp_timer_get_time() < end_time) {
         size_t samples_read = 0;
         esp_err_t err = audio_input_read_s24(
@@ -225,7 +228,10 @@ bool recordAudio_capture(uint32_t seconds)
             continue;
         }
         if (samples_read == 0) {
-            ESP_LOGW(TAG, "I2S read returned 0 samples");
+            if (total_samples == 0 && (esp_timer_get_time() - last_log) > 2000000) {
+                ESP_LOGW(TAG, "No data from I2S after 2s - check microphone connection!");
+                last_log = esp_timer_get_time();
+            }
             continue;
         }
 
