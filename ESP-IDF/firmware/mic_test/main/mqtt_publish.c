@@ -12,7 +12,7 @@
 #include "mqtt_client.h"
 
 #include "config_store.h"
-#include "wifi_station.h"
+#include "network.h"
 
 static const char *TAG = "mqtt_publish";
 

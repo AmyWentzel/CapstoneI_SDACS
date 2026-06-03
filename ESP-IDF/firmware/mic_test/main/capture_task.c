@@ -13,15 +13,14 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include "audio_input.h"
 #include "config_store.h"
-#include "fft_metrics.h"
-#include "run_storage.h"
+#include "audioAnalysis.h"
+#include "recordAudio.h"
+#include "sdCard.h"
 #include "sdacs_config.h"
-#include "temp_humidity.h"
-#include "time_sync.h"
+#include "tempHumidity.h"
+#include "network.h"
 #include "mqtt_publish.h"
-#include "wifi_station.h"
 
 typedef struct {
     capture_context_t ctx;

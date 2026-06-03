@@ -9,17 +9,17 @@ endif()
 idf_component_register(
     SRCS
         "app_main.c"
-        "audio_input.c"
-        "capture_task.c"
-        "fft_metrics.c"
-        "network_provisioning.c"
-        "run_storage.c"
-        "time_sync.c"
-        "wifi_station.c"
-        "mqtt_publish.c"
+        "network.c"
         "config_store.c"
-        "temp_humidity.c"
-    INCLUDE_DIRS "."
+        "mqtt_publish.c"
+        "batteryLife.c"
+        "sdCard.c"
+        "metricsCSV.c"
+        "audioAnalysis.c"
+        "recordAudio.c"
+        "tempHumidity.c"
+    INCLUDE_DIRS
+        "headers"
     REQUIRES
         esp_wifi
         esp_netif
@@ -31,4 +31,5 @@ idf_component_register(
         esp_driver_sdspi
         fatfs
         sdmmc
+        esp_adc
 )

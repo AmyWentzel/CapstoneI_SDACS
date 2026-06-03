@@ -30,8 +30,8 @@
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11  // Metro S3 D11
-#define SDACS_I2S_WS_GPIO                GPIO_NUM_12  // Metro S3 D12
-#define SDACS_I2S_DIN_GPIO               GPIO_NUM_13  // Metro S3 D13
+#define SDACS_I2S_WS_GPIO                GPIO_NUM_13  // Metro S3 D13 (mic WS pin)
+#define SDACS_I2S_DIN_GPIO               GPIO_NUM_12  // Metro S3 D12 (mic SD data pin)
 
 #define SDACS_SD_MOSI_GPIO               GPIO_NUM_42
 #define SDACS_SD_MISO_GPIO               GPIO_NUM_21

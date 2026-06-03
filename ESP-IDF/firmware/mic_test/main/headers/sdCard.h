@@ -6,19 +6,8 @@
 #include <stdio.h>
 
 #include "esp_err.h"
+#include "metricsCSV.h"
 #include "sdmmc_cmd.h"
-
-typedef struct {
-    char timestamp[32];
-    char node_id[32];
-    float laeq_db;
-    float peak_db;
-    float dbfs;
-    float rms;
-    float temp_c;
-    float humidity;
-    float fft_peak_hz;
-} metrics_record_t;
 
 typedef struct {
     sdmmc_card_t *card;
@@ -30,6 +19,17 @@ typedef struct {
     char cal_csv_path[256];
     char cal_offset_path[256];
 } run_storage_t;
+
+bool sdCard_init(void);
+bool sdCard_create_session(void);
+bool sdCard_open_raw(void);
+bool sdCard_append_raw(const void *data, size_t len);
+bool sdCard_close_raw(void);
+bool sdCard_convert_raw_to_wav(uint32_t sample_rate_hz);
+bool sdCard_verify_run(void);
+const char *sdCard_get_run_dir(void);
+const char *sdCard_get_wav_path(void);
+const char *sdCard_get_metrics_path(void);
 
 esp_err_t run_storage_init(run_storage_t *rs);
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id);

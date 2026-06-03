@@ -21,7 +21,7 @@ function Escape-CString([string]$Value) {
 }
 
 $alwaysSync = if ($AlwaysSyncMqtt.IsPresent) { "1" } else { "0" }
-$secretsPath = Join-Path $PSScriptRoot "sdacs_secrets.h"
+$secretsPath = Join-Path $PSScriptRoot "headers\sdacs_secrets.h"
 
 $content = @"
 #pragma once

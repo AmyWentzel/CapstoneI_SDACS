@@ -1,4 +1,4 @@
-#include "temp_humidity.h"
+#include "tempHumidity.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -8,15 +8,16 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-#include "esp_log.h"
+#include "driver/i2c.h"
 #include "esp_err.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 
-#include "driver/i2c.h"
 #include "config_store.h"
 #include "mqtt_publish.h"
+#include "sdacs_config.h"
 
-static const char *TAG = "temp_humidity";
+static const char *TAG = "tempHumidity";
 
 #define TEMP_HUMIDITY_HISTORY_CAP 128
 
@@ -33,7 +34,6 @@ typedef struct
     temp_humidity_reading_t history[TEMP_HUMIDITY_HISTORY_CAP];
     size_t history_count;
     bool running;
-    uint32_t publish_fail_count;
     char topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];
     char node_id[CONFIG_STORE_MAX_NODE_ID_LEN + 1];
 } temp_humidity_ctx_t;
@@ -67,7 +67,7 @@ static void load_node_id(char *out, size_t out_sz)
         strncpy(out, node_id, out_sz - 1);
         out[out_sz - 1] = '\0';
     } else {
-        strncpy(out, "node01", out_sz - 1);
+        strncpy(out, SDACS_NODE_ID, out_sz - 1);
         out[out_sz - 1] = '\0';
     }
 }
@@ -123,7 +123,7 @@ static esp_err_t sht41_read_temp_rh(int port, uint8_t addr, float *temp_c, float
 {
     if (!temp_c || !rh_percent) return ESP_ERR_INVALID_ARG;
 
-    const uint8_t cmd = 0xFD; // SHT41 high precision measurement, no heater.
+    const uint8_t cmd = 0xFD;
     esp_err_t err = i2c_write(port, addr, &cmd, sizeof(cmd));
     if (err != ESP_OK) return err;
 
@@ -140,10 +140,10 @@ static esp_err_t sht41_read_temp_rh(int port, uint8_t addr, float *temp_c, float
     const uint16_t raw_rh = (uint16_t)((buf[3] << 8) | buf[4]);
     const float denom = 65535.0f;
 
-    *temp_c     = -45.0f + 175.0f * ((float)raw_t / denom);
+    *temp_c = -45.0f + 175.0f * ((float)raw_t / denom);
     *rh_percent = -6.0f + 125.0f * ((float)raw_rh / denom);
 
-    if (*rh_percent < 0.0f)   *rh_percent = 0.0f;
+    if (*rh_percent < 0.0f) *rh_percent = 0.0f;
     if (*rh_percent > 100.0f) *rh_percent = 100.0f;
 
     return ESP_OK;
@@ -166,15 +166,16 @@ static void temp_humidity_task(void *arg)
         float rh = 0.0f;
 
         esp_err_t err = sht41_read_temp_rh(g_ctx.i2c_port, g_ctx.addr, &t, &rh);
-
         temp_humidity_reading_t snap;
 
         xSemaphoreTake(g_ctx.lock, portMAX_DELAY);
         g_ctx.latest.sample_count++;
         g_ctx.latest.last_sample_time_us = esp_timer_get_time();
+        g_ctx.latest.timestamp_us = (uint64_t)g_ctx.latest.last_sample_time_us;
 
         if (err == ESP_OK) {
             g_ctx.latest.temp_c = t;
+            g_ctx.latest.humidity = rh;
             g_ctx.latest.rh_percent = rh;
             g_ctx.latest.valid = true;
         } else {
@@ -200,7 +201,6 @@ static void temp_humidity_task(void *arg)
                      esp_err_to_name(err), (unsigned)snap.error_count);
         }
 
-        // Sleep until next period, but allow immediate wake on stop request.
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(g_ctx.period_ms));
     }
 
@@ -244,15 +244,6 @@ bool temp_humidity_start(int i2c_port,
         ESP_LOGE(TAG, "Failed to create mutex");
         return false;
     }
-
-    g_ctx.latest = (temp_humidity_reading_t){
-        .temp_c = 0.0f,
-        .rh_percent = 0.0f,
-        .sample_count = 0,
-        .error_count = 0,
-        .last_sample_time_us = 0,
-        .valid = false
-    };
 
     g_ctx.running = true;
 
@@ -359,7 +350,6 @@ void temp_humidity_stop(void)
         xTaskNotifyGive(g_ctx.task);
     }
 
-    // Wait up to ~3s for clean exit.
     for (int i = 0; i < 120 && g_ctx.task != NULL; i++) {
         vTaskDelay(pdMS_TO_TICKS(25));
     }
@@ -372,4 +362,38 @@ void temp_humidity_stop(void)
         vSemaphoreDelete(g_ctx.lock);
         g_ctx.lock = NULL;
     }
+}
+
+bool tempHumidity_init(void)
+{
+    return true;
+}
+
+bool tempHumidity_start(void)
+{
+    return temp_humidity_start(
+        SDACS_TEMP_HUMIDITY_I2C_PORT,
+        SDACS_TEMP_HUMIDITY_SDA_GPIO,
+        SDACS_TEMP_HUMIDITY_SCL_GPIO,
+        SDACS_TEMP_HUMIDITY_FREQ_HZ,
+        SDACS_TEMP_HUMIDITY_ADDR,
+        SDACS_TEMP_HUMIDITY_PERIOD_MS
+    );
+}
+
+void tempHumidity_stop(void)
+{
+    temp_humidity_stop();
+}
+
+size_t tempHumidity_get_history(temp_humidity_reading_t *out, size_t max_count)
+{
+    size_t count = 0;
+    (void)temp_humidity_get_history(out, max_count, &count);
+    return count;
+}
+
+bool tempHumidity_get_latest(temp_humidity_reading_t *out)
+{
+    return temp_humidity_get_latest(out);
 }

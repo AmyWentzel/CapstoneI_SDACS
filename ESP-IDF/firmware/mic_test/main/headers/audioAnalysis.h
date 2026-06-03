@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "metricsCSV.h"
 
 typedef struct {
     float rms_norm;
@@ -15,6 +16,10 @@ typedef struct {
     int32_t peak_abs;
     uint32_t sample_count;
 } audio_metrics_t;
+
+bool audioAnalysis_init(void);
+bool audioAnalysis_analyze_wav(float cal_offset_db);
+bool audioAnalysis_get_latest_summary(metrics_record_t *out);
 
 esp_err_t fft_metrics_init(void);
 void fft_metrics_push_samples(const int32_t *samples, size_t n);
