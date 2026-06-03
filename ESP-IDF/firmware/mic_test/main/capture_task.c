@@ -98,24 +98,18 @@ static bool analyze_raw_file(const char *path,
 {
     static uint8_t raw_bytes[SDACS_RAW_CHUNK_SIZE * 3];
     static int32_t sample_buf[SDACS_RAW_CHUNK_SIZE];
+    static int32_t segment_buf[(SDACS_SAMPLE_RATE_HZ * 500) / 1000];
     int64_t segment_duration_us = (int64_t)SDACS_SAMPLE_RATE_HZ * 500LL / 1000LL;
-    size_t segment_samples = (SDACS_SAMPLE_RATE_HZ * 500) / 1000;
-    int32_t *segment_buf = calloc(segment_samples, sizeof(*segment_buf));
-    if (!segment_buf) {
-        ESP_LOGE(TAG, "Failed to allocate segment buffer");
-        return false;
-    }
+    size_t segment_samples = sizeof(segment_buf) / sizeof(segment_buf[0]);
 
     FILE *f = fopen(path, "rb");
     if (!f) {
         ESP_LOGE(TAG, "Failed to open RAW file for analysis: %s", path);
-        free(segment_buf);
         return false;
     }
 
     if (fseek(f, 44, SEEK_SET) != 0) {
         fclose(f);
-        free(segment_buf);
         ESP_LOGE(TAG, "Failed to seek past RAW header: %s", path);
         return false;
     }
@@ -184,7 +178,6 @@ static bool analyze_raw_file(const char *path,
     }
 
     fclose(f);
-    free(segment_buf);
     return ok;
 }
 
