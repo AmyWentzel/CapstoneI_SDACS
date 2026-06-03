@@ -18,6 +18,7 @@
 
 #include "services/gap/ble_svc_gap.h"
 
+#include "node_identity.h"
 #include "sdacs_config.h"
 
 static const char *TAG = "ble_locator";
@@ -79,16 +80,27 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg)
 
 static esp_err_t sdacs_ble_start_advertising(const char *node_id)
 {
-    char device_name[32];
-    const char *effective_node_id =
-        (node_id && node_id[0] != '\0') ? node_id : SDACS_NODE_ID;
+    char device_name[32] = {0};
+    char mfg_payload[32] = {0};
+    const char *effective_node_id = sdacs_node_id();
+    esp_err_t err = ESP_OK;
 
-    snprintf(
-        device_name,
-        sizeof(device_name),
-        "SDACS-%s",
-        effective_node_id
-    );
+    (void)node_id;
+
+    if (!sdacs_node_id_is_valid(effective_node_id)) {
+        ESP_LOGE(TAG, "Invalid compiled BLE node ID: %s",
+                 effective_node_id ? effective_node_id : "(null)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    err = sdacs_get_ble_name(device_name, sizeof(device_name));
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = sdacs_get_ble_mfg_payload(mfg_payload, sizeof(mfg_payload));
+    if (err != ESP_OK) {
+        return err;
+    }
 
     int rc = ble_svc_gap_device_name_set(device_name);
     if (rc != 0) {
@@ -112,13 +124,7 @@ static esp_err_t sdacs_ble_start_advertising(const char *node_id)
      * Payload format:
      *   "SDACS:" + node_id
      */
-    char mfg_payload[32];
-    int mfg_len = snprintf(
-        mfg_payload,
-        sizeof(mfg_payload),
-        "SDACS:%s",
-        effective_node_id
-    );
+    int mfg_len = strlen(mfg_payload);
 
     if (mfg_len > 0 && mfg_len < (int)sizeof(mfg_payload)) {
         fields.mfg_data = (uint8_t *)mfg_payload;
@@ -156,6 +162,9 @@ static esp_err_t sdacs_ble_start_advertising(const char *node_id)
         return ESP_FAIL;
     }
 
+    ESP_LOGI(TAG, "BLE active node ID: %s", effective_node_id);
+    ESP_LOGI(TAG, "BLE GAP name: %s", device_name);
+    ESP_LOGI(TAG, "BLE manufacturer payload: %s", mfg_payload);
     ESP_LOGI(TAG, "BLE advertising as %s", device_name);
     return ESP_OK;
 }

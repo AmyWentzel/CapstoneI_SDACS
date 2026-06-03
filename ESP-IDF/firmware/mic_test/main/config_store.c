@@ -19,7 +19,7 @@
 #define DEFAULT_WIFI_SSID  ""
 #define DEFAULT_WIFI_PASS  ""
 #define DEFAULT_MQTT_URI   "mqtt://192.168.1.50"
-#define DEFAULT_MQTT_TOPIC "sdacs/node/node01/features"
+#define DEFAULT_MQTT_TOPIC ""
 #define DEFAULT_NODE_ID    "node01"
 #define DEFAULT_SAMPLE_HZ  48000U
 #define DEFAULT_CAL_MDB    94000
@@ -251,6 +251,31 @@ esp_err_t config_store_get_node_id(const char **node_id)
     }
     *node_id = s_node_id;
     return ESP_OK;
+}
+
+esp_err_t config_store_peek_deprecated_node_id(char *out, size_t out_sz)
+{
+    nvs_handle_t nvs = 0;
+    size_t len = out_sz;
+    esp_err_t err = ESP_OK;
+
+    if (!out || out_sz == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    out[0] = '\0';
+    err = nvs_open(CFG_NS, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_str(nvs, KEY_NODE_ID, out, &len);
+    nvs_close(nvs);
+    if (err != ESP_OK) {
+        out[0] = '\0';
+    }
+
+    return err;
 }
 
 esp_err_t config_store_set_node_id(const char *node_id)

@@ -14,6 +14,8 @@
 
 #include "driver/i2c.h"
 #include "config_store.h"
+#include "node_identity.h"
+#include "sdacs_config.h"
 #include "shared_i2c_bus.h"
 #include "wifi_mqtt.h"
 
@@ -39,34 +41,19 @@ static temp_humidity_ctx_t g_ctx = {0};
 
 static void build_publish_topic(char *out, size_t out_sz)
 {
-    const char *base_topic = NULL;
-    const char *broker_uri = NULL;
     if (!out || out_sz == 0) return;
 
     out[0] = '\0';
-    esp_err_t err = config_store_get_mqtt(&broker_uri, &base_topic);
-    (void)broker_uri;
-    if (err != ESP_OK || !base_topic || base_topic[0] == '\0') return;
-
-    int n = snprintf(out, out_sz, "%s/temp_humidity", base_topic);
-    if (n <= 0 || n >= (int)out_sz) {
-        out[0] = '\0';
-    }
+    (void)sdacs_build_topic(out, out_sz, "/temp_humidity");
 }
 
 static void load_node_id(char *out, size_t out_sz)
 {
-    const char *node_id = NULL;
     if (!out || out_sz == 0) return;
 
     out[0] = '\0';
-    if (config_store_get_node_id(&node_id) == ESP_OK && node_id && node_id[0] != '\0') {
-        strncpy(out, node_id, out_sz - 1);
-        out[out_sz - 1] = '\0';
-    } else {
-        strncpy(out, "node01", out_sz - 1);
-        out[out_sz - 1] = '\0';
-    }
+    strncpy(out, sdacs_node_id(), out_sz - 1);
+    out[out_sz - 1] = '\0';
 }
 
 static esp_err_t i2c_write(int port, uint8_t addr, const uint8_t *data, size_t len)
@@ -304,9 +291,13 @@ bool temp_humidity_publish_latest_once(const char *phase)
     char payload[224];
     int len = snprintf(
         payload, sizeof(payload),
-        "{\"phase\":\"%s\",\"node\":\"%s\",\"t_us\":%" PRIi64 ",\"seq\":%u,\"temp_c\":%.2f,\"rh_percent\":%.2f,\"err\":%u}",
-        phase,
+        "{\"node_id\":\"%s\",\"record_type\":\"temp_humidity\",\"timestamp\":%" PRIi64 ","
+        "\"fw_version\":\"%s\",\"phase\":\"%s\",\"t_us\":%" PRIi64 ",\"seq\":%u,"
+        "\"temp_c\":%.2f,\"rh_percent\":%.2f,\"err\":%u}",
         g_ctx.node_id,
+        (int64_t)snap.last_sample_time_us,
+        SDACS_FW_VERSION,
+        phase,
         (int64_t)snap.last_sample_time_us,
         (unsigned)snap.sample_count,
         (double)snap.temp_c,

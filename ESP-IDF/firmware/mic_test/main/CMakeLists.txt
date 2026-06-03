@@ -18,6 +18,7 @@ idf_component_register(
         "fft_metrics.c"
         "fuel_gauge.c"
         "network_provisioning.c"
+        "node_identity.c"
         "ota_manager.c"
         "run_storage.c"
         "shared_i2c_bus.c"

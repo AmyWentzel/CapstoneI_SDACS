@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -21,8 +22,11 @@ esp_err_t config_store_set_wifi(const char *ssid, const char *pass);
 esp_err_t config_store_get_mqtt(const char **broker_uri, const char **topic);
 esp_err_t config_store_set_mqtt(const char *broker_uri, const char *topic);
 
+// Deprecated compatibility only. Active node identity comes from SDACS_NODE_ID.
 esp_err_t config_store_get_node_id(const char **node_id);
+// Deprecated compatibility only. Do not use this for active node identity.
 esp_err_t config_store_set_node_id(const char *node_id);
+esp_err_t config_store_peek_deprecated_node_id(char *out, size_t out_sz);
 
 esp_err_t config_store_get_sample_rate_hz(uint32_t *sample_rate_hz);
 esp_err_t config_store_set_sample_rate_hz(uint32_t sample_rate_hz);

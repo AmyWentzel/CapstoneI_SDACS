@@ -14,6 +14,7 @@
 #include "esp_timer.h"
 
 #include "config_store.h"
+#include "node_identity.h"
 #include "sdacs_config.h"
 #include "shared_i2c_bus.h"
 #include "wifi_mqtt.h"
@@ -44,97 +45,25 @@ typedef struct
 
 static fuel_gauge_ctx_t g_ctx = {0};
 
-static bool strip_topic_suffix(char *topic, const char *suffix)
-{
-    size_t topic_len = 0;
-    size_t suffix_len = 0;
-
-    if (!topic || !suffix) {
-        return false;
-    }
-
-    topic_len = strlen(topic);
-    suffix_len = strlen(suffix);
-    if (topic_len < suffix_len) {
-        return false;
-    }
-
-    if (strcmp(topic + topic_len - suffix_len, suffix) != 0) {
-        return false;
-    }
-
-    topic[topic_len - suffix_len] = '\0';
-    return true;
-}
-
-static void normalize_base_topic(const char *configured_topic, char *out, size_t out_sz)
-{
-    if (!out || out_sz == 0) {
-        return;
-    }
-
-    out[0] = '\0';
-    if (!configured_topic || configured_topic[0] == '\0') {
-        return;
-    }
-
-    strncpy(out, configured_topic, out_sz - 1);
-    out[out_sz - 1] = '\0';
-
-    if (strip_topic_suffix(out, "/status/heartbeat")) return;
-    if (strip_topic_suffix(out, "/status")) return;
-    if (strip_topic_suffix(out, "/features")) return;
-    if (strip_topic_suffix(out, "/audio")) return;
-    if (strip_topic_suffix(out, "/temp_humidity")) return;
-    if (strip_topic_suffix(out, "/battery")) return;
-}
-
 static void build_publish_topic(char *out, size_t out_sz)
 {
-    char base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1] = {0};
-    const char *broker_uri = NULL;
-    const char *configured_topic = NULL;
-    int len = 0;
-
     if (!out || out_sz == 0) {
         return;
     }
 
     out[0] = '\0';
-    if (wifi_mqtt_get_base_topic(base_topic, sizeof(base_topic)) != ESP_OK) {
-        if (config_store_get_mqtt(&broker_uri, &configured_topic) != ESP_OK) {
-            return;
-        }
-        (void)broker_uri;
-        normalize_base_topic(configured_topic, base_topic, sizeof(base_topic));
-    }
-
-    if (base_topic[0] == '\0') {
-        return;
-    }
-
-    len = snprintf(out, out_sz, "%s/battery", base_topic);
-    if (len <= 0 || len >= (int)out_sz) {
-        out[0] = '\0';
-    }
+    (void)sdacs_build_topic(out, out_sz, "/fuel_gauge");
 }
 
 static void load_node_id(char *out, size_t out_sz)
 {
-    const char *node_id = NULL;
-
     if (!out || out_sz == 0) {
         return;
     }
 
     out[0] = '\0';
-    if (config_store_get_node_id(&node_id) == ESP_OK && node_id && node_id[0] != '\0') {
-        strncpy(out, node_id, out_sz - 1);
-        out[out_sz - 1] = '\0';
-    } else {
-        strncpy(out, "node01", out_sz - 1);
-        out[out_sz - 1] = '\0';
-    }
+    strncpy(out, sdacs_node_id(), out_sz - 1);
+    out[out_sz - 1] = '\0';
 }
 
 static esp_err_t max17048_read_reg16(int port, uint8_t addr, uint8_t reg, uint16_t *value)
@@ -233,6 +162,9 @@ static void fuel_gauge_publish_sample(const fuel_gauge_reading_t *snap, const ch
         payload, sizeof(payload),
         "{"
         "\"node_id\":\"%s\","
+        "\"record_type\":\"fuel_gauge\","
+        "\"timestamp\":%" PRIi64 ","
+        "\"fw_version\":\"%s\","
         "\"phase\":\"%s\","
         "\"soc_percent\":%.2f,"
         "\"voltage_v\":%.4f,"
@@ -243,6 +175,8 @@ static void fuel_gauge_publish_sample(const fuel_gauge_reading_t *snap, const ch
         "\"t_us\":%" PRIi64
         "}",
         g_ctx.node_id,
+        (int64_t)snap->last_sample_time_us,
+        SDACS_FW_VERSION,
         phase,
         (double)snap->soc_percent,
         (double)snap->voltage_v,
@@ -471,6 +405,9 @@ bool fuel_gauge_publish_latest_once(const char *phase)
         payload, sizeof(payload),
         "{"
         "\"node_id\":\"%s\","
+        "\"record_type\":\"fuel_gauge\","
+        "\"timestamp\":%" PRIi64 ","
+        "\"fw_version\":\"%s\","
         "\"phase\":\"%s\","
         "\"soc_percent\":%.2f,"
         "\"voltage_v\":%.4f,"
@@ -481,6 +418,8 @@ bool fuel_gauge_publish_latest_once(const char *phase)
         "\"t_us\":%" PRIi64
         "}",
         g_ctx.node_id,
+        (int64_t)snap.last_sample_time_us,
+        SDACS_FW_VERSION,
         phase,
         (double)snap.soc_percent,
         (double)snap.voltage_v,

@@ -1,11 +1,13 @@
 #include "command_dispatcher.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 
 #include "capture_task.h"
 #include "device_state.h"
@@ -47,11 +49,14 @@ static void publish_response(const char *cmd, const char *request_id, const char
 
     if (snprintf(payload,
                  sizeof(payload),
-                 "{\"node\":\"%s\",\"mode\":\"%s\",\"fw_version\":\"%s\",\"ota_capable\":true,"
+                 "{\"node_id\":\"%s\",\"record_type\":\"command_response\","
+                 "\"timestamp\":%" PRIi64 ",\"fw_version\":\"%s\","
+                 "\"mode\":\"%s\",\"ota_capable\":true,"
                  "\"cmd\":\"%s\",\"result\":\"%s\",\"reason\":\"%s\",\"request_id\":\"%s\"}",
                  s_node_id[0] ? s_node_id : SDACS_NODE_ID,
-                 device_state_to_str(device_state_get()),
+                 (int64_t)esp_timer_get_time(),
                  SDACS_FW_VERSION,
+                 device_state_to_str(device_state_get()),
                  cmd ? cmd : "",
                  result ? result : "",
                  reason ? reason : "",
@@ -85,6 +90,8 @@ static void publish_capture_status(const char *request_id,
                  "{"
                  "\"node_id\":\"%s\","
                  "\"record_type\":\"capture_status\","
+                 "\"timestamp\":%" PRIi64 ","
+                 "\"fw_version\":\"%s\","
                  "\"request_id\":\"%s\","
                  "\"state\":\"%s\","
                  "\"delay_ms\":%u,"
@@ -92,6 +99,8 @@ static void publish_capture_status(const char *request_id,
                  "\"message\":\"%s\""
                  "}",
                  s_node_id[0] ? s_node_id : SDACS_NODE_ID,
+                 (int64_t)esp_timer_get_time(),
+                 SDACS_FW_VERSION,
                  request_id ? request_id : "",
                  device_state_to_str(state),
                  (unsigned)delay_ms,

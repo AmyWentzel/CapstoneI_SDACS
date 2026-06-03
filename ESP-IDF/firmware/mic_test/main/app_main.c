@@ -10,6 +10,7 @@
 #include "device_state.h"
 #include "fft_metrics.h"
 #include "network_provisioning.h"
+#include "node_identity.h"
 #include "run_storage.h"
 #include "sdacs_config.h"
 #include "shared_i2c_bus.h"
@@ -19,53 +20,36 @@
 static const char *TAG = "app_main";
 static run_storage_t s_storage = {0};
 
-static void load_base_topic(char *out, size_t out_sz)
+static void log_identity_summary(void)
 {
-    const char *broker_uri = NULL;
-    const char *configured_topic = NULL;
-    const char *suffixes[] = {
-        "/status/heartbeat",
-        "/status",
-        "/features",
-        "/audio",
-        "/temp_humidity",
-    };
-    size_t i = 0;
+    char nvs_node_id[CONFIG_STORE_MAX_NODE_ID_LEN + 1] = {0};
+    char ble_name[32] = {0};
+    char mqtt_base[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1] = {0};
 
-    if (!out || out_sz == 0) {
-        return;
+    ESP_LOGI(TAG, "Compiled Node ID: %s", SDACS_NODE_ID);
+    ESP_LOGI(TAG, "Active Node ID: %s", sdacs_node_id());
+
+    if (config_store_peek_deprecated_node_id(nvs_node_id, sizeof(nvs_node_id)) == ESP_OK &&
+        nvs_node_id[0] != '\0') {
+        ESP_LOGW(TAG,
+                 "Deprecated NVS node_id found but ignored. Active Node ID comes from firmware build.");
+        ESP_LOGW(TAG, "NVS Node ID: %s (ignored/deprecated)", nvs_node_id);
+    } else {
+        ESP_LOGI(TAG, "NVS Node ID: ignored/deprecated if present");
     }
 
-    out[0] = '\0';
-    if (config_store_get_mqtt(&broker_uri, &configured_topic) != ESP_OK) {
-        return;
+    if (sdacs_get_ble_name(ble_name, sizeof(ble_name)) == ESP_OK) {
+        ESP_LOGI(TAG, "BLE name: %s", ble_name);
     }
-    (void)broker_uri;
-
-    if (!configured_topic || configured_topic[0] == '\0') {
-        return;
-    }
-
-    strncpy(out, configured_topic, out_sz - 1);
-    out[out_sz - 1] = '\0';
-
-    for (i = 0; i < (sizeof(suffixes) / sizeof(suffixes[0])); ++i) {
-        size_t topic_len = strlen(out);
-        size_t suffix_len = strlen(suffixes[i]);
-
-        if (topic_len >= suffix_len &&
-            strcmp(out + topic_len - suffix_len, suffixes[i]) == 0) {
-            out[topic_len - suffix_len] = '\0';
-            break;
-        }
+    if (sdacs_get_mqtt_base(mqtt_base, sizeof(mqtt_base)) == ESP_OK) {
+        ESP_LOGI(TAG, "MQTT base: %s", mqtt_base);
     }
 }
 
 void app_main(void)
 {
     char base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1] = {0};
-    const char *configured_node_id = NULL;
-    const char *node_id = SDACS_NODE_ID;
+    const char *node_id = sdacs_node_id();
     shared_i2c_bus_config_t i2c_cfg = {
         .port = SDACS_TEMP_HUMIDITY_I2C_PORT,
         .sda_gpio = SDACS_TEMP_HUMIDITY_SDA_GPIO,
@@ -75,9 +59,10 @@ void app_main(void)
 
     ESP_ERROR_CHECK(config_store_init());
     ESP_ERROR_CHECK(network_provisioning_apply_defaults());
-    if (config_store_get_node_id(&configured_node_id) == ESP_OK &&
-        configured_node_id && configured_node_id[0] != '\0') {
-        node_id = configured_node_id;
+    log_identity_summary();
+    if (!sdacs_node_id_is_valid(node_id)) {
+        ESP_LOGE(TAG, "Invalid compiled Node ID: %s", node_id ? node_id : "(null)");
+        return;
     }
 
 #if SDACS_BLE_LOCATOR_ENABLED
@@ -103,7 +88,7 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_input_init());
     ESP_ERROR_CHECK(fft_metrics_init());
     device_state_init();
-    load_base_topic(base_topic, sizeof(base_topic));
+    ESP_ERROR_CHECK(sdacs_get_mqtt_base(base_topic, sizeof(base_topic)));
     command_dispatcher_init(&s_storage, node_id, base_topic);
     ESP_ERROR_CHECK(wifi_mqtt_set_command_callback(command_dispatcher_handle));
 

@@ -27,8 +27,7 @@ esp_err_t network_provisioning_apply_defaults(void)
 
     have_wifi_defaults = (SDACS_PROVISION_WIFI_SSID[0] != '\0' &&
                           SDACS_PROVISION_WIFI_PASS[0] != '\0');
-    have_mqtt_defaults = (SDACS_PROVISION_MQTT_URI[0] != '\0' &&
-                          SDACS_PROVISION_MQTT_TOPIC[0] != '\0');
+    have_mqtt_defaults = (SDACS_PROVISION_MQTT_URI[0] != '\0');
 
     if (!ssid || ssid[0] == '\0') {
         if (!have_wifi_defaults) {
@@ -52,31 +51,33 @@ esp_err_t network_provisioning_apply_defaults(void)
 
 #if SDACS_PROVISION_ALWAYS_SYNC_MQTT
     if (have_mqtt_defaults &&
-        (!broker_uri || !mqtt_topic ||
-         strcmp(broker_uri, SDACS_PROVISION_MQTT_URI) != 0 ||
-         strcmp(mqtt_topic, SDACS_PROVISION_MQTT_TOPIC) != 0)) {
+        (!broker_uri || strcmp(broker_uri, SDACS_PROVISION_MQTT_URI) != 0)) {
         ESP_RETURN_ON_ERROR(
-            config_store_set_mqtt(SDACS_PROVISION_MQTT_URI, SDACS_PROVISION_MQTT_TOPIC),
+            config_store_set_mqtt(SDACS_PROVISION_MQTT_URI, ""),
             TAG,
             "Failed to sync MQTT defaults");
         broker_uri = SDACS_PROVISION_MQTT_URI;
-        mqtt_topic = SDACS_PROVISION_MQTT_TOPIC;
+        mqtt_topic = "";
         ESP_LOGW(TAG, "Synced MQTT settings in NVS to firmware defaults.");
     }
 #endif
 
-    if ((!broker_uri || broker_uri[0] == '\0' || !mqtt_topic || mqtt_topic[0] == '\0') && have_mqtt_defaults) {
+    if ((!broker_uri || broker_uri[0] == '\0') && have_mqtt_defaults) {
         ESP_RETURN_ON_ERROR(
-            config_store_set_mqtt(SDACS_PROVISION_MQTT_URI, SDACS_PROVISION_MQTT_TOPIC),
+            config_store_set_mqtt(SDACS_PROVISION_MQTT_URI, ""),
             TAG,
             "Failed to provision MQTT defaults");
         broker_uri = SDACS_PROVISION_MQTT_URI;
-        mqtt_topic = SDACS_PROVISION_MQTT_TOPIC;
+        mqtt_topic = "";
         ESP_LOGI(TAG, "Provisioned MQTT defaults into NVS.");
+    }
+
+    if (mqtt_topic && mqtt_topic[0] != '\0') {
+        ESP_LOGW(TAG, "Deprecated NVS mqtt_topic found but ignored. Runtime topics come from compiled Node ID.");
     }
 
     ESP_LOGI(TAG, "Active MQTT config: broker=%s topic=%s",
              broker_uri ? broker_uri : "(null)",
-             mqtt_topic ? mqtt_topic : "(null)");
+             "(compiled from Node ID)");
     return ESP_OK;
 }

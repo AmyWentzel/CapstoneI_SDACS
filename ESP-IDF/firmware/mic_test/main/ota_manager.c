@@ -1,5 +1,6 @@
 #include "ota_manager.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,8 +13,10 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 
 #include "device_state.h"
+#include "node_identity.h"
 #include "sdacs_config.h"
 #include "wifi_mqtt.h"
 
@@ -30,15 +33,17 @@ static void publish_ota_status(const char *state, const char *message, const cha
     char topic[160];
     char payload[320];
 
-    if (snprintf(topic, sizeof(topic), "sdacs/node/%s/ota/status", SDACS_NODE_ID) >= (int)sizeof(topic)) {
+    if (sdacs_build_topic(topic, sizeof(topic), "/ota/status") != ESP_OK) {
         return;
     }
 
     if (snprintf(payload,
                  sizeof(payload),
-                 "{\"node\":\"%s\",\"mode\":\"%s\",\"fw_version\":\"%s\","
+                 "{\"node_id\":\"%s\",\"record_type\":\"ota_status\",\"timestamp\":%" PRIi64 ","
+                 "\"mode\":\"%s\",\"fw_version\":\"%s\","
                  "\"target_version\":\"%s\",\"state\":\"%s\",\"message\":\"%s\"}",
-                 SDACS_NODE_ID,
+                 sdacs_node_id(),
+                 (int64_t)esp_timer_get_time(),
                  device_state_to_str(device_state_get()),
                  SDACS_FW_VERSION,
                  target_version ? target_version : "",

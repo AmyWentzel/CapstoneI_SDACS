@@ -22,11 +22,15 @@
 #define SDACS_SECRET_MQTT_TOPIC       ""
 #endif
 
+#ifndef SDACS_SECRET_NODE_ID
+#define SDACS_SECRET_NODE_ID          "node01"
+#endif
+
 #ifndef SDACS_SECRET_ALWAYS_SYNC_MQTT
 #define SDACS_SECRET_ALWAYS_SYNC_MQTT 0
 #endif
 
-#define SDACS_NODE_ID                    "node01"
+#define SDACS_NODE_ID                    SDACS_SECRET_NODE_ID
 #define SDACS_FW_VERSION                 "ota-enable-v2"
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 

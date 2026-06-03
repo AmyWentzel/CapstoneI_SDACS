@@ -1,5 +1,6 @@
 #include "capture_task.h"
 
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,8 @@ static void capture_publish_status(capture_task_state_t *state,
         "{"
         "\"node_id\":\"%s\","
         "\"record_type\":\"capture_status\","
+        "\"timestamp\":%" PRIi64 ","
+        "\"fw_version\":\"%s\","
         "\"request_id\":\"%s\","
         "\"state\":\"%s\","
         "\"delay_ms\":%u,"
@@ -56,6 +59,8 @@ static void capture_publish_status(capture_task_state_t *state,
         "\"message\":\"%s\""
         "}",
         state->node_id,
+        (int64_t)esp_timer_get_time(),
+        SDACS_FW_VERSION,
         state->request_id,
         device_state_to_str(mode),
         (unsigned)state->ctx.delay_ms,
@@ -105,6 +110,7 @@ static void capture_publish_complete(capture_task_state_t *state,
         "{"
         "\"node_id\":\"%s\","
         "\"record_type\":\"capture_complete\","
+        "\"fw_version\":\"%s\","
         "\"request_id\":\"%s\","
         "\"state\":\"complete\","
         "\"record_seconds\":%u,"
@@ -117,6 +123,7 @@ static void capture_publish_complete(capture_task_state_t *state,
         "\"timestamp\":\"%s\""
         "}",
         state->node_id,
+        SDACS_FW_VERSION,
         state->request_id,
         (unsigned)state->ctx.record_seconds,
         state->ctx.storage->raw_path,

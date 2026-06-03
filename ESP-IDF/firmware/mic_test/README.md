@@ -61,6 +61,52 @@ to publish heartbeat, battery, temp/humidity, audio, and feature topics under
 Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
 for BLE devices and do not receive commands over BLE.
 
+## Flashing Four Unique Nodes
+
+Node identity is compiled into the firmware through `SDACS_SECRET_NODE_ID`.
+Runtime NVS `node_id` values are deprecated and ignored. Use one firmware build
+per node so BLE, MQTT, storage, telemetry JSON, OTA status, and future
+API/Flutter integrations all use the same fixed identity.
+
+```powershell
+.\flash_metro.ps1 -Port COM8  -NodeId node01 -Erase
+.\flash_metro.ps1 -Port COM9  -NodeId node02 -Erase
+.\flash_metro.ps1 -Port COM10 -NodeId node03 -Erase
+.\flash_metro.ps1 -Port COM11 -NodeId node04 -Erase
+```
+
+Expected BLE names:
+
+```text
+SDACS-node01
+SDACS-node02
+SDACS-node03
+SDACS-node04
+```
+
+Subscribe Node-RED or a test client to all node topics with:
+
+```text
+sdacs/node/+/#
+```
+
+On boot, the serial monitor should show the compiled and active node identity,
+the BLE name, and the MQTT base topic, for example:
+
+```text
+Compiled Node ID: node02
+Active Node ID: node02
+BLE name: SDACS-node02
+MQTT base: sdacs/node/node02
+```
+
+Troubleshooting:
+
+- If BLE still shows `node01`, erase flash once with `-Erase`.
+- Confirm the serial monitor shows the expected compiled and active Node ID.
+- Confirm the firmware is not reading `node_id` from NVS.
+- Confirm Node-RED subscribes to wildcard topics such as `sdacs/node/+/#`.
+
 ## Delayed Synchronized Capture
 
 Branch: `feature/delayed-synched-capture`
