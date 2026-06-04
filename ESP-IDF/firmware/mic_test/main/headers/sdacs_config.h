@@ -60,6 +60,14 @@
 #define SDACS_TEMP_HUMIDITY_ADDR         0x44
 #define SDACS_TEMP_HUMIDITY_PERIOD_MS    500
 
+// Battery LED pin mappings (Adafruit Metro S3 A0-A5 -> GPIO)
+#define SDACS_LED_A0_GPIO                GPIO_NUM_14
+#define SDACS_LED_A1_GPIO                GPIO_NUM_15
+#define SDACS_LED_A2_GPIO                GPIO_NUM_16
+#define SDACS_LED_A3_GPIO                GPIO_NUM_17
+#define SDACS_LED_A4_GPIO                GPIO_NUM_18
+#define SDACS_LED_A5_GPIO                GPIO_NUM_1
+
 #define SDACS_PROVISION_WIFI_SSID        SDACS_SECRET_WIFI_SSID
 #define SDACS_PROVISION_WIFI_PASS        SDACS_SECRET_WIFI_PASS
 #define SDACS_PROVISION_MQTT_URI         SDACS_SECRET_MQTT_URI
