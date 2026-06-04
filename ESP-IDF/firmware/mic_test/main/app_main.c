@@ -10,11 +10,13 @@
 #include "config_store.h"
 #include "device_state.h"
 #include "fft_metrics.h"
+#include "fuel_gauge.h"
 #include "network_provisioning.h"
 #include "node_identity.h"
 #include "run_storage.h"
 #include "sdacs_config.h"
 #include "shared_i2c_bus.h"
+#include "temp_humidity.h"
 #include "time_sync.h"
 #include "wifi_mqtt.h"
 
@@ -86,6 +88,22 @@ void app_main(void)
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
     ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
     ESP_ERROR_CHECK(battery_leds_init());
+
+    if (!temp_humidity_start(
+            SDACS_TEMP_HUMIDITY_I2C_PORT,
+            SDACS_TEMP_HUMIDITY_ADDR,
+            SDACS_TEMP_HUMIDITY_PERIOD_MS)) {
+        ESP_LOGW(TAG, "SHT41 temp/humidity task failed to start; continuing without periodic T/RH");
+    }
+
+#if SDACS_FUEL_GAUGE_ENABLED
+    if (!fuel_gauge_start(
+            SDACS_FUEL_GAUGE_I2C_PORT,
+            SDACS_FUEL_GAUGE_ADDR,
+            SDACS_FUEL_GAUGE_PERIOD_MS)) {
+        ESP_LOGW(TAG, "MAX17048 fuel gauge task failed to start; continuing without periodic battery telemetry");
+    }
+#endif
 
     ESP_ERROR_CHECK(audio_input_init());
     ESP_ERROR_CHECK(fft_metrics_init());
