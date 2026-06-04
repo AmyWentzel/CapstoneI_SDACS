@@ -57,8 +57,15 @@ esp_err_t audio_input_init(void)
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_audio.rx_chan), TAG, "enable failed");
 
     s_audio.initialized = true;
-    ESP_LOGI(TAG, "I2S initialized: BCLK=%d WS=%d DIN=%d SR=%d",
-             SDACS_I2S_BCLK_GPIO, SDACS_I2S_WS_GPIO, SDACS_I2S_DIN_GPIO, SDACS_SAMPLE_RATE_HZ);
+    ESP_LOGI(TAG, "I2S initialized: mic=%s BCLK=%d WS=%d DIN=%d SR=%d valid_bits=%d slot_bits=%d sensitivity=%.1f dBFS@94dB SPL",
+             SDACS_MIC_MODEL,
+             SDACS_I2S_BCLK_GPIO,
+             SDACS_I2S_WS_GPIO,
+             SDACS_I2S_DIN_GPIO,
+             SDACS_SAMPLE_RATE_HZ,
+             SDACS_MIC_VALID_BITS,
+             SDACS_MIC_I2S_SLOT_BITS,
+             (double)SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL);
     return ESP_OK;
 }
 

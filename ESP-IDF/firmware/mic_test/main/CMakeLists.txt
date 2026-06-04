@@ -11,6 +11,7 @@ idf_component_register(
         "app_main.c"
        
         "audio_input.c"
+        "battery_leds.c"
         "ble_locator.c"
         "capture_task.c"
         "command_dispatcher.c"

@@ -4,6 +4,7 @@
 #include "esp_log.h"
 
 #include "audio_input.h"
+#include "battery_leds.h"
 #include "ble_locator.h"
 #include "command_dispatcher.h"
 #include "config_store.h"
@@ -84,6 +85,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
     ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
+    ESP_ERROR_CHECK(battery_leds_init());
 
     ESP_ERROR_CHECK(audio_input_init());
     ESP_ERROR_CHECK(fft_metrics_init());

@@ -61,6 +61,14 @@ to publish heartbeat, battery, temp/humidity, audio, and feature topics under
 Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
 for BLE devices and do not receive commands over BLE.
 
+## SDACS Hardware Pinout
+
+- ICS-43432 I2S microphone: BCLK GPIO11, DOUT/DIN GPIO12, LRCLK/WS GPIO13.
+- SHT41 temperature/humidity sensor: I2C SDA GPIO47, SCL GPIO48, address `0x44`.
+- MAX17048 fuel gauge: shared I2C bus, address `0x36`.
+- Battery LED array: GPIO14, GPIO15, GPIO16, GPIO17, GPIO18, GPIO1.
+- Metro ESP32-S3 microSD: SCK GPIO39, MOSI GPIO42, MISO GPIO21, CS GPIO45.
+
 ## Flashing Four Unique Nodes
 
 Node identity is compiled into the firmware through `SDACS_SECRET_NODE_ID`.

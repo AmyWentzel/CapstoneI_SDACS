@@ -8,6 +8,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "battery_leds.h"
 #include "driver/i2c.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -225,6 +226,7 @@ static void fuel_gauge_task(void *arg)
             sample.error_count = g_ctx.latest.error_count;
             sample.last_sample_time_us = g_ctx.latest.last_sample_time_us;
             g_ctx.latest = sample;
+            battery_leds_show_percent(sample.soc_percent);
         } else {
             g_ctx.latest.error_count++;
         }
@@ -375,6 +377,7 @@ bool fuel_gauge_read_once(int i2c_port,
              (double)out->soc_percent,
              (double)out->voltage_v,
              (double)out->charge_rate_percent_per_hr);
+    battery_leds_show_percent(out->soc_percent);
     return true;
 }
 
