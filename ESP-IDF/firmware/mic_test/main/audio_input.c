@@ -1,5 +1,7 @@
 #include "audio_input.h"
 
+#include <inttypes.h>
+#include <limits.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -18,6 +20,7 @@ typedef struct {
 
 static const char *TAG = "audio_input";
 static audio_input_t s_audio = {0};
+static uint32_t s_i2s_debug_read_count = 0;
 
 static inline int32_t i2s_word_to_s24(int32_t word)
 {
@@ -40,7 +43,13 @@ esp_err_t audio_input_init(void)
 
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SDACS_SAMPLE_RATE_HZ),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(
+        /*
+         * The board uses a mono ICS-43432 schematic. The microphone still outputs
+         * into one I2S left/right time slot selected by its LR pin. Start with mono
+         * Philips mode and left slot; if hardware debug shows zeros, test right
+         * slot or stereo slot timing as a separate follow-up.
+         */
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
             I2S_DATA_BIT_WIDTH_32BIT,
             I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
@@ -57,7 +66,7 @@ esp_err_t audio_input_init(void)
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_audio.rx_chan), TAG, "enable failed");
 
     s_audio.initialized = true;
-    ESP_LOGI(TAG, "I2S initialized: mic=%s BCLK=%d WS=%d DIN=%d SR=%d valid_bits=%d slot_bits=%d sensitivity=%.1f dBFS@94dB SPL",
+    ESP_LOGI(TAG, "I2S initialized: mic=%s format=philips slot_mode=mono slot_mask=left BCLK=%d WS=%d DIN=%d SR=%d valid_bits=%d slot_bits=%d sensitivity=%.1f dBFS@94dB SPL",
              SDACS_MIC_MODEL,
              SDACS_I2S_BCLK_GPIO,
              SDACS_I2S_WS_GPIO,
@@ -100,8 +109,44 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         *samples_read = max_samples;
     }
 
+    int32_t min_sample = INT32_MAX;
+    int32_t max_sample = INT32_MIN;
+    uint32_t zero_count = 0;
+
     for (size_t i = 0; i < *samples_read; ++i) {
-        dst[i] = i2s_word_to_s24(s_audio.raw[i]);
+        int32_t sample = i2s_word_to_s24(s_audio.raw[i]);
+        dst[i] = sample;
+
+        if (sample < min_sample) {
+            min_sample = sample;
+        }
+        if (sample > max_sample) {
+            max_sample = sample;
+        }
+        if (sample == 0) {
+            ++zero_count;
+        }
+    }
+
+    if (*samples_read == 0) {
+        min_sample = 0;
+        max_sample = 0;
+    }
+
+    ++s_i2s_debug_read_count;
+    if ((s_i2s_debug_read_count % 20U) == 0U) {
+        int32_t first_sample = (*samples_read > 0) ? dst[0] : 0;
+        uint32_t first_raw = (*samples_read > 0) ? (uint32_t)s_audio.raw[0] : 0U;
+
+        ESP_LOGI(TAG,
+                 "I2S debug: bytes=%" PRIu32 " samples=%" PRIu32 " raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " zeros=%" PRIu32,
+                 (uint32_t)bytes_read,
+                 (uint32_t)*samples_read,
+                 first_raw,
+                 first_sample,
+                 min_sample,
+                 max_sample,
+                 zero_count);
     }
 
     return ESP_OK;
