@@ -11,8 +11,10 @@
 
 #include "capture_task.h"
 #include "device_state.h"
+#include "fuel_gauge.h"
 #include "ota_manager.h"
 #include "sdacs_config.h"
+#include "temp_humidity.h"
 #include "wifi_mqtt.h"
 
 static const char *TAG = "cmd_dispatch";
@@ -226,6 +228,10 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
     device_state_set(SDACS_MODE_ARMED);
     publish_capture_status(request_id, SDACS_MODE_ARMED, delay_ms, record_seconds,
                            "capture command accepted");
+    (void)temp_humidity_publish_latest_once("capture_armed");
+#if SDACS_FUEL_GAUGE_ENABLED
+    (void)fuel_gauge_publish_latest_once("capture_armed");
+#endif
 
     esp_err_t err = capture_task_start(&ctx);
     if (err != ESP_OK) {
@@ -275,6 +281,10 @@ static void handle_ota_update(const cJSON *root, const char *request_id)
 static void handle_report_status(const char *request_id)
 {
     (void)wifi_mqtt_publish_heartbeat("online");
+    (void)temp_humidity_publish_latest_once("report_status");
+#if SDACS_FUEL_GAUGE_ENABLED
+    (void)fuel_gauge_publish_latest_once("report_status");
+#endif
     publish_response("report_status", request_id, "ok", "status_report");
 }
 

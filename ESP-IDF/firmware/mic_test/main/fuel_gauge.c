@@ -369,10 +369,25 @@ bool fuel_gauge_read_once(int i2c_port,
 
     if (err != ESP_OK) {
         out->error_count = 1;
+        if (g_ctx.lock) {
+            xSemaphoreTake(g_ctx.lock, portMAX_DELAY);
+            g_ctx.latest.sample_count++;
+            g_ctx.latest.error_count++;
+            g_ctx.latest.last_sample_time_us = out->last_sample_time_us;
+            xSemaphoreGive(g_ctx.lock);
+        }
         ESP_LOGW(TAG, "Final capture fuel gauge read failed: %s", esp_err_to_name(err));
         return false;
     }
 
+    if (g_ctx.lock) {
+        xSemaphoreTake(g_ctx.lock, portMAX_DELAY);
+        g_ctx.latest.sample_count++;
+        out->sample_count = g_ctx.latest.sample_count;
+        out->error_count = g_ctx.latest.error_count;
+        g_ctx.latest = *out;
+        xSemaphoreGive(g_ctx.lock);
+    }
     ESP_LOGI(TAG, "Final capture SOC=%.1f %% V=%.3f rate=%.2f %%/hr",
              (double)out->soc_percent,
              (double)out->voltage_v,

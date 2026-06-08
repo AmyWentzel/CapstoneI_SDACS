@@ -413,7 +413,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"batt_soc_percent\":%s,"
           "\"batt_voltage_v\":%s,"
           "\"batt_charge_rate_pct_per_hr\":%s,"
-          "\"batt_valid\":%s"
+          "\"batt_valid\":%s,"
+          "\"err\":%u"
         "}",
         f->node_id,
         f->node_id,
@@ -434,7 +435,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         batt_soc_buf,
         batt_voltage_buf,
         batt_rate_buf,
-        batt_valid_str
+        batt_valid_str,
+        (unsigned)f->err
     );
 }
 
@@ -484,7 +486,11 @@ static void mqtt_publish_task(void *arg)
                 0     // retain
             );
 
-            (void)msg_id; // optional debug
+            if (msg_id >= 0) {
+                ESP_LOGI(TAG, "features published seq=%u topic=%s", (unsigned)f.seq, s_cfg.topic);
+            } else {
+                ESP_LOGW(TAG, "features publish failed seq=%u topic=%s", (unsigned)f.seq, s_cfg.topic);
+            }
         }
     }
 }

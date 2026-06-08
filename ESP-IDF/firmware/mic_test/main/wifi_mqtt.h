@@ -21,6 +21,7 @@ typedef struct {
     float batt_voltage_v;
     float batt_charge_rate_pct_per_hr;
     bool batt_valid;
+    uint32_t err;
 } sdacs_features_t;
 
 typedef struct {

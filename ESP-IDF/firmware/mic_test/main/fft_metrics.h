@@ -13,6 +13,8 @@ typedef struct {
     float peak_db;
     float fft_peak_hz;
     int32_t peak_abs;
+    int32_t p2p_raw;
+    uint32_t zeros;
     uint32_t sample_count;
 } audio_metrics_t;
 

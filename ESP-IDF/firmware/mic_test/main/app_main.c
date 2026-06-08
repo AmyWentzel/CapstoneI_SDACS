@@ -1,5 +1,8 @@
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -104,6 +107,16 @@ void app_main(void)
         ESP_LOGW(TAG, "MAX17048 fuel gauge task failed to start; continuing without periodic battery telemetry");
     }
 #endif
+
+    vTaskDelay(pdMS_TO_TICKS(250));
+    if (wifi_mqtt_wait_connected(1000) == ESP_OK) {
+        (void)temp_humidity_publish_latest_once("boot");
+#if SDACS_FUEL_GAUGE_ENABLED
+        (void)fuel_gauge_publish_latest_once("boot");
+#endif
+    } else {
+        ESP_LOGW(TAG, "MQTT not ready for boot sensor snapshot publish");
+    }
 
     ESP_ERROR_CHECK(audio_input_init());
     ESP_ERROR_CHECK(fft_metrics_init());

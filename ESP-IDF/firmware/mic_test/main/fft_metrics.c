@@ -1,5 +1,6 @@
 #include "fft_metrics.h"
 
+#include <limits.h>
 #include <math.h>
 
 #include "esp_check.h"
@@ -15,6 +16,9 @@ typedef struct {
     int fft_index;
     double sum_sq;
     int32_t peak_abs;
+    int32_t min_sample;
+    int32_t max_sample;
+    uint32_t zeros;
     uint32_t count;
     bool initialized;
 } fft_metrics_ctx_t;
@@ -67,6 +71,8 @@ esp_err_t fft_metrics_init(void)
     }
 
     s_fft.initialized = true;
+    s_fft.min_sample = INT32_MAX;
+    s_fft.max_sample = INT32_MIN;
     return ESP_OK;
 }
 
@@ -97,6 +103,15 @@ void fft_metrics_accumulate_block(const int32_t *samples, size_t n)
         if (abs_sample > s_fft.peak_abs) {
             s_fft.peak_abs = abs_sample;
         }
+        if (sample < s_fft.min_sample) {
+            s_fft.min_sample = sample;
+        }
+        if (sample > s_fft.max_sample) {
+            s_fft.max_sample = sample;
+        }
+        if (sample == 0) {
+            s_fft.zeros++;
+        }
         s_fft.sum_sq += (double)sample * (double)sample;
         s_fft.count++;
     }
@@ -120,11 +135,16 @@ bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
         .peak_db = 20.0f * log10f(peak_norm + 1e-12f) + cal_offset_db,
         .fft_peak_hz = compute_fft_peak_hz(),
         .peak_abs = s_fft.peak_abs,
+        .p2p_raw = s_fft.max_sample - s_fft.min_sample,
+        .zeros = s_fft.zeros,
         .sample_count = s_fft.count,
     };
 
     s_fft.sum_sq = 0.0;
     s_fft.peak_abs = 0;
+    s_fft.min_sample = INT32_MAX;
+    s_fft.max_sample = INT32_MIN;
+    s_fft.zeros = 0;
     s_fft.count = 0;
     return true;
 }

@@ -137,9 +137,24 @@ Example Node-RED group command:
 Accepted commands publish capture status on `sdacs/node/<node_id>/status`, then
 the node waits `delay_ms`, records to SD, finalizes raw/WAV/metrics files,
 verifies they are non-empty, and only then publishes
-`sdacs/node/<node_id>/capture_complete`. Audio chunks and capture feature data
-are not streamed live during capture; Node-RED receives completion only after SD
-finalization succeeds.
+`sdacs/node/<node_id>/capture_complete`. Audio chunks are not streamed over
+MQTT; compact feature metrics are published during capture on
+`sdacs/node/<node_id>/features`.
+
+## MQTT Telemetry Verification
+
+Use these subscriptions while booting a node and running a group capture:
+
+```bash
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/features' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/temp_humidity' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/fuel_gauge' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/status/heartbeat' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/capture_complete' -v
+```
+
+Expected record types include `features`, `temp_humidity`, `fuel_gauge`,
+`heartbeat`, and `capture_complete`.
 
 ## Technical support and feedback
 

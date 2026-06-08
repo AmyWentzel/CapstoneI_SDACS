@@ -156,6 +156,7 @@ static void capture_task_run(void *arg)
     int64_t end_us = 0;
     int64_t next_metrics_us = 0;
     uint32_t samples_written = 0;
+    uint32_t feature_seq = 0;
 
     static int32_t read_buf[SDACS_I2S_FRAMES_PER_READ];
     static int32_t chunk[SDACS_AUDIO_CHUNK_SAMPLES];
@@ -191,6 +192,10 @@ static void capture_task_run(void *arg)
 
     ESP_LOGI(TAG, "SD write started: %s", state->ctx.storage->run_dir);
     capture_set_state(state, SDACS_MODE_CAPTURING, "capture started");
+    (void)temp_humidity_publish_latest_once("capture_start");
+#if SDACS_FUEL_GAUGE_ENABLED
+    (void)fuel_gauge_publish_latest_once("capture_start");
+#endif
 
     start_us = esp_timer_get_time();
     end_us = start_us + ((int64_t)state->ctx.record_seconds * 1000000LL);
@@ -246,6 +251,11 @@ static void capture_task_run(void *arg)
                     temp_c = th.temp_c;
                     humidity = th.rh_percent;
                 }
+                fuel_gauge_reading_t batt = {0};
+                bool batt_valid = false;
+#if SDACS_FUEL_GAUGE_ENABLED
+                batt_valid = fuel_gauge_get_latest(&batt);
+#endif
 
                 metrics_record_t record = {0};
                 time_sync_get_iso8601(record.timestamp, sizeof(record.timestamp));
@@ -258,6 +268,30 @@ static void capture_task_run(void *arg)
                 record.humidity = humidity;
                 record.fft_peak_hz = metrics.fft_peak_hz;
                 (void)run_storage_append_metrics(state->ctx.storage, &record);
+
+                sdacs_features_t features = {
+                    .seq = ++feature_seq,
+                    .t_us = (uint64_t)now_us,
+                    .rms = metrics.rms_norm,
+                    .dbfs = metrics.dbfs,
+                    .db_spl = metrics.laeq_db,
+                    .f_peak_hz = metrics.fft_peak_hz,
+                    .p2p_raw = metrics.p2p_raw,
+                    .zeros = (int)metrics.zeros,
+                    .n = metrics.sample_count,
+                    .temp_c = temp_c,
+                    .rh_percent = humidity,
+                    .batt_soc_percent = batt_valid ? batt.soc_percent : NAN,
+                    .batt_voltage_v = batt_valid ? batt.voltage_v : NAN,
+                    .batt_charge_rate_pct_per_hr = batt_valid ? batt.charge_rate_percent_per_hr : NAN,
+                    .batt_valid = batt_valid,
+                    .err = (th.valid ? th.error_count : 0U) + (batt_valid ? batt.error_count : 0U),
+                };
+                strncpy(features.node_id, state->ctx.node_id, sizeof(features.node_id) - 1);
+                features.node_id[sizeof(features.node_id) - 1] = '\0';
+                if (!wifi_mqtt_try_send(&features)) {
+                    ESP_LOGW(TAG, "features queue full; dropped seq=%u", (unsigned)features.seq);
+                }
 
                 ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",
                          metrics.laeq_db, metrics.peak_db, (unsigned)samples_written);
@@ -326,6 +360,10 @@ static void capture_task_run(void *arg)
                           verify_reason[0] ? verify_reason : "capture failed");
     } else {
         capture_set_state(state, SDACS_MODE_COMPLETE, "capture complete");
+        (void)temp_humidity_publish_latest_once("capture_complete");
+#if SDACS_FUEL_GAUGE_ENABLED
+        (void)fuel_gauge_publish_latest_once("capture_complete");
+#endif
         capture_publish_complete(state, raw_bytes, wav_bytes, csv_bytes);
     }
 

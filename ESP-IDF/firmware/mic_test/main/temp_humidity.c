@@ -261,6 +261,13 @@ bool temp_humidity_read_once(int i2c_port,
 
     if (err != ESP_OK) {
         out->error_count = 1;
+        if (g_ctx.lock) {
+            xSemaphoreTake(g_ctx.lock, portMAX_DELAY);
+            g_ctx.latest.sample_count++;
+            g_ctx.latest.error_count++;
+            g_ctx.latest.last_sample_time_us = out->last_sample_time_us;
+            xSemaphoreGive(g_ctx.lock);
+        }
         ESP_LOGW(TAG, "Final capture SHT41 read failed: %s", esp_err_to_name(err));
         return false;
     }
@@ -268,6 +275,17 @@ bool temp_humidity_read_once(int i2c_port,
     out->temp_c = t;
     out->rh_percent = rh;
     out->valid = true;
+    if (g_ctx.lock) {
+        xSemaphoreTake(g_ctx.lock, portMAX_DELAY);
+        g_ctx.latest.sample_count++;
+        out->sample_count = g_ctx.latest.sample_count;
+        out->error_count = g_ctx.latest.error_count;
+        g_ctx.latest.temp_c = out->temp_c;
+        g_ctx.latest.rh_percent = out->rh_percent;
+        g_ctx.latest.last_sample_time_us = out->last_sample_time_us;
+        g_ctx.latest.valid = true;
+        xSemaphoreGive(g_ctx.lock);
+    }
     ESP_LOGI(TAG, "Final capture T=%.2f C, RH=%.1f %%",
              (double)out->temp_c, (double)out->rh_percent);
     return true;
