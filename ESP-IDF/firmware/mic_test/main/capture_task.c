@@ -244,9 +244,11 @@ static void capture_task_run(void *arg)
         if (now_us >= next_metrics_us) {
             audio_metrics_t metrics = {0};
             if (fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db)) {
+                audio_input_debug_t i2s_dbg = {0};
                 temp_humidity_reading_t th = {0};
                 float temp_c = NAN;
                 float humidity = NAN;
+                (void)audio_input_get_last_debug(&i2s_dbg);
                 if (temp_humidity_get_latest(&th)) {
                     temp_c = th.temp_c;
                     humidity = th.rh_percent;
@@ -292,6 +294,20 @@ static void capture_task_run(void *arg)
                 if (!wifi_mqtt_try_send(&features)) {
                     ESP_LOGW(TAG, "features queue full; dropped seq=%u", (unsigned)features.seq);
                 }
+
+                ESP_LOGI(TAG,
+                         "Audio feature debug: raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f f_peak_hz=%.1f sample_count=%u",
+                         i2s_dbg.raw0,
+                         i2s_dbg.sample0,
+                         i2s_dbg.min_sample,
+                         i2s_dbg.max_sample,
+                         metrics.p2p_raw,
+                         (unsigned)metrics.zeros,
+                         (double)metrics.rms_norm,
+                         (double)metrics.dbfs,
+                         (double)metrics.laeq_db,
+                         (double)metrics.fft_peak_hz,
+                         (unsigned)metrics.sample_count);
 
                 ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",
                          metrics.laeq_db, metrics.peak_db, (unsigned)samples_written);

@@ -140,59 +140,6 @@ static esp_err_t fuel_gauge_read_sensor(int port, uint8_t addr, fuel_gauge_readi
     return ESP_OK;
 }
 
-static void fuel_gauge_publish_sample(const fuel_gauge_reading_t *snap, const char *phase)
-{
-    char payload[320];
-    int len = 0;
-
-    if (!snap || !snap->valid) {
-        return;
-    }
-    if (g_ctx.topic[0] == '\0') {
-        return;
-    }
-    if (!wifi_mqtt_is_connected()) {
-        return;
-    }
-
-    if (!phase) {
-        phase = "periodic";
-    }
-
-    len = snprintf(
-        payload, sizeof(payload),
-        "{"
-        "\"node_id\":\"%s\","
-        "\"record_type\":\"fuel_gauge\","
-        "\"timestamp\":%" PRIi64 ","
-        "\"fw_version\":\"%s\","
-        "\"phase\":\"%s\","
-        "\"soc_percent\":%.2f,"
-        "\"voltage_v\":%.4f,"
-        "\"charge_rate_percent_per_hr\":%.2f,"
-        "\"sample_count\":%u,"
-        "\"error_count\":%u,"
-        "\"valid\":%s,"
-        "\"t_us\":%" PRIi64
-        "}",
-        g_ctx.node_id,
-        (int64_t)snap->last_sample_time_us,
-        SDACS_FW_VERSION,
-        phase,
-        (double)snap->soc_percent,
-        (double)snap->voltage_v,
-        (double)snap->charge_rate_percent_per_hr,
-        (unsigned)snap->sample_count,
-        (unsigned)snap->error_count,
-        snap->valid ? "true" : "false",
-        (int64_t)snap->last_sample_time_us
-    );
-
-    if (len > 0 && len < (int)sizeof(payload)) {
-        (void)wifi_mqtt_publish_status_json(g_ctx.topic, payload);
-    }
-}
-
 static void fuel_gauge_task(void *arg)
 {
     (void)arg;
@@ -240,7 +187,6 @@ static void fuel_gauge_task(void *arg)
                      (double)snap.voltage_v,
                      (double)snap.charge_rate_percent_per_hr,
                      (unsigned)snap.sample_count);
-            fuel_gauge_publish_sample(&snap, "periodic");
         } else {
             ESP_LOGW(TAG, "Fuel gauge read failed: %s (err_count=%u)",
                      esp_err_to_name(err), (unsigned)snap.error_count);

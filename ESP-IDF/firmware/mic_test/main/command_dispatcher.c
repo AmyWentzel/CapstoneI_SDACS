@@ -9,6 +9,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
+#include "ble_locator.h"
 #include "capture_task.h"
 #include "device_state.h"
 #include "fuel_gauge.h"
@@ -288,6 +289,28 @@ static void handle_report_status(const char *request_id)
     publish_response("report_status", request_id, "ok", "status_report");
 }
 
+static void handle_ble_advertise(const cJSON *root, const char *request_id)
+{
+    uint32_t duration_ms = SDACS_BLE_LOCATOR_DURATION_MS;
+
+    if (json_copy_u32(root, "duration_ms", &duration_ms, false)) {
+        if (duration_ms == 0 || duration_ms > 60000U) {
+            publish_response("ble_advertise", request_id, "rejected", "invalid_duration_ms");
+            return;
+        }
+    }
+
+    esp_err_t err = sdacs_ble_locator_request_advertise(duration_ms);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ble_advertise rejected: %s", esp_err_to_name(err));
+        publish_response("ble_advertise", request_id, "rejected", esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "ble_advertise accepted duration_ms=%u", (unsigned)duration_ms);
+    publish_response("ble_advertise", request_id, "accepted", "advertising_started");
+}
+
 static void handle_reboot(const char *request_id)
 {
     if (device_state_get() == SDACS_MODE_CAPTURING) {
@@ -351,6 +374,8 @@ void command_dispatcher_handle(const char *topic, const char *payload, int len)
         handle_ota_update(root, request_id);
     } else if (strcmp(cmd, "report_status") == 0) {
         handle_report_status(request_id);
+    } else if (strcmp(cmd, "ble_advertise") == 0) {
+        handle_ble_advertise(root, request_id);
     } else if (strcmp(cmd, "reboot") == 0) {
         handle_reboot(request_id);
     } else {

@@ -25,6 +25,7 @@ static const char *TAG = "ble_locator";
 
 static volatile bool s_ble_synced = false;
 static volatile bool s_ble_host_stopped = false;
+static volatile bool s_ble_advertise_active = false;
 
 static void ble_host_task(void *param)
 {
@@ -222,6 +223,54 @@ esp_err_t sdacs_ble_locator_advertise_for(const char *node_id, uint32_t duration
 
     ESP_LOGI(TAG, "SDACS BLE locator phase complete");
 
+    return ESP_OK;
+#endif
+}
+
+static void ble_advertise_request_task(void *arg)
+{
+    uint32_t duration_ms = (uint32_t)(uintptr_t)arg;
+    esp_err_t err = sdacs_ble_locator_advertise_for(sdacs_node_id(), duration_ms);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "MQTT requested BLE advertise failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "MQTT requested BLE advertise complete");
+    }
+
+    s_ble_advertise_active = false;
+    vTaskDelete(NULL);
+}
+
+esp_err_t sdacs_ble_locator_request_advertise(uint32_t duration_ms)
+{
+#if !SDACS_BLE_LOCATOR_ENABLED
+    (void)duration_ms;
+    return ESP_OK;
+#else
+    if (duration_ms == 0 || duration_ms > 60000U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_ble_advertise_active) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_ble_advertise_active = true;
+    BaseType_t ok = xTaskCreate(
+        ble_advertise_request_task,
+        "ble_adv_req",
+        4096,
+        (void *)(uintptr_t)duration_ms,
+        4,
+        NULL
+    );
+    if (ok != pdPASS) {
+        s_ble_advertise_active = false;
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "Accepted MQTT BLE advertise request for %lu ms",
+             (unsigned long)duration_ms);
     return ESP_OK;
 #endif
 }

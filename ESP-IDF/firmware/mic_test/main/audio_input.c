@@ -15,6 +15,7 @@
 typedef struct {
     i2s_chan_handle_t rx_chan;
     int32_t raw[SDACS_I2S_FRAMES_PER_READ];
+    audio_input_debug_t last_debug;
     bool initialized;
 } audio_input_t;
 
@@ -134,22 +135,40 @@ esp_err_t audio_input_read_s24(int32_t *dst,
     }
 
     ++s_i2s_debug_read_count;
-    if ((s_i2s_debug_read_count % 20U) == 0U) {
-        int32_t first_sample = (*samples_read > 0) ? dst[0] : 0;
-        uint32_t first_raw = (*samples_read > 0) ? (uint32_t)s_audio.raw[0] : 0U;
+    s_audio.last_debug = (audio_input_debug_t){
+        .raw0 = (*samples_read > 0) ? (uint32_t)s_audio.raw[0] : 0U,
+        .sample0 = (*samples_read > 0) ? dst[0] : 0,
+        .min_sample = min_sample,
+        .max_sample = max_sample,
+        .zero_count = zero_count,
+        .bytes_read = bytes_read,
+        .samples_read = *samples_read,
+    };
 
+    if ((s_i2s_debug_read_count % 20U) == 0U) {
         ESP_LOGI(TAG,
-                 "I2S debug: bytes=%" PRIu32 " samples=%" PRIu32 " raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " zeros=%" PRIu32,
+                 "I2S debug: bytes=%" PRIu32 " samples=%" PRIu32 " raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%" PRIu32,
                  (uint32_t)bytes_read,
                  (uint32_t)*samples_read,
-                 first_raw,
-                 first_sample,
+                 s_audio.last_debug.raw0,
+                 s_audio.last_debug.sample0,
                  min_sample,
                  max_sample,
+                 max_sample - min_sample,
                  zero_count);
     }
 
     return ESP_OK;
+}
+
+bool audio_input_get_last_debug(audio_input_debug_t *out)
+{
+    if (!out || !s_audio.initialized) {
+        return false;
+    }
+
+    *out = s_audio.last_debug;
+    return true;
 }
 
 void audio_input_deinit(void)

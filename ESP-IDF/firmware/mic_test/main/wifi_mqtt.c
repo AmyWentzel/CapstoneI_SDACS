@@ -389,8 +389,7 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         (void)snprintf(batt_rate_buf, sizeof(batt_rate_buf), "%.2f", (double)f->batt_charge_rate_pct_per_hr);
     }
 
-    // Keep it compact; Node-RED can parse JSON easily.
-    // Node-RED should also parse batt_soc_percent, batt_voltage_v, and batt_charge_rate_pct_per_hr.
+    // err is the compact sum of temp/humidity and fuel gauge sample error counters.
     return snprintf(out, out_sz,
         "{"
           "\"node_id\":\"%s\","

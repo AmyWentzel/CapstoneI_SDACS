@@ -61,6 +61,23 @@ to publish heartbeat, battery, temp/humidity, audio, and feature topics under
 Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
 for BLE devices and do not receive commands over BLE.
 
+For reliable dashboard Scan Now behavior, import
+`node_red/sdacs_flow_fixed.json`. Its Scan Now button first publishes:
+
+```json
+{"cmd":"ble_advertise","request_id":"ble_scan_YYYYMMDDHHMMSS","duration_ms":15000}
+```
+
+to `sdacs/group/all/cmd`, waits about 1 second, then publishes the Raspberry Pi
+gateway scan command to `sdacs/ble/gateway/rpi5/cmd`:
+
+```json
+{"command":"scan_now","scan_seconds":15,"source":"node-red"}
+```
+
+Each node advertises as `SDACS-<node_id>` with manufacturer payload
+`SDACS:<node_id>` during the requested window.
+
 ## SDACS Hardware Pinout
 
 - ICS-43432 I2S microphone: BCLK GPIO11, DOUT/DIN GPIO12, LRCLK/WS GPIO13.
@@ -141,6 +158,23 @@ verifies they are non-empty, and only then publishes
 MQTT; compact feature metrics are published during capture on
 `sdacs/node/<node_id>/features`.
 
+Feature telemetry uses compact summary JSON only; raw audio samples are not sent
+over MQTT. The feature `err` field is the compact sum of the latest SHT41
+temp/humidity and MAX17048 fuel gauge sample error counters at the time the
+feature record was built. Serial logs include `Audio feature debug` lines during
+capture with raw I2S word 0, converted sample 0, min/max, `p2p_raw`, `zeros`,
+`rms`, `dbfs`, `db_spl`, `f_peak_hz`, and `sample_count`.
+
+ICS-43432 SPL conversion uses `SDACS_CAL_OFFSET_DB = 120.0f`, derived from the
+microphone sensitivity of `-26 dBFS @ 94 dB SPL` (`94 - (-26) = 120`). The I2S
+configuration is Philips-format, mono, left-slot first; if hardware debug shows
+zeros or a pinned signal, the next controlled test is changing only the slot mask
+to right.
+
+Fuel gauge is still sampled periodically for LEDs and battery state, but MQTT
+`fuel_gauge` records are only published on `capture_start`, `capture_complete`,
+and `report_status`, so CSV storage is not dominated by battery rows.
+
 ## MQTT Telemetry Verification
 
 Use these subscriptions while booting a node and running a group capture:
@@ -155,6 +189,10 @@ mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/capture_complete' -v
 
 Expected record types include `features`, `temp_humidity`, `fuel_gauge`,
 `heartbeat`, and `capture_complete`.
+
+The fixed Node-RED export adds an inject-on-deploy path that overwrites
+`/home/vortex/sdacs_logs/sdacs_telemetry.csv` with the CSV header before append
+rows begin. The download endpoint remains `/sdacs/download/csv`.
 
 ## Technical support and feedback
 
