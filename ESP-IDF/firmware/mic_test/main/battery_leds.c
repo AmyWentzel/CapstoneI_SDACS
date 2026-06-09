@@ -10,13 +10,19 @@
 
 static const char *TAG = "battery_leds";
 
-static const gpio_num_t s_led_gpios[] = {
-    SDACS_LED_BATT_1_GPIO,
-    SDACS_LED_BATT_2_GPIO,
-    SDACS_LED_BATT_3_GPIO,
-    SDACS_LED_BATT_4_GPIO,
-    SDACS_LED_BATT_5_GPIO,
-    SDACS_LED_BATT_6_GPIO,
+/*
+ * Physical P3 battery LED order is top-to-bottom:
+ * P3.1 GPIO1, P3.2 GPIO18, P3.3 GPIO17, P3.4 GPIO16, P3.5 GPIO15, P3.6 GPIO14.
+ * Keep this explicit because the visual bar order is the reverse of the
+ * SDACS_LED_BATT_1..6 logical numbering in sdacs_config.h.
+ */
+static const gpio_num_t s_led_gpios_top_to_bottom[] = {
+    SDACS_LED_BATT_6_GPIO, // GPIO1, physical top
+    SDACS_LED_BATT_5_GPIO, // GPIO18
+    SDACS_LED_BATT_4_GPIO, // GPIO17
+    SDACS_LED_BATT_3_GPIO, // GPIO16
+    SDACS_LED_BATT_2_GPIO, // GPIO15
+    SDACS_LED_BATT_1_GPIO, // GPIO14, physical bottom
 };
 
 static bool s_initialized = false;
@@ -58,8 +64,9 @@ esp_err_t battery_leds_init(void)
         return ESP_OK;
     }
 
-    for (size_t i = 0; i < sizeof(s_led_gpios) / sizeof(s_led_gpios[0]); ++i) {
-        cfg.pin_bit_mask |= (1ULL << s_led_gpios[i]);
+    const size_t led_count = sizeof(s_led_gpios_top_to_bottom) / sizeof(s_led_gpios_top_to_bottom[0]);
+    for (size_t i = 0; i < led_count; ++i) {
+        cfg.pin_bit_mask |= (1ULL << s_led_gpios_top_to_bottom[i]);
     }
 
     esp_err_t err = gpio_config(&cfg);
@@ -70,13 +77,13 @@ esp_err_t battery_leds_init(void)
 
     s_initialized = true;
     battery_leds_off();
-    ESP_LOGI(TAG, "Battery LEDs initialized: %d,%d,%d,%d,%d,%d",
-             s_led_gpios[0],
-             s_led_gpios[1],
-             s_led_gpios[2],
-             s_led_gpios[3],
-             s_led_gpios[4],
-             s_led_gpios[5]);
+    ESP_LOGI(TAG, "Battery LEDs initialized top-to-bottom: %d,%d,%d,%d,%d,%d",
+             s_led_gpios_top_to_bottom[0],
+             s_led_gpios_top_to_bottom[1],
+             s_led_gpios_top_to_bottom[2],
+             s_led_gpios_top_to_bottom[3],
+             s_led_gpios_top_to_bottom[4],
+             s_led_gpios_top_to_bottom[5]);
     return ESP_OK;
 }
 
@@ -87,8 +94,10 @@ void battery_leds_show_percent(float soc_percent)
     }
 
     const size_t count = led_count_for_soc(soc_percent);
-    for (size_t i = 0; i < sizeof(s_led_gpios) / sizeof(s_led_gpios[0]); ++i) {
-        (void)gpio_set_level(s_led_gpios[i], i < count ? 1 : 0);
+    const size_t led_count = sizeof(s_led_gpios_top_to_bottom) / sizeof(s_led_gpios_top_to_bottom[0]);
+    for (size_t i = 0; i < led_count; ++i) {
+        bool on = i >= (led_count - count);
+        (void)gpio_set_level(s_led_gpios_top_to_bottom[i], on ? 1 : 0);
     }
 }
 
@@ -98,8 +107,9 @@ void battery_leds_off(void)
         return;
     }
 
-    for (size_t i = 0; i < sizeof(s_led_gpios) / sizeof(s_led_gpios[0]); ++i) {
-        (void)gpio_set_level(s_led_gpios[i], 0);
+    const size_t led_count = sizeof(s_led_gpios_top_to_bottom) / sizeof(s_led_gpios_top_to_bottom[0]);
+    for (size_t i = 0; i < led_count; ++i) {
+        (void)gpio_set_level(s_led_gpios_top_to_bottom[i], 0);
     }
 }
 
