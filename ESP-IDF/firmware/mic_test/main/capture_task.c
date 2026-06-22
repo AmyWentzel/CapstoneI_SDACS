@@ -296,7 +296,7 @@ static void capture_task_run(void *arg)
                 }
 
                 ESP_LOGI(TAG,
-                         "Audio feature debug: raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f f_peak_hz=%.1f sample_count=%u",
+                         "Audio feature debug: raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f f_peak_hz=%.1f low_ratio=%.4f mid_ratio=%.4f high_ratio=%.4f fft_total_energy=%.6e sample_count=%u",
                          i2s_dbg.raw0,
                          i2s_dbg.sample0,
                          i2s_dbg.min_sample,
@@ -307,6 +307,10 @@ static void capture_task_run(void *arg)
                          (double)metrics.dbfs,
                          (double)metrics.laeq_db,
                          (double)metrics.fft_peak_hz,
+                         (double)metrics.fft_low_ratio,
+                         (double)metrics.fft_mid_ratio,
+                         (double)metrics.fft_high_ratio,
+                         (double)metrics.fft_total_energy,
                          (unsigned)metrics.sample_count);
 
                 ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",

@@ -10,7 +10,6 @@
 
 typedef struct {
     float fft_in[SDACS_FFT_SIZE * 2];
-    float fft_mag[SDACS_FFT_SIZE];
     float hann_window[SDACS_FFT_SIZE];
     int32_t fft_buffer[SDACS_FFT_SIZE];
     int fft_index;
@@ -25,9 +24,24 @@ typedef struct {
 
 static fft_metrics_ctx_t s_fft = {0};
 
-static float compute_fft_peak_hz(void)
+typedef struct {
+    float peak_hz;
+    float low_energy;
+    float mid_energy;
+    float high_energy;
+    float total_energy;
+    float low_ratio;
+    float mid_ratio;
+    float high_ratio;
+} fft_band_metrics_t;
+
+static fft_band_metrics_t compute_fft_band_metrics(void)
 {
+    const float ratio_epsilon = 1e-12f;
+    fft_band_metrics_t metrics = {0};
     int start = s_fft.fft_index;
+    float peak_energy = 0.0f;
+    int peak_bin = 0;
 
     for (int i = 0; i < SDACS_FFT_SIZE; ++i) {
         int buf_index = (start + i) % SDACS_FFT_SIZE;
@@ -40,22 +54,39 @@ static float compute_fft_peak_hz(void)
     dsps_bit_rev_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
     dsps_cplx2reC_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
 
-    for (int i = 5; i < SDACS_FFT_SIZE / 2; ++i) {
+    for (int i = 1; i < SDACS_FFT_SIZE / 2; ++i) {
         float real = s_fft.fft_in[2 * i];
         float imag = s_fft.fft_in[(2 * i) + 1];
-        s_fft.fft_mag[i] = sqrtf((real * real) + (imag * imag));
-    }
+        float energy = (real * real) + (imag * imag);
+        float freq_hz = ((float)i * SDACS_SAMPLE_RATE_HZ) / SDACS_FFT_SIZE;
 
-    int peak_bin = 5;
-    float peak_val = s_fft.fft_mag[5];
-    for (int i = 6; i < SDACS_FFT_SIZE / 2; ++i) {
-        if (s_fft.fft_mag[i] > peak_val) {
-            peak_val = s_fft.fft_mag[i];
+        if (freq_hz < 20.0f) {
+            continue;
+        }
+
+        if (energy > peak_energy) {
+            peak_energy = energy;
             peak_bin = i;
+        }
+
+        if (freq_hz < 250.0f) {
+            metrics.low_energy += energy;
+        } else if (freq_hz < 2000.0f) {
+            metrics.mid_energy += energy;
+        } else if (freq_hz <= 8000.0f) {
+            metrics.high_energy += energy;
         }
     }
 
-    return ((float)peak_bin * SDACS_SAMPLE_RATE_HZ) / SDACS_FFT_SIZE;
+    metrics.peak_hz = ((float)peak_bin * SDACS_SAMPLE_RATE_HZ) / SDACS_FFT_SIZE;
+    metrics.total_energy = metrics.low_energy + metrics.mid_energy + metrics.high_energy;
+    if (metrics.total_energy > ratio_epsilon) {
+        metrics.low_ratio = metrics.low_energy / metrics.total_energy;
+        metrics.mid_ratio = metrics.mid_energy / metrics.total_energy;
+        metrics.high_ratio = metrics.high_energy / metrics.total_energy;
+    }
+
+    return metrics;
 }
 
 esp_err_t fft_metrics_init(void)
@@ -127,13 +158,21 @@ bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
     float rms_norm = rms / 8388608.0f;
     float dbfs = 20.0f * log10f(rms_norm + 1e-12f);
     float peak_norm = (float)s_fft.peak_abs / 8388608.0f;
+    fft_band_metrics_t fft_metrics = compute_fft_band_metrics();
 
     *out = (audio_metrics_t){
         .rms_norm = rms_norm,
         .dbfs = dbfs,
         .laeq_db = dbfs + cal_offset_db,
         .peak_db = 20.0f * log10f(peak_norm + 1e-12f) + cal_offset_db,
-        .fft_peak_hz = compute_fft_peak_hz(),
+        .fft_peak_hz = fft_metrics.peak_hz,
+        .fft_low_energy = fft_metrics.low_energy,
+        .fft_mid_energy = fft_metrics.mid_energy,
+        .fft_high_energy = fft_metrics.high_energy,
+        .fft_total_energy = fft_metrics.total_energy,
+        .fft_low_ratio = fft_metrics.low_ratio,
+        .fft_mid_ratio = fft_metrics.mid_ratio,
+        .fft_high_ratio = fft_metrics.high_ratio,
         .peak_abs = s_fft.peak_abs,
         .p2p_raw = s_fft.max_sample - s_fft.min_sample,
         .zeros = s_fft.zeros,

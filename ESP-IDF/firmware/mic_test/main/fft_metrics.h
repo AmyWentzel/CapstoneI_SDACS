@@ -12,6 +12,13 @@ typedef struct {
     float laeq_db;
     float peak_db;
     float fft_peak_hz;
+    float fft_low_energy;
+    float fft_mid_energy;
+    float fft_high_energy;
+    float fft_total_energy;
+    float fft_low_ratio;
+    float fft_mid_ratio;
+    float fft_high_ratio;
     int32_t peak_abs;
     int32_t p2p_raw;
     uint32_t zeros;
