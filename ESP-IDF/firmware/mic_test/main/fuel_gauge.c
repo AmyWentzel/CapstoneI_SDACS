@@ -143,6 +143,7 @@ static esp_err_t fuel_gauge_read_sensor(int port, uint8_t addr, fuel_gauge_readi
 static void fuel_gauge_task(void *arg)
 {
     (void)arg;
+    int64_t task_start_us = esp_timer_get_time();
 
     ESP_LOGI(TAG, "Task started (period=%ums, addr=0x%02X)",
              (unsigned)g_ctx.period_ms, g_ctx.addr);
@@ -181,15 +182,18 @@ static void fuel_gauge_task(void *arg)
         snap = g_ctx.latest;
         xSemaphoreGive(g_ctx.lock);
 
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "SOC=%.1f %% V=%.3f rate=%.2f %%/hr (n=%u)",
-                     (double)snap.soc_percent,
-                     (double)snap.voltage_v,
-                     (double)snap.charge_rate_percent_per_hr,
-                     (unsigned)snap.sample_count);
-        } else {
-            ESP_LOGW(TAG, "Fuel gauge read failed: %s (err_count=%u)",
-                     esp_err_to_name(err), (unsigned)snap.error_count);
+        if ((esp_timer_get_time() - task_start_us) <=
+            ((int64_t)SDACS_SENSOR_MONITOR_LOG_WINDOW_MS * 1000LL)) {
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "SOC=%.1f %% V=%.3f rate=%.2f %%/hr (n=%u)",
+                         (double)snap.soc_percent,
+                         (double)snap.voltage_v,
+                         (double)snap.charge_rate_percent_per_hr,
+                         (unsigned)snap.sample_count);
+            } else {
+                ESP_LOGW(TAG, "Fuel gauge read failed: %s (err_count=%u)",
+                         esp_err_to_name(err), (unsigned)snap.error_count);
+            }
         }
 
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(g_ctx.period_ms));

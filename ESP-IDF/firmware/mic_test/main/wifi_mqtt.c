@@ -405,6 +405,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"db_spl\":%.2f,"
           "\"fft_peak_Hz\":%.1f,"
           "\"f_peak_hz\":%.1f,"
+          "\"fft_low_ratio\":%.6f,"
+          "\"fft_mid_ratio\":%.6f,"
+          "\"fft_high_ratio\":%.6f,"
+          "\"fft_total_energy\":%.6e,"
           "\"p2p_raw\":%" PRId32 ","
           "\"zeros\":%d,"
           "\"temp_c\":%s,"
@@ -427,6 +431,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->db_spl,
         f->f_peak_hz,
         f->f_peak_hz,
+        f->fft_low_ratio,
+        f->fft_mid_ratio,
+        f->fft_high_ratio,
+        f->fft_total_energy,
         f->p2p_raw,
         f->zeros,
         temp_c_buf,
@@ -459,7 +467,7 @@ static void mqtt_publish_task(void *arg)
     ESP_ERROR_CHECK(mqtt_start_client(s_cfg.broker_uri));
 
     sdacs_features_t f;
-    char payload[512];
+    char payload[768];
 
     while (1) {
         if (xQueueReceive(s_feat_q, &f, portMAX_DELAY) == pdTRUE) {

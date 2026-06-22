@@ -113,6 +113,7 @@ static esp_err_t sht41_read_temp_rh(int port, uint8_t addr, float *temp_c, float
 static void temp_humidity_task(void *arg)
 {
     (void)arg;
+    int64_t task_start_us = esp_timer_get_time();
 
     ESP_LOGI(TAG, "Task started (period=%ums, addr=0x%02X)",
              (unsigned)g_ctx.period_ms, g_ctx.addr);
@@ -145,12 +146,15 @@ static void temp_humidity_task(void *arg)
         snap = g_ctx.latest;
         xSemaphoreGive(g_ctx.lock);
 
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "T=%.2f C, RH=%.1f %% (n=%u)",
-                     (double)snap.temp_c, (double)snap.rh_percent, (unsigned)snap.sample_count);
-        } else {
-            ESP_LOGW(TAG, "SHT41 read failed: %s (err_count=%u)",
-                     esp_err_to_name(err), (unsigned)snap.error_count);
+        if ((esp_timer_get_time() - task_start_us) <=
+            ((int64_t)SDACS_SENSOR_MONITOR_LOG_WINDOW_MS * 1000LL)) {
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "T=%.2f C, RH=%.1f %% (n=%u)",
+                         (double)snap.temp_c, (double)snap.rh_percent, (unsigned)snap.sample_count);
+            } else {
+                ESP_LOGW(TAG, "SHT41 read failed: %s (err_count=%u)",
+                         esp_err_to_name(err), (unsigned)snap.error_count);
+            }
         }
 
         // Sleep until next period, but allow immediate wake on stop request.
