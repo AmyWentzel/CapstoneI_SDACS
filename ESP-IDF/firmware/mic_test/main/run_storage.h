@@ -29,7 +29,6 @@ typedef struct {
     char raw_path[256];
     char wav_path[256];
     char csv_path[256];
-    char cal_csv_path[256];
     char cal_offset_path[256];
 } run_storage_t;
 

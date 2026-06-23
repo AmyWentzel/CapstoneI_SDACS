@@ -183,18 +183,18 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     if (time_sync_is_valid()) {
         struct tm timeinfo;
         localtime_r(&now, &timeinfo);
-        strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &timeinfo);
+        strftime(ts, sizeof(ts), "%Y-%m-%d_%H-%M-%S", &timeinfo);
     } else {
         int64_t boot_ms = esp_timer_get_time() / 1000;
-        snprintf(ts, sizeof(ts), "boot_%lld", (long long)boot_ms);
+        snprintf(ts, sizeof(ts), "boot-%lld", (long long)boot_ms);
     }
 
     for (int suffix = 0; suffix < 100; ++suffix) {
         int n = 0;
         if (suffix == 0) {
-            n = snprintf(rs->run_dir, sizeof(rs->run_dir), "%s/%s_%s", SDACS_SD_MOUNT_POINT, node_id, ts);
+            n = snprintf(rs->run_dir, sizeof(rs->run_dir), "%s/capture_%s_%s", SDACS_SD_MOUNT_POINT, ts, node_id);
         } else {
-            n = snprintf(rs->run_dir, sizeof(rs->run_dir), "%s/%s_%s_%02d", SDACS_SD_MOUNT_POINT, node_id, ts, suffix);
+            n = snprintf(rs->run_dir, sizeof(rs->run_dir), "%s/capture_%s_%s_%02d", SDACS_SD_MOUNT_POINT, ts, node_id, suffix);
         }
 
         if (n < 0 || n >= (int)sizeof(rs->run_dir)) {
@@ -217,9 +217,8 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     }
 
     if (snprintf(rs->raw_path, sizeof(rs->raw_path), "%s/audio.raw", rs->run_dir) >= (int)sizeof(rs->raw_path) ||
-        snprintf(rs->wav_path, sizeof(rs->wav_path), "%s/audio_%s.wav", rs->run_dir, ts) >= (int)sizeof(rs->wav_path) ||
-        snprintf(rs->csv_path, sizeof(rs->csv_path), "%s/metrics_%s.csv", rs->run_dir, ts) >= (int)sizeof(rs->csv_path) ||
-        snprintf(rs->cal_csv_path, sizeof(rs->cal_csv_path), "%s/calibration_run1.csv", rs->run_dir) >= (int)sizeof(rs->cal_csv_path) ||
+        snprintf(rs->wav_path, sizeof(rs->wav_path), "%s/audio_%s_%s.wav", rs->run_dir, ts, node_id) >= (int)sizeof(rs->wav_path) ||
+        snprintf(rs->csv_path, sizeof(rs->csv_path), "%s/metrics_%s_%s.csv", rs->run_dir, ts, node_id) >= (int)sizeof(rs->csv_path) ||
         snprintf(rs->cal_offset_path, sizeof(rs->cal_offset_path), "%s/calibration_offset.txt", rs->run_dir) >= (int)sizeof(rs->cal_offset_path)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -230,13 +229,6 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     }
     fputs(header, csv);
     fclose(csv);
-
-    FILE *cal_csv = fopen(rs->cal_csv_path, "w");
-    if (!cal_csv) {
-        return ESP_FAIL;
-    }
-    fputs(header, cal_csv);
-    fclose(cal_csv);
 
     FILE *cal_txt = fopen(rs->cal_offset_path, "w");
     if (!cal_txt) {
@@ -253,7 +245,8 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     fprintf(cal_txt, "offset_db=TO_FILL_IN\n");
     fclose(cal_txt);
 
-    ESP_LOGI(TAG, "Created run folder: %s", rs->run_dir);
+    ESP_LOGI(TAG, "Created capture folder: %s", rs->run_dir);
+    ESP_LOGI(TAG, "Metrics CSV: %s", rs->csv_path);
     return ESP_OK;
 }
 
@@ -285,17 +278,6 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
             rec->fft_total_energy);
     fclose(f);
 
-    f = fopen(rs->cal_csv_path, "a");
-    if (!f) {
-        return false;
-    }
-
-    fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f,%.6f,%.6f,%.6f,%.6e\n",
-            rec->timestamp, rec->node_id, rec->laeq_db, rec->peak_db,
-            rec->dbfs, rec->rms, rec->temp_c, rec->humidity, rec->fft_peak_hz,
-            rec->fft_low_ratio, rec->fft_mid_ratio, rec->fft_high_ratio,
-            rec->fft_total_energy);
-    fclose(f);
     ESP_LOGI(TAG, "SD metrics row: low=%.6f mid=%.6f high=%.6f total=%.6e",
              rec->fft_low_ratio, rec->fft_mid_ratio, rec->fft_high_ratio,
              rec->fft_total_energy);
@@ -387,7 +369,6 @@ void run_storage_refresh_timestamps(run_storage_t *rs)
     time_t now = time(NULL);
     refresh_path_timestamp(rs->raw_path, now);
     refresh_path_timestamp(rs->csv_path, now);
-    refresh_path_timestamp(rs->cal_csv_path, now);
     refresh_path_timestamp(rs->cal_offset_path, now);
     refresh_path_timestamp(rs->wav_path, now);
     refresh_path_timestamp(rs->run_dir, now);
@@ -401,7 +382,6 @@ void run_storage_verify(run_storage_t *rs)
 
     log_file_stat(rs->raw_path);
     log_file_stat(rs->csv_path);
-    log_file_stat(rs->cal_csv_path);
     log_file_stat(rs->cal_offset_path);
     log_file_stat(rs->wav_path);
     log_dir_listing(rs->run_dir);
