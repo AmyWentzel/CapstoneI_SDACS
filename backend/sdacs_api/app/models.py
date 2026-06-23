@@ -9,6 +9,8 @@ class TelemetryUpdate(BaseModel):
     record_type: str
     timestamp_iso: str | None = None
     timestamp_us: int | None = None
+    uptime_ms: int | None = None
+    raw_timestamp: str | int | float | None = None
     status: str | None = None
     capture_state: str | None = None
     fw_version: str | None = None
@@ -67,4 +69,3 @@ class PublishResult(BaseModel):
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-

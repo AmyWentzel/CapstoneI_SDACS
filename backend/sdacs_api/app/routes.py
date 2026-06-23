@@ -41,9 +41,12 @@ def build_router(
     @router.get("/api/nodes/{node_id}/features/latest")
     async def get_latest_features(node_id: str) -> dict[str, Any]:
         node = state_store.get_node(node_id)
-        if node is None or node.latest_features is None:
-            raise HTTPException(status_code=404, detail="Latest features not found")
-        return node.latest_features.model_dump(mode="json")
+        if node is None:
+            raise HTTPException(status_code=404, detail="Node not found")
+        telemetry = node.latest_features or node.latest
+        if telemetry is None:
+            raise HTTPException(status_code=404, detail="No telemetry found")
+        return telemetry.model_dump(mode="json")
 
     @router.get("/api/captures")
     async def list_captures() -> list[dict[str, Any]]:
@@ -80,4 +83,3 @@ def build_router(
             await websocket_manager.disconnect(websocket)
 
     return router
-
