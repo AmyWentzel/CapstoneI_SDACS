@@ -1,6 +1,10 @@
-# flutter_test_app
+# SDACS Flutter App
 
-A new Flutter project.
+Flutter client for the Smart Distributed Acoustic Calibration System.
+
+This app uses the SDACS FastAPI backend for REST and WebSocket telemetry. It does not connect directly to MQTT or Node-RED during normal operation.
+
+See [Flutter API Integration](../docs/flutter_api_integration.md) for backend setup, run commands, endpoint summaries, and the repeatable test checklist.
 
 ## Getting Started
 

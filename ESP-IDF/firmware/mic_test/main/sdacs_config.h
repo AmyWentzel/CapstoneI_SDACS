@@ -26,8 +26,8 @@
 #define SDACS_SECRET_ALWAYS_SYNC_MQTT 0
 #endif
 
-#define SDACS_NODE_ID                    "node01"
-#define SDACS_FW_VERSION                 "ota-enable-v2"
+#define SDACS_NODE_ID                    "Node03"    
+#define SDACS_FW_VERSION                 "delayed-synched-capture"
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_14
@@ -44,7 +44,7 @@
 #define SDACS_RECORD_SECONDS             20
 #define SDACS_AUDIO_CHUNK_SAMPLES        2048
 #define SDACS_FFT_SIZE                   1024
-#define SDACS_CAL_OFFSET_DB              0.0f
+#define SDACS_CAL_OFFSET_DB              96.99f
 #define SDACS_I2S_READ_TIMEOUT_MS        100
 #define SDACS_WAV_CHUNK_SIZE             1024
 
@@ -74,3 +74,6 @@
 #define SDACS_PROVISION_MQTT_URI         SDACS_SECRET_MQTT_URI
 #define SDACS_PROVISION_MQTT_TOPIC       SDACS_SECRET_MQTT_TOPIC
 #define SDACS_PROVISION_ALWAYS_SYNC_MQTT SDACS_SECRET_ALWAYS_SYNC_MQTT
+
+#define SDACS_BLE_LOCATOR_ENABLED        1
+#define SDACS_BLE_LOCATOR_DURATION_MS    30000

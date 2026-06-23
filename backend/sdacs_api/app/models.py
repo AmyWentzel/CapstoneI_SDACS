@@ -1,0 +1,70 @@
+from datetime import datetime, timezone
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+
+class TelemetryUpdate(BaseModel):
+    node_id: str
+    record_type: str
+    timestamp_iso: str | None = None
+    timestamp_us: int | None = None
+    status: str | None = None
+    capture_state: str | None = None
+    fw_version: str | None = None
+    seq: int | None = None
+    n: int | None = None
+    rms: float | None = None
+    dbfs: float | None = None
+    db_spl: float | None = None
+    f_peak_hz: float | None = None
+    fft_low_ratio: float | None = None
+    fft_mid_ratio: float | None = None
+    fft_high_ratio: float | None = None
+    fft_total_energy: float | None = None
+    p2p_raw: int | None = None
+    zeros: int | None = None
+    temp_c: float | None = None
+    rh_percent: float | None = None
+    batt_soc_percent: float | None = None
+    batt_voltage_v: float | None = None
+    batt_valid: bool | None = None
+    rssi_dbm: int | None = None
+    free_heap: int | None = None
+    wifi_connected: bool | None = None
+    mqtt_connected: bool | None = None
+    request_id: str | None = None
+    raw_path: str | None = None
+    wav_path: str | None = None
+    metrics_path: str | None = None
+    raw_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class NodeState(BaseModel):
+    node_id: str
+    latest: TelemetryUpdate | None = None
+    latest_features: TelemetryUpdate | None = None
+    latest_status: TelemetryUpdate | None = None
+    last_seen_iso: str | None = None
+
+
+class CaptureStartRequest(BaseModel):
+    delay_ms: int = 5000
+    record_seconds: int = 20
+    request_id: str | None = None
+
+
+class CommandRequest(BaseModel):
+    cmd: Literal["report_status", "reboot"]
+    request_id: str | None = None
+
+
+class PublishResult(BaseModel):
+    topic: str
+    payload: dict[str, Any]
+    published: bool
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+

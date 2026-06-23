@@ -13,6 +13,7 @@
 #include "freertos/queue.h"
 
 #include "esp_log.h"
+#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -22,7 +23,9 @@
 #include "esp_timer.h"
 
 #include "fuel_gauge.h"
+#include "node_identity.h"
 #include "sdacs_config.h"
+#include "device_state.h"
 
 static const char *TAG = "WIFI_MQTT";
 
@@ -44,6 +47,7 @@ static wifi_mqtt_cmd_cb_t s_cmd_cb = NULL;
 static wifi_mqtt_cfg_t s_cfg = {0};
 static char s_node_id[CONFIG_STORE_MAX_NODE_ID_LEN + 1];
 static char s_base_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 1];
+static char s_features_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 32];
 static char s_heartbeat_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 32];
 static char s_lwt_payload[160];
 static bool s_heartbeat_task_started = false;
@@ -66,69 +70,6 @@ static const char *authmode_to_str(wifi_auth_mode_t authmode)
         case WIFI_AUTH_WPA3_PSK: return "WPA3_PSK";
         case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2_WPA3_PSK";
         default: return "UNKNOWN";
-    }
-}
-
-static bool strip_topic_suffix(char *topic, const char *suffix)
-{
-    size_t topic_len = 0;
-    size_t suffix_len = 0;
-
-    if (!topic || !suffix) {
-        return false;
-    }
-
-    topic_len = strlen(topic);
-    suffix_len = strlen(suffix);
-    if (topic_len < suffix_len) {
-        return false;
-    }
-
-    if (strcmp(topic + topic_len - suffix_len, suffix) != 0) {
-        return false;
-    }
-
-    topic[topic_len - suffix_len] = '\0';
-    return true;
-}
-
-static void normalize_base_topic(const char *configured_topic, char *out, size_t out_sz)
-{
-    if (!out || out_sz == 0) {
-        return;
-    }
-
-    out[0] = '\0';
-    if (!configured_topic || configured_topic[0] == '\0') {
-        return;
-    }
-
-    strncpy(out, configured_topic, out_sz - 1);
-    out[out_sz - 1] = '\0';
-
-    if (strip_topic_suffix(out, "/status/heartbeat")) return;
-    if (strip_topic_suffix(out, "/status")) return;
-    if (strip_topic_suffix(out, "/features")) return;
-    if (strip_topic_suffix(out, "/audio")) return;
-    if (strip_topic_suffix(out, "/temp_humidity")) return;
-}
-
-static void build_status_topic(char *out, size_t out_sz, const char *suffix)
-{
-    int len = 0;
-
-    if (!out || out_sz == 0) {
-        return;
-    }
-
-    out[0] = '\0';
-    if (s_base_topic[0] == '\0') {
-        return;
-    }
-
-    len = snprintf(out, out_sz, "%s%s", s_base_topic, suffix ? suffix : "");
-    if (len <= 0 || len >= (int)out_sz) {
-        out[0] = '\0';
     }
 }
 
@@ -180,8 +121,11 @@ static esp_err_t publish_heartbeat_now(const char *status)
         sizeof(payload),
         "{"
         "\"node_id\":\"%s\","
+        "\"record_type\":\"heartbeat\","
+        "\"timestamp\":%" PRIi64 ","
         "\"status\":\"%s\","
         "\"fw_version\":\"%s\","
+        "\"capture_state\":\"%s\","
         "\"uptime_s\":%" PRIu64 ","
         "\"rssi_dbm\":%d,"
         "\"free_heap\":%u,"
@@ -197,9 +141,11 @@ static esp_err_t publish_heartbeat_now(const char *status)
         "\"batt_last_sample_time_us\":%" PRIi64 ","
         "\"batt_valid\":%s"
         "}",
-        s_node_id[0] ? s_node_id : SDACS_NODE_ID,
+        s_node_id[0] ? s_node_id : sdacs_node_id(),
+        (int64_t)esp_timer_get_time(),
         status ? status : "online",
         SDACS_FW_VERSION,
+        device_state_to_str(device_state_get()),
         uptime_s,
         get_wifi_rssi_dbm(),
         (unsigned)esp_get_free_heap_size(),
@@ -443,11 +389,14 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         (void)snprintf(batt_rate_buf, sizeof(batt_rate_buf), "%.2f", (double)f->batt_charge_rate_pct_per_hr);
     }
 
-    // Keep it compact; Node-RED can parse JSON easily.
-    // Node-RED should also parse batt_soc_percent, batt_voltage_v, and batt_charge_rate_pct_per_hr.
+    // err is the compact sum of temp/humidity and fuel gauge sample error counters.
     return snprintf(out, out_sz,
         "{"
+          "\"node_id\":\"%s\","
           "\"node\":\"%s\","
+          "\"record_type\":\"features\","
+          "\"timestamp\":%" PRIu64 ","
+          "\"fw_version\":\"%s\","
           "\"seq\":%u,"
           "\"t_us\":%" PRIu64 ","
           "\"n\":%u,"
@@ -456,6 +405,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"db_spl\":%.2f,"
           "\"fft_peak_Hz\":%.1f,"
           "\"f_peak_hz\":%.1f,"
+          "\"fft_low_ratio\":%.6f,"
+          "\"fft_mid_ratio\":%.6f,"
+          "\"fft_high_ratio\":%.6f,"
+          "\"fft_total_energy\":%.6e,"
           "\"p2p_raw\":%" PRId32 ","
           "\"zeros\":%d,"
           "\"temp_c\":%s,"
@@ -463,9 +416,13 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"batt_soc_percent\":%s,"
           "\"batt_voltage_v\":%s,"
           "\"batt_charge_rate_pct_per_hr\":%s,"
-          "\"batt_valid\":%s"
+          "\"batt_valid\":%s,"
+          "\"err\":%u"
         "}",
         f->node_id,
+        f->node_id,
+        (uint64_t)f->t_us,
+        SDACS_FW_VERSION,
         (unsigned)f->seq,
         (uint64_t)f->t_us,
         (unsigned)f->n,
@@ -474,6 +431,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->db_spl,
         f->f_peak_hz,
         f->f_peak_hz,
+        f->fft_low_ratio,
+        f->fft_mid_ratio,
+        f->fft_high_ratio,
+        f->fft_total_energy,
         f->p2p_raw,
         f->zeros,
         temp_c_buf,
@@ -481,7 +442,8 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         batt_soc_buf,
         batt_voltage_buf,
         batt_rate_buf,
-        batt_valid_str
+        batt_valid_str,
+        (unsigned)f->err
     );
 }
 
@@ -505,7 +467,7 @@ static void mqtt_publish_task(void *arg)
     ESP_ERROR_CHECK(mqtt_start_client(s_cfg.broker_uri));
 
     sdacs_features_t f;
-    char payload[512];
+    char payload[768];
 
     while (1) {
         if (xQueueReceive(s_feat_q, &f, portMAX_DELAY) == pdTRUE) {
@@ -531,7 +493,11 @@ static void mqtt_publish_task(void *arg)
                 0     // retain
             );
 
-            (void)msg_id; // optional debug
+            if (msg_id >= 0) {
+                ESP_LOGI(TAG, "features published seq=%u topic=%s", (unsigned)f.seq, s_cfg.topic);
+            } else {
+                ESP_LOGW(TAG, "features publish failed seq=%u topic=%s", (unsigned)f.seq, s_cfg.topic);
+            }
         }
     }
 }
@@ -542,7 +508,6 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
     const char *pass = NULL;
     const char *broker_uri = NULL;
     const char *topic = NULL;
-    const char *node_id = NULL;
     esp_err_t err = ESP_OK;
 
     (void)cfg; // Runtime settings come from config_store.
@@ -565,41 +530,43 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
         return err;
     }
 
-    err = config_store_get_node_id(&node_id);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "config_store_get_node_id failed: %s", esp_err_to_name(err));
-        return err;
+    if (!ssid || !pass || !broker_uri ||
+        ssid[0] == '\0' || broker_uri[0] == '\0') {
+        ESP_LOGE(TAG, "Missing WiFi/MQTT settings in config_store.");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    if (!ssid || !pass || !broker_uri || !topic ||
-        ssid[0] == '\0' || broker_uri[0] == '\0' || topic[0] == '\0') {
-        ESP_LOGE(TAG, "Missing WiFi/MQTT settings in config_store.");
+    if (topic && topic[0] != '\0') {
+        ESP_LOGW(TAG, "Deprecated NVS mqtt_topic found but ignored. Topics come from compiled Node ID.");
+    }
+    if (!sdacs_node_id_is_valid(sdacs_node_id())) {
+        ESP_LOGE(TAG, "Invalid compiled MQTT node ID: %s", sdacs_node_id());
         return ESP_ERR_INVALID_STATE;
     }
 
     s_cfg.ssid = ssid;
     s_cfg.pass = pass;
     s_cfg.broker_uri = broker_uri;
-    s_cfg.topic = topic;
-    strncpy(s_node_id, (node_id && node_id[0] != '\0') ? node_id : SDACS_NODE_ID, sizeof(s_node_id) - 1);
+    strncpy(s_node_id, sdacs_node_id(), sizeof(s_node_id) - 1);
     s_node_id[sizeof(s_node_id) - 1] = '\0';
-    normalize_base_topic(topic, s_base_topic, sizeof(s_base_topic));
 
-    if (s_base_topic[0] == '\0') {
-        ESP_LOGE(TAG, "Unable to derive MQTT base topic from '%s'", topic);
-        return ESP_ERR_INVALID_STATE;
-    }
+    ESP_RETURN_ON_ERROR(sdacs_get_mqtt_base(s_base_topic, sizeof(s_base_topic)),
+                        TAG,
+                        "Failed to build MQTT base topic");
+    ESP_RETURN_ON_ERROR(sdacs_build_topic(s_features_topic, sizeof(s_features_topic), "/features"),
+                        TAG,
+                        "Failed to build MQTT features topic");
+    s_cfg.topic = s_features_topic;
 
-    build_status_topic(s_heartbeat_topic, sizeof(s_heartbeat_topic), "/status/heartbeat");
-    if (s_heartbeat_topic[0] == '\0') {
-        ESP_LOGE(TAG, "Heartbeat topic is invalid");
-        return ESP_ERR_INVALID_SIZE;
-    }
+    ESP_RETURN_ON_ERROR(sdacs_build_topic(s_heartbeat_topic, sizeof(s_heartbeat_topic), "/status/heartbeat"),
+                        TAG,
+                        "Failed to build heartbeat topic");
 
     if (snprintf(s_lwt_payload,
                  sizeof(s_lwt_payload),
-                 "{\"node_id\":\"%s\",\"status\":\"offline\",\"reason\":\"lwt\"}",
-                 s_node_id) >= (int)sizeof(s_lwt_payload)) {
+                 "{\"node_id\":\"%s\",\"record_type\":\"heartbeat\",\"status\":\"offline\",\"reason\":\"lwt\",\"fw_version\":\"%s\"}",
+                 s_node_id,
+                 SDACS_FW_VERSION) >= (int)sizeof(s_lwt_payload)) {
         ESP_LOGE(TAG, "LWT payload too long");
         return ESP_ERR_INVALID_SIZE;
     }

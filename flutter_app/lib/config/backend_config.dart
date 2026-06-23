@@ -1,16 +1,22 @@
 class BackendConfig {
   const BackendConfig({
     this.backendIp = defaultBackendIp,
-    this.nodeRedPort = defaultNodeRedPort,
+    this.backendPort = defaultBackendPort,
   });
 
-  static const String defaultBackendIp = '192.168.1.50';
-  static const int defaultNodeRedPort = 1880;
+  static const String defaultBackendIp = String.fromEnvironment(
+    'SDACS_BACKEND_IP',
+    defaultValue: '192.168.5.40',
+  );
+  static const int defaultBackendPort = int.fromEnvironment(
+    'SDACS_BACKEND_PORT',
+    defaultValue: 8000,
+  );
 
   final String backendIp;
-  final int nodeRedPort;
+  final int backendPort;
 
-  String get baseUrl => 'http://$backendIp:$nodeRedPort';
+  String get baseUrl => 'http://$backendIp:$backendPort';
 
-  String get websocketUrl => 'ws://$backendIp:$nodeRedPort/ws/sdacs/live';
+  String get websocketUrl => 'ws://$backendIp:$backendPort/ws/sdacs/live';
 }

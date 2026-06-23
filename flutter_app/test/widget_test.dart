@@ -1,30 +1,32 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:flutter_test_app/main.dart';
+import 'package:flutter_test_app/models/node_telemetry.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('NodeTelemetry parses backend snake_case JSON', () {
+    final telemetry = NodeTelemetry.fromJson({
+      'node_id': 'node01',
+      'status': 'online',
+      'capture_state': 'idle',
+      'rms': 0.42,
+      'dbfs': -12.5,
+      'db_spl': 71.2,
+      'f_peak_hz': 997.0,
+      'fft_low_ratio': 0.2,
+      'fft_mid_ratio': 0.5,
+      'fft_high_ratio': 0.3,
+      'fft_total_energy': 123.4,
+      'temp_c': 22.6,
+      'rh_percent': 45.0,
+      'batt_soc_percent': 88.0,
+      'batt_voltage_v': 4.05,
+      'batt_valid': true,
+      'fw_version': '0.1.0',
+      'timestamp_iso': '2026-06-23T02:43:50.704528Z',
+    });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(telemetry.nodeId, 'node01');
+    expect(telemetry.dbSpl, 71.2);
+    expect(telemetry.peakFrequencyHz, 997.0);
+    expect(telemetry.batteryValid, isTrue);
   });
 }

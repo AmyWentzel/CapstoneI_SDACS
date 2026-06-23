@@ -43,6 +43,189 @@ For more information on structure and contents of ESP-IDF projects, please refer
     * Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
     * The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
 
+## SDACS BLE Node Awareness
+
+On boot, each ESP32-S3 node loads config/NVS defaults, then runs a short BLE
+node-awareness advertisement before Wi-Fi and MQTT start. The BLE local name is
+`SDACS-<node_id>`, for example `SDACS-node01`, and the advertisement is
+non-connectable. The RPi5 gateway scans these advertisements and RSSI values,
+then publishes topology updates such as `sdacs/site/topology` and node presence
+topics over MQTT.
+
+After `SDACS_BLE_LOCATOR_DURATION_MS`, the node stops advertising, shuts down
+NimBLE, and starts the normal SDACS Wi-Fi/MQTT sensing path. The node continues
+to publish heartbeat, battery, temp/humidity, audio, and feature topics under
+`sdacs/node/<node_id>/...`, and subscribes to its node command topic plus
+`sdacs/group/all/cmd`.
+
+Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
+for BLE devices and do not receive commands over BLE.
+
+## Flashing Four Unique Nodes
+
+Node identity is compiled into the firmware through `SDACS_SECRET_NODE_ID`.
+Runtime NVS `node_id` values are deprecated and ignored. Use one firmware build
+per node so BLE, MQTT, storage, telemetry JSON, OTA status, and future
+API/Flutter integrations all use the same fixed identity.
+
+```powershell
+.\flash_metro.ps1 -Port COMx  -NodeId node01 -Erase
+.\flash_metro.ps1 -Port COM9  -NodeId node02 -Erase
+.\flash_metro.ps1 -Port COM5 -NodeId node03 -Erase
+.\flash_metro.ps1 -Port COM8 -NodeId node04 -Erase
+```id
+
+Expected BLE names:
+
+```text
+SDACS-node01
+SDACS-node02
+SDACS-node03
+SDACS-node04
+```
+
+Subscribe Node-RED or a test client to all node topics with:
+
+```text
+sdacs/node/+/#
+```
+
+On boot, the serial monitor should show the compiled and active node identity,
+the BLE name, and the MQTT base topic, for example:
+
+```text
+Compiled Node ID: node02
+Active Node ID: node02
+BLE name: SDACS-node02
+MQTT base: sdacs/node/node02
+```
+
+Troubleshooting:
+
+- If BLE still shows `node01`, erase flash once with `-Erase`.
+- Confirm the serial monitor shows the expected compiled and active Node ID.
+- Confirm the firmware is not reading `node_id` from NVS.
+- Confirm Node-RED subscribes to wildcard topics such as `sdacs/node/+/#`.
+
+## Delayed Synchronized Capture
+
+Branch: `feature/delayed-synched-capture`
+
+After BLE discovery and Wi-Fi/MQTT startup, the node remains idle until MQTT
+receives a `start_capture` command on either `sdacs/node/<node_id>/cmd` or
+`sdacs/group/all/cmd`.
+
+Example Node-RED group command:
+
+```json
+{
+  "cmd": "start_capture",
+  "request_id": "capture_001",
+  "delay_ms": 5000,
+  "record_seconds": 20
+}
+```
+
+Accepted commands publish capture status on `sdacs/node/<node_id>/status`, then
+the node waits `delay_ms`, records to SD, finalizes raw/WAV/metrics files,
+verifies they are non-empty, and only then publishes
+`sdacs/node/<node_id>/capture_complete`. Audio chunks and capture feature data
+are not streamed live during capture; Node-RED receives completion only after SD
+finalization succeeds.
+
+### Copying Firmware `.bin` Files to the Raspberry Pi for OTA
+
+After building the ESP32-S3 firmware in ESP-IDF, the OTA binary is generated in the firmware build directory:
+
+```powershell
+C:\ws\CapstoneI_SDACS\ESP-IDF\firmware\mic_test\build\mic_test.bin
+```
+
+From the Windows ESP-IDF terminal, copy the binary to the Raspberry Pi using `scp`:
+
+```powershell
+cd C:\ws\CapstoneI_SDACS\ESP-IDF\firmware\mic_test
+scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node04.bin
+```
+
+Change the destination filename depending on which node is being updated:
+
+```powershell
+scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node01.bin
+scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node02.bin
+scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node03.bin
+scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node04.bin
+```
+
+On the Raspberry Pi, confirm that the file was copied successfully:
+
+```bash
+ls -lh /home/vortex/sdacs_ota/firmware/
+```
+
+The OTA URL used by Node-RED should point to the copied file, for example:
+
+```text
+http://192.168.5.40:1880/firmware/node04.bin
+```
+
+### OTA Using Localhost on the Raspberry Pi
+
+If Node-RED and the firmware files are hosted on the same Raspberry Pi, you can verify that the firmware is being served locally using `localhost`:
+
+```text
+http://localhost:1880/firmware/node04.bin
+```
+
+You can test access to the firmware file directly on the Raspberry Pi:
+
+```bash
+curl -I http://localhost:1880/firmware/node04.bin
+```
+
+Or download the file locally to verify that it is accessible:
+
+```bash
+curl -O http://localhost:1880/firmware/node04.bin
+```
+
+When configuring OTA for ESP32 devices, use the Raspberry Pi's IP address rather than `localhost`, since `localhost` on the ESP32 refers to the ESP32 itself. For example:
+
+```text
+http://192.168.5.40:1880/firmware/node04.bin
+```
+
+### Node-RED Firmware Hosting Configuration
+
+Before using OTA, confirm that Node-RED is running on the Raspberry Pi and that the `/firmware` static route serves files from:
+
+```text
+/home/vortex/sdacs_ota/firmware
+```
+
+If the firmware folder does not exist, create it on the Raspberry Pi:
+
+```bash
+mkdir -p /home/vortex/sdacs_ota/firmware
+```
+
+If Node-RED cannot access the file, update permissions:
+
+```bash
+chmod 755 /home/vortex/sdacs_ota
+chmod 755 /home/vortex/sdacs_ota/firmware
+chmod 644 /home/vortex/sdacs_ota/firmware/*.bin
+```
+
+After configuring Node-RED, verify that the firmware file is reachable from another device on the network:
+
+```bash
+curl -I http://192.168.5.40:1880/firmware/node04.bin
+```
+
+A successful response should return an HTTP status code such as `200 OK`, indicating that the firmware is ready to be downloaded by ESP32 devices during OTA updates.
+
+
 ## Technical support and feedback
 
 Please use the following feedback channels:

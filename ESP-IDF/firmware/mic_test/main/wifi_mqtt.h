@@ -26,8 +26,8 @@ typedef struct {
 typedef struct {
     const char *ssid;
     const char *pass;
-    const char *broker_uri;  // e.g. "mqtt://192.168.1.50"
-    const char *topic;       // e.g. "sdacs/node/node01/features"
+    const char *broker_uri;  // e.g. "mqtt://192.168.5.40"
+    const char *topic;       // built from compiled node ID, e.g. "sdacs/node/<node_id>/features"
 } wifi_mqtt_cfg_t;
 
 typedef void (*wifi_mqtt_cmd_cb_t)(const char *topic, const char *payload, int len);
