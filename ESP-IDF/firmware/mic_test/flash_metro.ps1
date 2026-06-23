@@ -6,6 +6,15 @@ param(
     [ValidatePattern('^node0[1-4]$')]
     [string]$NodeId,
 
+    [Parameter(Mandatory=$false)]
+    [string]$WifiSsid,
+
+    [Parameter(Mandatory=$false)]
+    [string]$WifiPass,
+
+    [Parameter(Mandatory=$false)]
+    [string]$MqttUri,
+
     [switch]$Erase
 )
 
@@ -55,7 +64,21 @@ Set-Location $ProjectDir
 
 Write-Host "Using port $Port"
 Write-Host "Provisioning compiled identity $NodeId"
-Run-Native powershell.exe -ExecutionPolicy Bypass -File (Join-Path $ProjectDir "main\provision-secrets.ps1") -NodeId $NodeId
+$ProvisionArgs = @(
+    "-ExecutionPolicy", "Bypass",
+    "-File", (Join-Path $ProjectDir "main\provision-secrets.ps1"),
+    "-NodeId", $NodeId
+)
+if ($PSBoundParameters.ContainsKey("WifiSsid")) {
+    $ProvisionArgs += @("-WifiSsid", $WifiSsid)
+}
+if ($PSBoundParameters.ContainsKey("WifiPass")) {
+    $ProvisionArgs += @("-WifiPass", $WifiPass)
+}
+if ($PSBoundParameters.ContainsKey("MqttUri")) {
+    $ProvisionArgs += @("-MqttUri", $MqttUri)
+}
+Run-Native powershell.exe @ProvisionArgs
 
 Write-Host "Building firmware for $NodeId..."
 Run-Native $Python $IdfPy build

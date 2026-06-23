@@ -17,6 +17,10 @@ typedef struct {
     float temp_c;
     float humidity;
     float fft_peak_hz;
+    float fft_low_ratio;
+    float fft_mid_ratio;
+    float fft_high_ratio;
+    float fft_total_energy;
 } metrics_record_t;
 
 typedef struct {

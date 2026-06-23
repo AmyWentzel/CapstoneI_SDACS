@@ -269,6 +269,10 @@ static void capture_task_run(void *arg)
                 record.temp_c = temp_c;
                 record.humidity = humidity;
                 record.fft_peak_hz = metrics.fft_peak_hz;
+                record.fft_low_ratio = metrics.fft_low_ratio;
+                record.fft_mid_ratio = metrics.fft_mid_ratio;
+                record.fft_high_ratio = metrics.fft_high_ratio;
+                record.fft_total_energy = metrics.fft_total_energy;
                 (void)run_storage_append_metrics(state->ctx.storage, &record);
 
                 sdacs_features_t features = {

@@ -7,6 +7,15 @@ param(
     [ValidatePattern('^node0[1-4]$')]
     [string]$NodeId,
 
+    [Parameter(Mandatory=$false)]
+    [string]$WifiSsid,
+
+    [Parameter(Mandatory=$false)]
+    [string]$WifiPass,
+
+    [Parameter(Mandatory=$false)]
+    [string]$MqttUri,
+
     [switch]$Erase
 )
 
@@ -40,7 +49,17 @@ Set-Location $ProjectDir
 
 Write-Host "Using port $Port"
 Write-Host "Provisioning compiled identity $NodeId"
-& (Join-Path $PSScriptRoot "provision-secrets.ps1") -NodeId $NodeId
+$ProvisionArgs = @("-NodeId", $NodeId)
+if ($PSBoundParameters.ContainsKey("WifiSsid")) {
+    $ProvisionArgs += @("-WifiSsid", $WifiSsid)
+}
+if ($PSBoundParameters.ContainsKey("WifiPass")) {
+    $ProvisionArgs += @("-WifiPass", $WifiPass)
+}
+if ($PSBoundParameters.ContainsKey("MqttUri")) {
+    $ProvisionArgs += @("-MqttUri", $MqttUri)
+}
+& (Join-Path $PSScriptRoot "provision-secrets.ps1") @ProvisionArgs
 
 Write-Host "Building firmware for $NodeId..."
 & $Python $IdfPy build

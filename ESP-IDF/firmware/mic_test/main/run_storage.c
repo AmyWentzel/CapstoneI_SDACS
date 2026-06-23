@@ -173,7 +173,7 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     char ts[32];
     time_t now;
     bool dir_created = false;
-    static const char *header = "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz\n";
+    static const char *header = "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz,fft_low_ratio,fft_mid_ratio,fft_high_ratio,fft_total_energy\n";
 
     if (!rs || !node_id) {
         return ESP_ERR_INVALID_ARG;
@@ -278,9 +278,11 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
         return false;
     }
 
-    fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f\n",
+    fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f,%.6f,%.6f,%.6f,%.6e\n",
             rec->timestamp, rec->node_id, rec->laeq_db, rec->peak_db,
-            rec->dbfs, rec->rms, rec->temp_c, rec->humidity, rec->fft_peak_hz);
+            rec->dbfs, rec->rms, rec->temp_c, rec->humidity, rec->fft_peak_hz,
+            rec->fft_low_ratio, rec->fft_mid_ratio, rec->fft_high_ratio,
+            rec->fft_total_energy);
     fclose(f);
 
     f = fopen(rs->cal_csv_path, "a");
@@ -288,10 +290,15 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
         return false;
     }
 
-    fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f\n",
+    fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f,%.6f,%.6f,%.6f,%.6e\n",
             rec->timestamp, rec->node_id, rec->laeq_db, rec->peak_db,
-            rec->dbfs, rec->rms, rec->temp_c, rec->humidity, rec->fft_peak_hz);
+            rec->dbfs, rec->rms, rec->temp_c, rec->humidity, rec->fft_peak_hz,
+            rec->fft_low_ratio, rec->fft_mid_ratio, rec->fft_high_ratio,
+            rec->fft_total_energy);
     fclose(f);
+    ESP_LOGI(TAG, "SD metrics row: low=%.6f mid=%.6f high=%.6f total=%.6e",
+             rec->fft_low_ratio, rec->fft_mid_ratio, rec->fft_high_ratio,
+             rec->fft_total_energy);
     return true;
 }
 

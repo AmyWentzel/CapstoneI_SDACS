@@ -29,7 +29,18 @@ esp_err_t network_provisioning_apply_defaults(void)
                           SDACS_PROVISION_WIFI_PASS[0] != '\0');
     have_mqtt_defaults = (SDACS_PROVISION_MQTT_URI[0] != '\0');
 
-    if (!ssid || ssid[0] == '\0') {
+    if (have_wifi_defaults &&
+        (!ssid || !pass ||
+         strcmp(ssid, SDACS_PROVISION_WIFI_SSID) != 0 ||
+         strcmp(pass, SDACS_PROVISION_WIFI_PASS) != 0)) {
+        ESP_RETURN_ON_ERROR(
+            config_store_set_wifi(SDACS_PROVISION_WIFI_SSID, SDACS_PROVISION_WIFI_PASS),
+            TAG,
+            "Failed to sync WiFi defaults");
+        ssid = SDACS_PROVISION_WIFI_SSID;
+        pass = SDACS_PROVISION_WIFI_PASS;
+        ESP_LOGW(TAG, "Synced WiFi credentials in NVS to firmware defaults.");
+    } else if (!ssid || ssid[0] == '\0') {
         if (!have_wifi_defaults) {
             ESP_LOGW(TAG, "No default WiFi credentials compiled in; skipping WiFi provisioning.");
         } else {
