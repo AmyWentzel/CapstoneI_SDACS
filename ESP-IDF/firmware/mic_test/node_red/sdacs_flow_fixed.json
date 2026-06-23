@@ -1,0 +1,775 @@
+﻿[
+    {
+        "id": "e270d71be1b309e9",
+        "type": "tab",
+        "label": "SDACS 1 - Live Telemetry",
+        "disabled": false,
+        "info": "Live MQTT telemetry from latest SDACS firmware. Topics: features, temp_humidity, fuel_gauge, status/heartbeat."
+    },
+    {
+        "id": "a33709c1fad802f5",
+        "type": "mqtt in",
+        "z": "e270d71be1b309e9",
+        "name": "Features In",
+        "topic": "sdacs/node/+/features",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 80,
+        "wires": [
+            [
+                "44a6ab2dc88f7873"
+            ]
+        ]
+    },
+    {
+        "id": "44a6ab2dc88f7873",
+        "type": "function",
+        "z": "e270d71be1b309e9",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 80,
+        "wires": [
+            [
+                "dec91f724a14b12f"
+            ]
+        ]
+    },
+    {
+        "id": "387dac266f3607ab",
+        "type": "mqtt in",
+        "z": "e270d71be1b309e9",
+        "name": "Temp/Humidity In",
+        "topic": "sdacs/node/+/temp_humidity",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 180,
+        "wires": [
+            [
+                "d67e6cfbe141b653"
+            ]
+        ]
+    },
+    {
+        "id": "d67e6cfbe141b653",
+        "type": "function",
+        "z": "e270d71be1b309e9",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 180,
+        "wires": [
+            [
+                "dec91f724a14b12f"
+            ]
+        ]
+    },
+    {
+        "id": "c363b23489a05ce8",
+        "type": "mqtt in",
+        "z": "e270d71be1b309e9",
+        "name": "Fuel Gauge In",
+        "topic": "sdacs/node/+/fuel_gauge",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 280,
+        "wires": [
+            [
+                "fe694aae1921cc6f"
+            ]
+        ]
+    },
+    {
+        "id": "fe694aae1921cc6f",
+        "type": "function",
+        "z": "e270d71be1b309e9",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 280,
+        "wires": [
+            [
+                "dec91f724a14b12f"
+            ]
+        ]
+    },
+    {
+        "id": "9af99d5423a32c3b",
+        "type": "mqtt in",
+        "z": "e270d71be1b309e9",
+        "name": "Heartbeat In",
+        "topic": "sdacs/node/+/status/heartbeat",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 380,
+        "wires": [
+            [
+                "ab9c4e809cdcacad"
+            ]
+        ]
+    },
+    {
+        "id": "ab9c4e809cdcacad",
+        "type": "function",
+        "z": "e270d71be1b309e9",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 380,
+        "wires": [
+            [
+                "dec91f724a14b12f"
+            ]
+        ]
+    },
+    {
+        "id": "dec91f724a14b12f",
+        "type": "function",
+        "z": "e270d71be1b309e9",
+        "name": "Normalize latest firmware telemetry",
+        "func": "const topic = msg.topic || '';\nconst parts = topic.split('/');\nconst node_id = (msg.payload && (msg.payload.node_id || msg.payload.node)) || parts[2] || 'unknown';\nconst p = msg.payload || {};\nlet type = p.record_type || 'unknown';\nif (topic.endsWith('/features')) type = 'features';\nelse if (topic.endsWith('/temp_humidity')) type = 'temp_humidity';\nelse if (topic.endsWith('/fuel_gauge')) type = 'fuel_gauge';\nelse if (topic.endsWith('/status/heartbeat')) type = 'heartbeat';\n\nconst rec = {\n    timestamp_iso: (typeof p.timestamp === 'string') ? p.timestamp : new Date().toISOString(),\n    timestamp_us: (typeof p.timestamp === 'number') ? p.timestamp : (p.t_us ?? null),\n    node_id,\n    topic,\n    record_type: type,\n    fw_version: p.fw_version ?? '',\n    status: p.status ?? '',\n    capture_state: p.capture_state ?? p.state ?? p.mode ?? '',\n    seq: p.seq ?? '',\n    n: p.n ?? '',\n    rms: p.rms ?? null,\n    dbfs: p.dbfs ?? null,\n    db_spl: p.db_spl ?? null,\n    f_peak_hz: p.f_peak_hz ?? p.fft_peak_Hz ?? p.fft_peak_hz ?? null,\n    p2p_raw: p.p2p_raw ?? null,\n    zeros: p.zeros ?? null,\n    temp_c: p.temp_c ?? null,\n    rh_percent: p.rh_percent ?? null,\n    batt_soc_percent: p.batt_soc_percent ?? p.soc_percent ?? null,\n    batt_voltage_v: p.batt_voltage_v ?? p.voltage_v ?? null,\n    batt_charge_rate_pct_per_hr: p.batt_charge_rate_pct_per_hr ?? p.charge_rate_percent_per_hr ?? null,\n    batt_sample_count: p.batt_sample_count ?? p.sample_count ?? null,\n    batt_error_count: p.batt_error_count ?? p.error_count ?? null,\n    batt_valid: p.batt_valid ?? p.valid ?? null,\n    rssi_dbm: p.rssi_dbm ?? null,\n    free_heap: p.free_heap ?? null,\n    wifi_connected: p.wifi_connected ?? null,\n    mqtt_connected: p.mqtt_connected ?? null,\n    ota_ready: p.ota_ready ?? null,\n    ota_in_progress: p.ota_in_progress ?? null,\n    err: p.err ?? '',\n    raw_json: JSON.stringify(p)\n};\n\nlet latest = flow.get('sdacs_latest') || {};\nlatest[node_id] = Object.assign(latest[node_id] || {}, rec, {last_seen: new Date().toLocaleTimeString()});\nflow.set('sdacs_latest', latest);\n\nmsg.payload = rec;\nreturn [msg, {payload: Object.values(latest).sort((a,b)=>a.node_id.localeCompare(b.node_id))}];",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 650,
+        "y": 230,
+        "wires": [
+            [
+                "dde7c938075cd43f",
+                "71311b1dbf549793"
+            ],
+            [
+                "bdd1f2d6b7d9fec9"
+            ]
+        ]
+    },
+    {
+        "id": "dde7c938075cd43f",
+        "type": "ui_text",
+        "z": "e270d71be1b309e9",
+        "group": "grp_live_3b04f32250a",
+        "order": 1,
+        "width": 12,
+        "height": 1,
+        "name": "Latest Record",
+        "label": "Latest Record",
+        "format": "{{msg.payload.node_id}} | {{msg.payload.record_type}} | SPL {{msg.payload.db_spl}} dB | Temp {{msg.payload.temp_c}} °C | Batt {{msg.payload.batt_soc_percent}}%",
+        "layout": "row-spread",
+        "className": "",
+        "x": 960,
+        "y": 190,
+        "wires": []
+    },
+    {
+        "id": "bdd1f2d6b7d9fec9",
+        "type": "ui_template",
+        "z": "e270d71be1b309e9",
+        "group": "grp_health_307492ce3",
+        "name": "Node summary table",
+        "order": 1,
+        "width": "12",
+        "height": "7",
+        "format": "<table style=\"width:100%; border-collapse:collapse;\">\n<thead><tr><th align=\"left\">Node</th><th align=\"left\">State</th><th align=\"left\">FW</th><th align=\"left\">dB SPL</th><th align=\"left\">Peak Hz</th><th align=\"left\">Temp</th><th align=\"left\">RH</th><th align=\"left\">Batt %</th><th align=\"left\">Vbat</th><th align=\"left\">RSSI</th><th align=\"left\">Last seen</th></tr></thead>\n<tbody><tr ng-repeat=\"n in msg.payload\"><td>{{n.node_id}}</td><td>{{n.capture_state || n.status}}</td><td>{{n.fw_version}}</td><td>{{n.db_spl}}</td><td>{{n.f_peak_hz}}</td><td>{{n.temp_c}}</td><td>{{n.rh_percent}}</td><td>{{n.batt_soc_percent}}</td><td>{{n.batt_voltage_v}}</td><td>{{n.rssi_dbm}}</td><td>{{n.last_seen}}</td></tr></tbody>\n</table>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 970,
+        "y": 260,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "71311b1dbf549793",
+        "type": "debug",
+        "z": "e270d71be1b309e9",
+        "name": "normalized live telemetry",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 960,
+        "y": 330,
+        "wires": []
+    },
+    {
+        "id": "b5e79c37c7d38f40",
+        "type": "tab",
+        "label": "SDACS 2 - Capture Control",
+        "disabled": false,
+        "info": "Group synchronized capture controls and capture status/event views."
+    },
+    {
+        "id": "0691ff2df1ddf922",
+        "type": "function",
+        "z": "b5e79c37c7d38f40",
+        "name": "defaults: 5s delay, 20s record",
+        "func": "flow.set('capture_delay_ms', 5000);\nflow.set('capture_record_seconds', 20);\nreturn null;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 440,
+        "y": 40,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "e3e9f65ab98a453b",
+        "type": "inject",
+        "z": "b5e79c37c7d38f40",
+        "name": "set defaults on deploy",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "0.5",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 40,
+        "wires": [
+            [
+                "0691ff2df1ddf922"
+            ]
+        ]
+    },
+    {
+        "id": "a6c9949321a86446",
+        "type": "change",
+        "z": "b5e79c37c7d38f40",
+        "name": "store delay_ms",
+        "rules": [
+            {
+                "t": "set",
+                "p": "capture_delay_ms",
+                "pt": "flow",
+                "to": "payload",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 390,
+        "y": 90,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "4858b4a9da832cd1",
+        "type": "ui_numeric",
+        "z": "b5e79c37c7d38f40",
+        "name": "Delay before capture",
+        "label": "Delay before capture",
+        "tooltip": "",
+        "group": "grp_capture_87976db6",
+        "order": 1,
+        "width": 4,
+        "height": 1,
+        "wrap": false,
+        "passthru": true,
+        "topic": "delay_ms",
+        "topicType": "str",
+        "format": "{{value}} ms",
+        "min": 0,
+        "max": "60000",
+        "step": "500",
+        "className": "",
+        "x": 160,
+        "y": 90,
+        "wires": [
+            [
+                "a6c9949321a86446"
+            ]
+        ]
+    },
+    {
+        "id": "d9b94b1582964023",
+        "type": "change",
+        "z": "b5e79c37c7d38f40",
+        "name": "store record_seconds",
+        "rules": [
+            {
+                "t": "set",
+                "p": "capture_record_seconds",
+                "pt": "flow",
+                "to": "payload",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 400,
+        "y": 140,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "d4a64b5b2b13d57d",
+        "type": "ui_numeric",
+        "z": "b5e79c37c7d38f40",
+        "name": "Record length",
+        "label": "Record length",
+        "tooltip": "",
+        "group": "grp_capture_87976db6",
+        "order": 2,
+        "width": 4,
+        "height": 1,
+        "wrap": false,
+        "passthru": true,
+        "topic": "record_seconds",
+        "topicType": "str",
+        "format": "{{value}} s",
+        "min": "1",
+        "max": "300",
+        "step": "1",
+        "className": "",
+        "x": 150,
+        "y": 140,
+        "wires": [
+            [
+                "d9b94b1582964023"
+            ]
+        ]
+    },
+    {
+        "id": "dd770b0cceca2b1a",
+        "type": "function",
+        "z": "b5e79c37c7d38f40",
+        "name": "Build group start_capture command",
+        "func": "const delayMs = Number(flow.get('capture_delay_ms') ?? 5000);\nconst recordSeconds = Number(flow.get('capture_record_seconds') ?? 20);\nconst stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0,14);\nconst requestId = `capture_${stamp}`;\nmsg.topic = 'sdacs/group/all/cmd';\nmsg.payload = {cmd:'start_capture', request_id:requestId, delay_ms:delayMs, record_seconds:recordSeconds};\nflow.set('last_request_id', requestId);\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 440,
+        "y": 210,
+        "wires": [
+            [
+                "84f4b79ba4feb787",
+                "3258002060679e73",
+                "554797da8940558c"
+            ]
+        ]
+    },
+    {
+        "id": "0d876ae9ea6c6d0f",
+        "type": "ui_button",
+        "z": "b5e79c37c7d38f40",
+        "name": "Start group capture",
+        "group": "grp_capture_87976db6",
+        "order": 3,
+        "width": 4,
+        "height": 1,
+        "passthru": false,
+        "label": "START GROUP CAPTURE",
+        "tooltip": "Publish start_capture to sdacs/group/all/cmd",
+        "color": "",
+        "bgcolor": "",
+        "className": "",
+        "icon": "play_arrow",
+        "payload": "",
+        "payloadType": "str",
+        "topic": "",
+        "topicType": "str",
+        "x": 170,
+        "y": 210,
+        "wires": [
+            [
+                "dd770b0cceca2b1a"
+            ]
+        ]
+    },
+    {
+        "id": "84f4b79ba4feb787",
+        "type": "mqtt out",
+        "z": "b5e79c37c7d38f40",
+        "name": "Publish group command",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "application/json",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "broker_61dacb229c8a",
+        "x": 750,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "3258002060679e73",
+        "type": "ui_text",
+        "z": "b5e79c37c7d38f40",
+        "group": "grp_capture_87976db6",
+        "order": 4,
+        "width": 8,
+        "height": 1,
+        "name": "Last capture command",
+        "label": "Last command",
+        "format": "{{msg.payload.request_id}} → delay {{msg.payload.delay_ms}} ms, record {{msg.payload.record_seconds}} s",
+        "layout": "row-spread",
+        "className": "",
+        "x": 740,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "554797da8940558c",
+        "type": "debug",
+        "z": "b5e79c37c7d38f40",
+        "name": "group capture command",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 750,
+        "y": 270,
+        "wires": []
+    },
+    {
+        "id": "6be40800bf7194b0",
+        "type": "mqtt in",
+        "z": "b5e79c37c7d38f40",
+        "name": "Capture Status In",
+        "topic": "sdacs/node/+/status",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 340,
+        "wires": [
+            [
+                "1161902642b84793"
+            ]
+        ]
+    },
+    {
+        "id": "1161902642b84793",
+        "type": "function",
+        "z": "b5e79c37c7d38f40",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 370,
+        "y": 340,
+        "wires": [
+            [
+                "3199492089a76c63"
+            ]
+        ]
+    },
+    {
+        "id": "11bbf2b140d8b68c",
+        "type": "mqtt in",
+        "z": "b5e79c37c7d38f40",
+        "name": "Capture Complete In",
+        "topic": "sdacs/node/+/capture_complete",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 500,
+        "wires": [
+            [
+                "3aa86d17dc085106"
+            ]
+        ]
+    },
+    {
+        "id": "3aa86d17dc085106",
+        "type": "function",
+        "z": "b5e79c37c7d38f40",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 370,
+        "y": 500,
+        "wires": [
+            [
+                "3199492089a76c63"
+            ]
+        ]
+    },
+    {
+        "id": "70874a52833fdeb1",
+        "type": "mqtt in",
+        "z": "b5e79c37c7d38f40",
+        "name": "Capture Heartbeat In",
+        "topic": "sdacs/node/+/status/heartbeat",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "broker_61dacb229c8a",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 420,
+        "wires": [
+            [
+                "457362c98153f3c8"
+            ]
+        ]
+    },
+    {
+        "id": "457362c98153f3c8",
+        "type": "function",
+        "z": "b5e79c37c7d38f40",
+        "name": "Parse JSON safely",
+        "func": "let p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { node.warn('Invalid JSON on ' + msg.topic); return null; }\n}\nmsg.payload = p || {};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 370,
+        "y": 420,
+        "wires": [
+            [
+                "3199492089a76c63"
+            ]
+        ]
+    },
+    {
+        "id": "3199492089a76c63",
+        "type": "function",
+        "z": "b5e79c37c7d38f40",
+        "name": "Update capture node/event tables",
+        "func": "const p = msg.payload || {};\nconst topic = msg.topic || '';\nconst node_id = p.node_id || topic.split('/')[2] || 'unknown';\nif (topic.endsWith('/capture_complete') || p.record_type === 'capture_complete') {\n    let events = flow.get('capture_events') || [];\n    events.unshift({\n        time: new Date().toLocaleTimeString(), node_id,\n        request_id: p.request_id || '', state: p.state || '', record_seconds: p.record_seconds || '',\n        raw_bytes: p.raw_bytes || '', wav_bytes: p.wav_bytes || '', metrics_bytes: p.metrics_bytes || '',\n        raw_path: p.raw_path || '', wav_path: p.wav_path || '', metrics_path: p.metrics_path || ''\n    });\n    events = events.slice(0, 20);\n    flow.set('capture_events', events);\n    return [null, {payload: events}];\n}\nlet nodes = flow.get('capture_nodes') || {};\nnodes[node_id] = Object.assign(nodes[node_id] || {}, {\n    node_id,\n    status: p.status || (nodes[node_id] && nodes[node_id].status) || '',\n    state: p.state || p.capture_state || p.mode || (nodes[node_id] && nodes[node_id].state) || '',\n    request_id: p.request_id || (nodes[node_id] && nodes[node_id].request_id) || '',\n    delay_ms: p.delay_ms ?? ((nodes[node_id] && nodes[node_id].delay_ms) || ''),\n    record_seconds: p.record_seconds ?? ((nodes[node_id] && nodes[node_id].record_seconds) || ''),\n    batt_soc_percent: p.batt_soc_percent ?? ((nodes[node_id] && nodes[node_id].batt_soc_percent) || ''),\n    rssi_dbm: p.rssi_dbm ?? ((nodes[node_id] && nodes[node_id].rssi_dbm) || ''),\n    message: p.message || p.reason || (nodes[node_id] && nodes[node_id].message) || '',\n    last_seen: new Date().toLocaleTimeString()\n});\nflow.set('capture_nodes', nodes);\nreturn [{payload:Object.values(nodes).sort((a,b)=>a.node_id.localeCompare(b.node_id))}, null];",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 630,
+        "y": 420,
+        "wires": [
+            [
+                "4487a17347cf8917"
+            ],
+            [
+                "e4c32feda06a300e"
+            ]
+        ]
+    },
+    {
+        "id": "4487a17347cf8917",
+        "type": "ui_template",
+        "z": "b5e79c37c7d38f40",
+        "group": "grp_capture_87976db6",
+        "name": "Capture node table",
+        "order": 5,
+        "width": "12",
+        "height": "6",
+        "format": "<table style=\"width:100%; border-collapse:collapse;\"><thead><tr><th align=\"left\">Node</th><th align=\"left\">State</th><th align=\"left\">Request</th><th align=\"left\">Delay</th><th align=\"left\">Record</th><th align=\"left\">Batt %</th><th align=\"left\">RSSI</th><th align=\"left\">Last seen</th><th align=\"left\">Message</th></tr></thead><tbody><tr ng-repeat=\"n in msg.payload\"><td>{{n.node_id}}</td><td>{{n.state}}</td><td>{{n.request_id}}</td><td>{{n.delay_ms}}</td><td>{{n.record_seconds}}</td><td>{{n.batt_soc_percent}}</td><td>{{n.rssi_dbm}}</td><td>{{n.last_seen}}</td><td>{{n.message}}</td></tr></tbody></table>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 920,
+        "y": 390,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "e4c32feda06a300e",
+        "type": "ui_template",
+        "z": "b5e79c37c7d38f40",
+        "group": "grp_capture_87976db6",
+        "name": "Capture complete events",
+        "order": 6,
+        "width": "12",
+        "height": "6",
+        "format": "<table style=\"width:100%; border-collapse:collapse;\"><thead><tr><th align=\"left\">Time</th><th align=\"left\">Node</th><th align=\"left\">Request</th><th align=\"left\">Raw bytes</th><th align=\"left\">WAV bytes</th><th align=\"left\">CSV bytes</th><th align=\"left\">Raw path</th><th align=\"left\">WAV path</th><th align=\"left\">CSV path</th></tr></thead><tbody><tr ng-repeat=\"e in msg.payload\"><td>{{e.time}}</td><td>{{e.node_id}}</td><td>{{e.request_id}}</td><td>{{e.raw_bytes}}</td><td>{{e.wav_bytes}}</td><td>{{e.metrics_bytes}}</td><td>{{e.raw_path}}</td><td>{{e.wav_path}}</td><td>{{e.metrics_path}}</td></tr></tbody></table>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 930,
+        "y": 470,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "broker_61dacb229c8a",
+        "type": "mqtt-broker",
+        "name": "SDACS MQTT Broker - edit host",
+        "broker": "192.168.5.40",
+        "port": "1883",
+        "clientid": "node-red-sdacs",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "grp_live_3b04f32250a",
+        "type": "ui_group",
+        "name": "Live Telemetry",
+        "tab": "ui_tab_sdacs",
+        "order": 1,
+        "disp": true,
+        "width": "12",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "grp_health_307492ce3",
+        "type": "ui_group",
+        "name": "Node Health",
+        "tab": "ui_tab_sdacs",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "grp_capture_87976db6",
+        "type": "ui_group",
+        "name": "Capture Control",
+        "tab": "ui_tab_sdacs",
+        "order": 3,
+        "disp": true,
+        "width": "12",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "ui_tab_sdacs",
+        "type": "ui_tab",
+        "name": "SDACS",
+        "icon": "dashboard",
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "250ca6df5adcd365",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]
