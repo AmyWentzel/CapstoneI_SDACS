@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/app_routes.dart';
+import '../../config/backend_config.dart';
 import '../../services/sdacs_api_service.dart';
 
 class LoadingScreen extends StatefulWidget {
@@ -11,17 +12,18 @@ class LoadingScreen extends StatefulWidget {
 }
 
 class _LoadingScreenState extends State<LoadingScreen> {
-  final SdacsApiService _apiService = const SdacsApiService();
-
   @override
   void initState() {
     super.initState();
-    _startApp();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startApp());
   }
 
   Future<void> _startApp() async {
-    await _apiService.checkBackendHealth();
-    await Future<void>.delayed(const Duration(milliseconds: 5000));
+    final config = BackendConfigScope.configOf(context);
+    final apiService = SdacsApiService(config: config);
+
+    await apiService.checkBackendHealth();
+    await Future<void>.delayed(const Duration(milliseconds: 900));
 
     if (!mounted) {
       return;

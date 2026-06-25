@@ -4,10 +4,12 @@ class NodeConfigForm extends StatelessWidget {
   const NodeConfigForm({
     super.key,
     required this.backendIpController,
+    required this.backendPortController,
     required this.nodeCountController,
   });
 
   final TextEditingController backendIpController;
+  final TextEditingController backendPortController;
   final TextEditingController nodeCountController;
 
   @override
@@ -18,6 +20,12 @@ class NodeConfigForm extends StatelessWidget {
           controller: backendIpController,
           keyboardType: TextInputType.url,
           decoration: const InputDecoration(labelText: 'Backend IP'),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: backendPortController,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Backend port'),
         ),
         const SizedBox(height: 12),
         TextFormField(

@@ -18,6 +18,9 @@ class _SetupScreenState extends State<SetupScreen> {
   final _backendIpController = TextEditingController(
     text: BackendConfig.defaultBackendIp,
   );
+  final _backendPortController = TextEditingController(
+    text: BackendConfig.defaultBackendPort.toString(),
+  );
   final _lengthController = TextEditingController(text: '6.0');
   final _widthController = TextEditingController(text: '4.0');
   final _heightController = TextEditingController(text: '2.5');
@@ -29,6 +32,7 @@ class _SetupScreenState extends State<SetupScreen> {
   @override
   void dispose() {
     _backendIpController.dispose();
+    _backendPortController.dispose();
     _lengthController.dispose();
     _widthController.dispose();
     _heightController.dispose();
@@ -39,9 +43,29 @@ class _SetupScreenState extends State<SetupScreen> {
     super.dispose();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final config = BackendConfigScope.configOf(context);
+    _backendIpController.text = config.backendIp;
+    _backendPortController.text = config.backendPort.toString();
+  }
+
   void _saveSetup() {
+    final port = int.tryParse(_backendPortController.text.trim()) ??
+        BackendConfig.defaultBackendPort;
+
+    BackendConfigScope.controllerOf(context, listen: false).updateAddress(
+      backendIp: _backendIpController.text,
+      backendPort: port,
+    );
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Setup saved locally for this prototype.')),
+      SnackBar(
+        content: Text(
+          'Backend set to ${_backendIpController.text.trim()}:$port',
+        ),
+      ),
     );
     Navigator.of(
       context,
@@ -62,6 +86,7 @@ class _SetupScreenState extends State<SetupScreen> {
           const SizedBox(height: 12),
           NodeConfigForm(
             backendIpController: _backendIpController,
+            backendPortController: _backendPortController,
             nodeCountController: _nodeCountController,
           ),
           const SizedBox(height: 24),

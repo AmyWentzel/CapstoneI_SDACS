@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+
 class BackendConfig {
   const BackendConfig({
     this.backendIp = defaultBackendIp,
@@ -19,4 +22,85 @@ class BackendConfig {
   String get baseUrl => 'http://$backendIp:$backendPort';
 
   String get websocketUrl => 'ws://$backendIp:$backendPort/ws/sdacs/live';
+
+  @override
+  bool operator ==(Object other) {
+    return other is BackendConfig &&
+        other.backendIp == backendIp &&
+        other.backendPort == backendPort;
+  }
+
+  @override
+  int get hashCode => Object.hash(backendIp, backendPort);
+
+  BackendConfig copyWith({
+    String? backendIp,
+    int? backendPort,
+  }) {
+    return BackendConfig(
+      backendIp: backendIp ?? this.backendIp,
+      backendPort: backendPort ?? this.backendPort,
+    );
+  }
+}
+
+class BackendConfigController extends ChangeNotifier {
+  BackendConfigController([BackendConfig config = const BackendConfig()])
+      : _config = config;
+
+  BackendConfig _config;
+
+  BackendConfig get config => _config;
+
+  void update(BackendConfig config) {
+    if (_config.backendIp == config.backendIp &&
+        _config.backendPort == config.backendPort) {
+      return;
+    }
+
+    _config = config;
+    notifyListeners();
+  }
+
+  void updateAddress({
+    required String backendIp,
+    int backendPort = BackendConfig.defaultBackendPort,
+  }) {
+    final normalizedIp = backendIp.trim();
+    if (normalizedIp.isEmpty) {
+      return;
+    }
+
+    update(
+      BackendConfig(
+        backendIp: normalizedIp,
+        backendPort: backendPort,
+      ),
+    );
+  }
+}
+
+class BackendConfigScope extends InheritedNotifier<BackendConfigController> {
+  const BackendConfigScope({
+    super.key,
+    required BackendConfigController controller,
+    required super.child,
+  }) : super(notifier: controller);
+
+  static BackendConfig configOf(BuildContext context) {
+    return controllerOf(context).config;
+  }
+
+  static BackendConfigController controllerOf(
+    BuildContext context, {
+    bool listen = true,
+  }) {
+    final scope = listen
+        ? context.dependOnInheritedWidgetOfExactType<BackendConfigScope>()
+        : context
+            .getElementForInheritedWidgetOfExactType<BackendConfigScope>()
+            ?.widget as BackendConfigScope?;
+    assert(scope != null, 'No BackendConfigScope found in context.');
+    return scope!.notifier!;
+  }
 }

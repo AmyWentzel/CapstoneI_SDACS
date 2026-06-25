@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../config/backend_config.dart';
 import '../../models/calibration_result.dart';
 import '../../services/calibration_service.dart';
 import '../../services/sdacs_api_service.dart';
@@ -17,7 +18,6 @@ class CalibrationScreen extends StatefulWidget {
 
 class _CalibrationScreenState extends State<CalibrationScreen> {
   final CalibrationService _service = const CalibrationService();
-  final SdacsApiService _apiService = const SdacsApiService();
   final _delayController = TextEditingController(text: '0');
   final _durationController = TextEditingController(text: '30');
 
@@ -33,6 +33,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _startCalibration() async {
+    final apiService = SdacsApiService(
+      config: BackendConfigScope.configOf(context),
+    );
     final delayMs = int.tryParse(_delayController.text) ?? 0;
     final durationSeconds = int.tryParse(_durationController.text) ?? 30;
 
@@ -42,7 +45,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     });
 
     try {
-      final session = await _apiService.startCapture(
+      final session = await apiService.startCapture(
         delayMs: delayMs,
         recordSeconds: durationSeconds,
       );

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_routes.dart';
+import '../../config/backend_config.dart';
 import '../../models/calibration_result.dart';
 import '../../models/node_telemetry.dart';
 import '../../services/sdacs_api_service.dart';
@@ -27,11 +28,11 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  final SdacsApiService _apiService = const SdacsApiService();
-  final WebSocketTelemetryService _telemetryService =
-      WebSocketTelemetryService();
   final Map<String, NodeTelemetry> _nodesById = {};
 
+  BackendConfig? _activeConfig;
+  SdacsApiService? _apiService;
+  WebSocketTelemetryService? _telemetryService;
   StreamSubscription<NodeTelemetry>? _telemetrySubscription;
   bool _isLoading = true;
   bool _backendOnline = false;
@@ -44,10 +45,21 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    _loadInitialNodes();
-    _telemetrySubscription = _telemetryService.telemetryStream.listen(
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    final config = BackendConfigScope.configOf(context);
+    if (_activeConfig == config) {
+      return;
+    }
+
+    _activeConfig = config;
+    _apiService = SdacsApiService(config: config);
+
+    unawaited(_telemetrySubscription?.cancel());
+    unawaited(_telemetryService?.disconnect());
+    _telemetryService = WebSocketTelemetryService(config: config);
+    _telemetrySubscription = _telemetryService!.telemetryStream.listen(
       _handleTelemetryUpdate,
       onError: (Object error) {
         if (mounted) {
@@ -55,20 +67,30 @@ class _MainScreenState extends State<MainScreen> {
         }
       },
     );
-    _telemetryService.connect();
+    unawaited(_telemetryService!.connect());
+    unawaited(_loadInitialNodes());
   }
 
   @override
   void dispose() {
-    _telemetrySubscription?.cancel();
-    _telemetryService.disconnect();
+    unawaited(_telemetrySubscription?.cancel());
+    unawaited(_telemetryService?.disconnect());
     super.dispose();
   }
 
   Future<void> _loadInitialNodes() async {
+    final apiService = _apiService;
+    if (apiService == null) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
     try {
-      final nodes = await _apiService.getNodes();
-      if (!mounted) {
+      final nodes = await apiService.getNodes();
+      if (!mounted || apiService != _apiService) {
         return;
       }
       setState(() {
@@ -80,7 +102,7 @@ class _MainScreenState extends State<MainScreen> {
         _errorMessage = null;
       });
     } on SdacsApiException catch (error) {
-      if (!mounted) {
+      if (!mounted || apiService != _apiService) {
         return;
       }
       setState(() {
@@ -103,15 +125,22 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _startTest(BuildContext context) async {
+    final apiService = _apiService;
+    if (apiService == null) {
+      return;
+    }
+
     final messenger = ScaffoldMessenger.of(context);
 
     try {
-      final session = await _apiService.startCapture(
+      final session = await apiService.startCapture(
         delayMs: 5000,
         recordSeconds: 20,
       );
       messenger.showSnackBar(
-        SnackBar(content: Text('Capture command sent: ${session.sessionId}')),
+        SnackBar(
+          content: Text('Capture command sent: ${session.sessionId}'),
+        ),
       );
     } on SdacsApiException catch (error) {
       setState(() {
@@ -130,12 +159,12 @@ class _MainScreenState extends State<MainScreen> {
 
     return Theme(
       data: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: MainScreen.background,
-        cardColor: MainScreen.panel,
+        scaffoldBackgroundColor: background,
+        cardColor: panel,
         colorScheme: const ColorScheme.dark(
-          primary: MainScreen.accent,
-          secondary: MainScreen.accentLight,
-          surface: MainScreen.panel,
+          primary: accent,
+          secondary: accentLight,
+          surface: panel,
         ),
       ),
       child: Scaffold(
@@ -149,7 +178,7 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           centerTitle: true,
-          backgroundColor: MainScreen.background,
+          backgroundColor: background,
           foregroundColor: Colors.white,
           elevation: 0,
         ),
@@ -164,7 +193,9 @@ class _MainScreenState extends State<MainScreen> {
                   constraints: const BoxConstraints(maxWidth: 1320),
                   child: Column(
                     children: [
-                      _HeroSection(onStartTest: () => _startTest(context)),
+                      _HeroSection(
+                        onStartTest: () => _startTest(context),
+                      ),
                       if (_errorMessage != null) ...[
                         const SizedBox(height: 16),
                         SdacsErrorBanner(message: _errorMessage!),
@@ -232,7 +263,11 @@ class _HeroSection extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF181020), Color(0xFF101018), Color(0xFF08080C)],
+          colors: [
+            Color(0xFF181020),
+            Color(0xFF101018),
+            Color(0xFF08080C),
+          ],
         ),
       ),
       child: Column(
@@ -254,10 +289,10 @@ class _HeroSection extends StatelessWidget {
             'Smart Distributed Acoustic\nCalibration System',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.displaySmall?.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w900,
-              height: 1.05,
-            ),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  height: 1.05,
+                ),
           ),
           const SizedBox(height: 14),
           const Text(
@@ -374,9 +409,9 @@ class _RoomMap extends StatelessWidget {
                 Text(
                   'Room Node Layout',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                  ),
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                      ),
                 ),
                 const SizedBox(height: 6),
                 const Text(
@@ -401,7 +436,10 @@ class _RoomMap extends StatelessWidget {
               ),
             ),
           ),
-          const Positioned(top: 265, child: _SpeakerSource()),
+          const Positioned(
+            top: 265,
+            child: _SpeakerSource(),
+          ),
           if (nodes.isNotEmpty)
             Positioned(top: 135, left: 85, child: _MapNode(node: nodes[0])),
           if (nodes.length > 1)
@@ -417,7 +455,10 @@ class _RoomMap extends StatelessWidget {
                 style: TextStyle(color: MainScreen.textMuted),
               ),
             ),
-          const Positioned(bottom: 14, child: _SuggestionCard()),
+          const Positioned(
+            bottom: 14,
+            child: _SuggestionCard(),
+          ),
         ],
       ),
     );
@@ -435,7 +476,9 @@ class _SpeakerSource extends StatelessWidget {
       decoration: BoxDecoration(
         color: MainScreen.background,
         borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: MainScreen.accent.withValues(alpha: 0.5)),
+        border: Border.all(
+          color: MainScreen.accent.withValues(alpha: 0.5),
+        ),
       ),
       child: const Column(
         mainAxisSize: MainAxisSize.min,
@@ -448,12 +491,18 @@ class _SpeakerSource extends StatelessWidget {
           SizedBox(height: 10),
           Text(
             'Test Source',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+            ),
           ),
           SizedBox(height: 3),
           Text(
             'Studio Monitor',
-            style: TextStyle(color: MainScreen.textMuted, fontSize: 12),
+            style: TextStyle(
+              color: MainScreen.textMuted,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -507,12 +556,18 @@ class _MapNode extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               '${node.dbSpl} dB SPL',
-              style: TextStyle(color: splColor, fontWeight: FontWeight.w900),
+              style: TextStyle(
+                color: splColor,
+                fontWeight: FontWeight.w900,
+              ),
             ),
             const SizedBox(height: 2),
             Text(
               '${node.peakFrequencyHz} Hz peak',
-              style: const TextStyle(color: MainScreen.textMuted, fontSize: 12),
+              style: const TextStyle(
+                color: MainScreen.textMuted,
+                fontSize: 12,
+              ),
             ),
             const SizedBox(height: 10),
             LinearProgressIndicator(
@@ -526,7 +581,10 @@ class _MapNode extends StatelessWidget {
             Text(
               '$splStatus - ${node.batterySoc.toStringAsFixed(0)}% battery',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: MainScreen.textMuted, fontSize: 11),
+              style: const TextStyle(
+                color: MainScreen.textMuted,
+                fontSize: 11,
+              ),
             ),
           ],
         ),
@@ -546,7 +604,9 @@ class _SuggestionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: MainScreen.accent.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: MainScreen.accent.withValues(alpha: 0.25)),
+        border: Border.all(
+          color: MainScreen.accent.withValues(alpha: 0.25),
+        ),
       ),
       child: const Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -557,7 +617,11 @@ class _SuggestionCard extends StatelessWidget {
             child: Text(
               'Suggestion: compare front and rear node levels to identify uneven room response.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 12, height: 1.4),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                height: 1.4,
+              ),
             ),
           ),
         ],
@@ -576,7 +640,8 @@ class _SystemPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final avgBattery = nodes.isEmpty
         ? 0
-        : nodes.map((n) => n.batterySoc).reduce((a, b) => a + b) / nodes.length;
+        : nodes.map((n) => n.batterySoc).reduce((a, b) => a + b) /
+            nodes.length;
 
     final avgSpl = nodes.isEmpty
         ? 0
