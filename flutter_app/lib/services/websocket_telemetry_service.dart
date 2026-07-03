@@ -34,7 +34,8 @@ class WebSocketTelemetryService {
     _reconnectTimer?.cancel();
     await _subscription?.cancel();
     await _channel?.sink.close();
-    await _controller.close();
+    _subscription = null;
+    _channel = null;
   }
 
   void _connectSocket() {
@@ -43,6 +44,7 @@ class WebSocketTelemetryService {
     }
 
     try {
+      unawaited(_subscription?.cancel());
       _channel = WebSocketChannel.connect(Uri.parse(config.websocketUrl));
       _subscription = _channel!.stream.listen(
         _handleMessage,
@@ -51,7 +53,6 @@ class WebSocketTelemetryService {
         cancelOnError: true,
       );
     } catch (_) {
-      _emitMockFallback();
       _scheduleReconnect();
     }
   }
@@ -72,7 +73,10 @@ class WebSocketTelemetryService {
       return;
     }
     _emitMockFallback();
-    _reconnectTimer = Timer(const Duration(seconds: 3), _connectSocket);
+    _reconnectTimer = Timer(const Duration(seconds: 3), () {
+      _reconnectTimer = null;
+      _connectSocket();
+    });
   }
 
   void _emitMockFallback() {

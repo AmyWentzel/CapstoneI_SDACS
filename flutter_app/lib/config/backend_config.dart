@@ -9,7 +9,7 @@ class BackendConfig {
 
   static const String defaultBackendIp = String.fromEnvironment(
     'SDACS_BACKEND_IP',
-    defaultValue: '192.168.5.40',
+    defaultValue: '192.168.5.61',
   );
   static const int defaultBackendPort = int.fromEnvironment(
     'SDACS_BACKEND_PORT',

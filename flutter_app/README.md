@@ -4,6 +4,16 @@ Flutter client for the Smart Distributed Acoustic Calibration System.
 
 This app uses the SDACS FastAPI backend for REST and WebSocket telemetry. It does not connect directly to MQTT or Node-RED during normal operation.
 
+Current broker API: `http://192.168.5.61:8000`
+
+Run against the current broker:
+
+```powershell
+flutter run --dart-define=SDACS_BACKEND_IP=192.168.5.61 --dart-define=SDACS_BACKEND_PORT=8000
+```
+
+Current milestone: Flutter REST telemetry proof only. OTA, BLE, ESP flashing, and firmware changes are handled separately.
+
 See [Flutter API Integration](../docs/flutter_api_integration.md) for backend setup, run commands, endpoint summaries, and the repeatable test checklist.
 
 ## Getting Started

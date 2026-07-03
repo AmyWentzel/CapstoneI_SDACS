@@ -24,29 +24,41 @@ class SdacsApiService {
   final BackendConfig config;
 
   Future<bool> checkBackendHealth() async {
-    try {
-      final json = await _getJson('/api/health');
-      return json['status'] == 'ok';
-    } on SdacsApiException {
-      return false;
+    for (final path in const ['/health', '/api/health']) {
+      try {
+        final json = await _getJson(path);
+        if (json is Map<String, dynamic>) {
+          final status = json['status']?.toString().toLowerCase();
+          return status == null || status == 'ok' || status == 'healthy';
+        }
+        return true;
+      } on SdacsApiException {
+        continue;
+      }
     }
+    return false;
   }
 
   Future<List<NodeTelemetry>> getNodes() async {
     final json = await _getJson('/api/nodes');
-    if (json is! List) {
+    final nodeRows = _nodeRows(json);
+    if (nodeRows == null) {
       throw const SdacsApiException('Backend returned invalid node list.');
     }
 
-    return json
-        .whereType<Map<String, dynamic>>()
-        .map(NodeTelemetry.fromJson)
-        .toList()
-      ..sort((a, b) => a.nodeId.compareTo(b.nodeId));
+    final nodes = await Future.wait(nodeRows.map(_nodeFromDirectoryRow));
+    return nodes..sort((a, b) => a.nodeId.compareTo(b.nodeId));
   }
 
   Future<NodeTelemetry> getNode(String nodeId) async {
-    final json = await _getJson('/api/nodes/${Uri.encodeComponent(nodeId)}');
+    final encodedNodeId = Uri.encodeComponent(nodeId);
+    dynamic json;
+    try {
+      json = await _getJson('/api/nodes/$encodedNodeId/latest');
+    } on SdacsApiException {
+      json = await _getJson('/api/nodes/$encodedNodeId');
+    }
+
     if (json is! Map<String, dynamic>) {
       throw const SdacsApiException('Backend returned invalid node data.');
     }
@@ -61,6 +73,50 @@ class SdacsApiService {
       throw const SdacsApiException('Backend returned invalid feature data.');
     }
     return NodeTelemetry.fromJson(json);
+  }
+
+  List<Map<String, dynamic>>? _nodeRows(dynamic json) {
+    final rows = json is Map<String, dynamic> ? json['nodes'] : json;
+    if (rows is! List) {
+      return null;
+    }
+
+    return rows
+        .whereType<Map>()
+        .map((row) => row.map((key, value) => MapEntry(key.toString(), value)))
+        .toList();
+  }
+
+  Future<NodeTelemetry> _nodeFromDirectoryRow(Map<String, dynamic> row) async {
+    final nodeId = _nodeIdFrom(row);
+    if (nodeId == null) {
+      return NodeTelemetry.fromJson(row);
+    }
+
+    try {
+      final latest = await _getJson(
+        '/api/nodes/${Uri.encodeComponent(nodeId)}/features/latest',
+      );
+      if (latest is Map<String, dynamic>) {
+        return NodeTelemetry.fromJson({
+          ...row,
+          'latest_features': latest,
+        });
+      }
+    } on SdacsApiException {
+      // Keep sparse node rows visible even when one latest-feature lookup fails.
+    }
+
+    return NodeTelemetry.fromJson(row);
+  }
+
+  String? _nodeIdFrom(Map<String, dynamic> json) {
+    final value = json['node_id'] ?? json['nodeId'];
+    if (value == null) {
+      return null;
+    }
+    final nodeId = value.toString().trim();
+    return nodeId.isEmpty ? null : nodeId;
   }
 
   Future<CaptureSession> startCapture({

@@ -61,11 +61,7 @@ class _MainScreenState extends State<MainScreen> {
     _telemetryService = WebSocketTelemetryService(config: config);
     _telemetrySubscription = _telemetryService!.telemetryStream.listen(
       _handleTelemetryUpdate,
-      onError: (Object error) {
-        if (mounted) {
-          setState(() => _errorMessage = 'Live telemetry error: $error');
-        }
-      },
+      onError: (_) {},
     );
     unawaited(_telemetryService!.connect());
     unawaited(_loadInitialNodes());
@@ -143,10 +139,6 @@ class _MainScreenState extends State<MainScreen> {
         ),
       );
     } on SdacsApiException catch (error) {
-      setState(() {
-        _backendOnline = false;
-        _errorMessage = error.message;
-      });
       messenger.showSnackBar(
         SnackBar(content: Text('Capture failed: ${error.message}')),
       );
@@ -159,12 +151,12 @@ class _MainScreenState extends State<MainScreen> {
 
     return Theme(
       data: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: background,
-        cardColor: panel,
+        scaffoldBackgroundColor: MainScreen.background,
+        cardColor: MainScreen.panel,
         colorScheme: const ColorScheme.dark(
-          primary: accent,
-          secondary: accentLight,
-          surface: panel,
+          primary: MainScreen.accent,
+          secondary: MainScreen.accentLight,
+          surface: MainScreen.panel,
         ),
       ),
       child: Scaffold(
@@ -178,9 +170,17 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           centerTitle: true,
-          backgroundColor: background,
+          backgroundColor: MainScreen.background,
           foregroundColor: Colors.white,
           elevation: 0,
+          actions: [
+            IconButton(
+              tooltip: 'Refresh telemetry',
+              icon: const Icon(Icons.refresh),
+              onPressed:
+                  _isLoading ? null : () => unawaited(_loadInitialNodes()),
+            ),
+          ],
         ),
         body: LayoutBuilder(
           builder: (context, constraints) {
