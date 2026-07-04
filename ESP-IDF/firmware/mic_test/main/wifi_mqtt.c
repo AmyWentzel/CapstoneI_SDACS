@@ -552,11 +552,14 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"sd_writes_enabled\":%s,"
           "\"storage_mounted\":%s,"
           "\"i2s_frame_mode\":\"%s\","
+          "\"i2s_rx_mode\":\"%s\","
           "\"i2s_selected_slot\":\"%s\","
           "\"i2s_slot_mask\":\"%s\","
           "\"i2s_sample_rate_hz\":%u,"
           "\"i2s_data_bits\":%u,"
           "\"i2s_valid_bits\":%u,"
+          "\"i2s_sample_conversion\":\"%s\","
+          "\"i2s_sample_conversion_mode\":%u,"
           "\"n\":%u,"
           "\"window_elapsed_ms\":%u,"
           "\"expected_samples\":%u,"
@@ -605,11 +608,14 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->sd_writes_enabled ? "true" : "false",
         f->storage_mounted ? "true" : "false",
         f->i2s_frame_mode,
+        f->i2s_rx_mode,
         f->i2s_selected_slot,
         f->i2s_slot_mask,
         (unsigned)f->i2s_sample_rate_hz,
         (unsigned)f->i2s_data_bits,
         (unsigned)f->i2s_valid_bits,
+        f->i2s_sample_conversion,
+        (unsigned)f->i2s_sample_conversion_mode,
         (unsigned)f->n,
         (unsigned)f->window_elapsed_ms,
         (unsigned)f->expected_samples,

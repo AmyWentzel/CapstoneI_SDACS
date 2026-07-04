@@ -70,6 +70,26 @@
 #define SDACS_MIC_I2S_SLOT_BITS          32
 #define SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL (-26.0f)
 #define SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS 1
+#define SDACS_I2S_CONVERSION_SHIFT8      0
+#define SDACS_I2S_CONVERSION_LOW24       1
+/*
+ * Production sample conversion used by RMS, dbFS, p2p_raw, FFT, and f_peak_hz.
+ *
+ * SHIFT8:
+ *   sign_extend_24(raw_word >> 8)
+ *
+ * LOW24:
+ *   sign_extend_24(raw_word & 0x00FFFFFF)
+ *
+ * This is a test setting for MEMS validation. Do not treat LOW24 as final
+ * calibration until quiet/tone tests prove it is correct.
+ */
+#define SDACS_I2S_SAMPLE_CONVERSION_MODE SDACS_I2S_CONVERSION_LOW24
+#if SDACS_I2S_SAMPLE_CONVERSION_MODE == SDACS_I2S_CONVERSION_LOW24
+#define SDACS_I2S_SAMPLE_CONVERSION_LABEL "low24"
+#else
+#define SDACS_I2S_SAMPLE_CONVERSION_LABEL "shift8"
+#endif
 /*
  * ICS-43432 is a mono microphone but should be clocked using stereo I2S frame
  * timing. This branch locks the known-good PCB wiring to the left slot.
@@ -84,6 +104,20 @@
 #define SDACS_I2S_SELECTED_SLOT_LABEL    "left"
 #define SDACS_I2S_SLOT_MASK_LABEL        "left"
 #endif
+
+#define SDACS_I2S_RX_MODE_SELECTED_SLOT  0
+#define SDACS_I2S_RX_MODE_STEREO_RAW     1
+#define SDACS_I2S_RX_MODE                SDACS_I2S_RX_MODE_STEREO_RAW
+#if SDACS_I2S_RX_MODE == SDACS_I2S_RX_MODE_STEREO_RAW
+#define SDACS_I2S_RX_MODE_LABEL          "stereo_raw"
+#define SDACS_I2S_DRIVER_SLOT_MASK_LABEL "both"
+#else
+#define SDACS_I2S_RX_MODE_LABEL          "selected_slot"
+#define SDACS_I2S_DRIVER_SLOT_MASK_LABEL SDACS_I2S_SLOT_MASK_LABEL
+#endif
+#define SDACS_I2S_VERBOSE_TIMEOUT_LOGS   0
+#define SDACS_I2S_DMA_DESC_NUM           8
+#define SDACS_I2S_DMA_FRAME_NUM          512
 
 #define SDACS_LED_BATT_1_GPIO            GPIO_NUM_14
 #define SDACS_LED_BATT_2_GPIO            GPIO_NUM_15
@@ -103,10 +137,12 @@
 #define SDACS_AUDIO_CHUNK_SAMPLES        2048
 #define SDACS_FFT_SIZE                   1024
 #define SDACS_CAL_OFFSET_DB              120.0f
-#define SDACS_I2S_READ_TIMEOUT_MS        100
+#define SDACS_I2S_READ_TIMEOUT_MS        20
 #define SDACS_WAV_CHUNK_SIZE             1024
 #define SDACS_I2S_PREFLIGHT_ENABLED      1
 #define SDACS_I2S_PREFLIGHT_MS           1000
+#define SDACS_I2S_PREFLIGHT_RECOVERY_RETRIES 1
+#define SDACS_I2S_PREFLIGHT_WARMUP_MS    200
 #define SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO 0.90f
 #define SDACS_I2S_MAX_TIMEOUTS_PER_WINDOW 10
 

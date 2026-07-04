@@ -61,17 +61,62 @@ typedef struct {
     uint32_t timeouts;
     uint32_t errors;
     uint64_t total_bytes_read;
+    uint64_t total_raw_words;
     uint64_t total_selected_samples;
+    uint64_t total_read_elapsed_us;
+    uint64_t total_timeout_elapsed_us;
+    uint32_t min_read_elapsed_us;
+    uint32_t max_read_elapsed_us;
+    uint32_t min_timeout_elapsed_us;
+    uint32_t max_timeout_elapsed_us;
+    uint32_t timeout_immediate_count;
+    uint32_t rx_restarts;
+    uint32_t rx_recreates;
+    esp_err_t last_error;
+    char last_error_name[32];
 } audio_input_counters_t;
 
+typedef struct {
+    uint32_t duration_ms;
+    uint32_t elapsed_ms;
+    uint32_t read_calls;
+    uint32_t successful_reads;
+    uint32_t timeout_reads;
+    uint32_t error_reads;
+    uint32_t bytes_per_successful_read;
+    uint32_t selected_samples_per_successful_read;
+    uint64_t total_bytes_read;
+    uint64_t total_raw_words;
+    uint64_t total_selected_samples;
+    float effective_selected_sample_rate_hz;
+    float effective_raw_word_rate_hz;
+    uint32_t first_success_ms;
+    uint32_t max_gap_between_successful_reads_ms;
+    uint32_t min_gap_between_successful_reads_ms;
+    float avg_gap_between_successful_reads_ms;
+    uint32_t min_read_elapsed_us;
+    uint32_t max_read_elapsed_us;
+    float avg_read_elapsed_us;
+    uint32_t min_timeout_elapsed_us;
+    uint32_t max_timeout_elapsed_us;
+    float avg_timeout_elapsed_us;
+    uint32_t timeout_immediate_count;
+    char last_error_name[32];
+    audio_input_debug_t debug;
+} audio_input_i2s_diag_result_t;
+
 esp_err_t audio_input_init(void);
+esp_err_t audio_input_prepare_for_capture(void);
+esp_err_t audio_input_recover_rx(const char *reason);
 esp_err_t audio_input_read_s24(int32_t *dst,
                                size_t max_samples,
                                size_t *samples_read,
                                uint32_t timeout_ms);
 bool audio_input_get_last_debug(audio_input_debug_t *out);
 bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out);
+void audio_input_set_raw_diagnostics_enabled(bool enabled);
 void audio_input_get_counters(audio_input_counters_t *out);
 void audio_input_reset_counters(void);
 void audio_input_reset_raw_diagnostics(void);
+esp_err_t audio_input_run_i2s_diag(uint32_t duration_ms, audio_input_i2s_diag_result_t *out);
 void audio_input_deinit(void);

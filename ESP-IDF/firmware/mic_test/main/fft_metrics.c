@@ -168,6 +168,13 @@ bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
         return false;
     }
 
+    /*
+     * Production samples are normalized against signed 24-bit full scale.
+     * In LOW24 test mode, this intentionally tests the lower-24-bit
+     * interpretation as the real feature path. Calibration must not be
+     * finalized until this mode is validated with controlled quiet/tone
+     * captures.
+     */
     float rms = sqrtf((float)(s_fft.sum_sq / (double)s_fft.count));
     float rms_norm = rms / 8388608.0f;
     float dbfs = 20.0f * log10f(rms_norm + 1e-12f);

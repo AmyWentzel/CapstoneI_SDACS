@@ -42,6 +42,24 @@ typedef struct {
     uint32_t mqtt_feature_drops;
 } capture_io_stats_t;
 
+typedef struct {
+    uint32_t attempt;
+    uint32_t samples;
+    uint32_t expected_samples;
+    uint32_t elapsed_ms;
+    float effective_sample_rate_hz;
+    uint32_t read_calls;
+    uint32_t successful_reads;
+    uint32_t timeouts;
+    uint32_t errors;
+    uint64_t raw_words_read;
+    float effective_raw_word_rate_hz;
+    float avg_read_elapsed_us;
+    float avg_timeout_elapsed_us;
+    uint32_t timeout_immediate_count;
+    bool pass;
+} i2s_preflight_result_t;
+
 static void capture_publish_status(capture_task_state_t *state,
                                    sdacs_mode_t mode,
                                    const char *message)
@@ -108,16 +126,19 @@ static void capture_set_state(capture_task_state_t *state,
 }
 
 static void capture_publish_preflight_failed(capture_task_state_t *state,
-                                             uint32_t preflight_samples,
-                                             float preflight_effective_sample_rate_hz,
-                                             uint32_t preflight_timeouts)
+                                             const i2s_preflight_result_t *result,
+                                             uint32_t attempts,
+                                             const char *audio_error,
+                                             const char *message)
 {
-    char payload[900];
+    char payload[1500];
     int len = 0;
+    audio_input_counters_t counters = {0};
 
     if (!state || state->status_topic[0] == '\0') {
         return;
     }
+    audio_input_get_counters(&counters);
 
     len = snprintf(
         payload,
@@ -128,17 +149,34 @@ static void capture_publish_preflight_failed(capture_task_state_t *state,
         "\"timestamp\":%" PRIi64 ","
         "\"fw_version\":\"%s\","
         "\"request_id\":\"%s\","
-        "\"state\":\"error\","
+        "\"state\":\"idle\","
         "\"status\":\"error\","
         "\"storage_mode\":\"%s\","
         "\"sd_enabled\":%s,"
         "\"sd_writes_enabled\":%s,"
+        "\"audio_error\":\"%s\","
+        "\"preflight_attempts\":%u,"
         "\"preflight_samples\":%u,"
+        "\"preflight_expected_samples\":%u,"
+        "\"preflight_elapsed_ms\":%u,"
         "\"preflight_effective_sample_rate_hz\":%.2f,"
+        "\"preflight_effective_raw_word_rate_hz\":%.2f,"
+        "\"preflight_raw_words_read\":%" PRIu64 ","
+        "\"preflight_selected_samples_read\":%u,"
+        "\"preflight_read_calls\":%u,"
+        "\"preflight_successful_reads\":%u,"
         "\"preflight_timeouts\":%u,"
+        "\"preflight_errors\":%u,"
+        "\"preflight_avg_read_elapsed_us\":%.2f,"
+        "\"preflight_avg_timeout_elapsed_us\":%.2f,"
+        "\"preflight_timeout_immediate_count\":%u,"
         "\"expected_sample_rate_hz\":%u,"
-        "\"audio_error\":\"i2s_preflight_failed\","
-        "\"message\":\"capture rejected: I2S preflight failed\""
+        "\"i2s_rx_restarts\":%u,"
+        "\"i2s_rx_recreates\":%u,"
+        "\"i2s_rx_mode\":\"%s\","
+        "\"i2s_selected_slot\":\"%s\","
+        "\"i2s_sample_conversion\":\"%s\","
+        "\"message\":\"%s\""
         "}",
         state->node_id,
         (int64_t)esp_timer_get_time(),
@@ -147,10 +185,29 @@ static void capture_publish_preflight_failed(capture_task_state_t *state,
         state->ctx.storage_mode,
         state->ctx.sd_enabled ? "true" : "false",
         state->ctx.sd_writes_enabled ? "true" : "false",
-        (unsigned)preflight_samples,
-        (double)preflight_effective_sample_rate_hz,
-        (unsigned)preflight_timeouts,
-        (unsigned)SDACS_SAMPLE_RATE_HZ
+        audio_error ? audio_error : "i2s_preflight_failed",
+        (unsigned)attempts,
+        result ? (unsigned)result->samples : 0U,
+        result ? (unsigned)result->expected_samples : 0U,
+        result ? (unsigned)result->elapsed_ms : 0U,
+        result ? (double)result->effective_sample_rate_hz : 0.0,
+        result ? (double)result->effective_raw_word_rate_hz : 0.0,
+        result ? result->raw_words_read : 0ULL,
+        result ? (unsigned)result->samples : 0U,
+        result ? (unsigned)result->read_calls : 0U,
+        result ? (unsigned)result->successful_reads : 0U,
+        result ? (unsigned)result->timeouts : 0U,
+        result ? (unsigned)result->errors : 0U,
+        result ? (double)result->avg_read_elapsed_us : 0.0,
+        result ? (double)result->avg_timeout_elapsed_us : 0.0,
+        result ? (unsigned)result->timeout_immediate_count : 0U,
+        (unsigned)SDACS_SAMPLE_RATE_HZ,
+        (unsigned)counters.rx_restarts,
+        (unsigned)counters.rx_recreates,
+        SDACS_I2S_RX_MODE_LABEL,
+        SDACS_I2S_SELECTED_SLOT_LABEL,
+        SDACS_I2S_SAMPLE_CONVERSION_LABEL,
+        message ? message : "capture rejected: I2S preflight failed after recovery"
     );
 
     if (len <= 0 || len >= (int)sizeof(payload)) {
@@ -213,10 +270,13 @@ static void capture_publish_complete(capture_task_state_t *state,
         "\"sd_enabled\":%s,"
         "\"sd_writes_enabled\":%s,"
         "\"i2s_frame_mode\":\"stereo\","
+        "\"i2s_rx_mode\":\"%s\","
         "\"i2s_selected_slot\":\"%s\","
         "\"i2s_sample_rate_hz\":%u,"
         "\"i2s_data_bits\":32,"
         "\"i2s_valid_bits\":%u,"
+        "\"i2s_sample_conversion\":\"%s\","
+        "\"i2s_sample_conversion_mode\":%u,"
         "\"record_seconds\":%u,"
         "\"total_samples\":%u,"
         "\"expected_total_samples\":%u,"
@@ -247,9 +307,12 @@ static void capture_publish_complete(capture_task_state_t *state,
         state->ctx.storage_mode,
         state->ctx.sd_enabled ? "true" : "false",
         state->ctx.sd_writes_enabled ? "true" : "false",
+        SDACS_I2S_RX_MODE_LABEL,
         SDACS_I2S_SELECTED_SLOT_LABEL,
         (unsigned)SDACS_SAMPLE_RATE_HZ,
         (unsigned)SDACS_MIC_VALID_BITS,
+        SDACS_I2S_SAMPLE_CONVERSION_LABEL,
+        (unsigned)SDACS_I2S_SAMPLE_CONVERSION_MODE,
         (unsigned)state->ctx.record_seconds,
         (unsigned)total_samples,
         (unsigned)expected_total_samples,
@@ -287,18 +350,19 @@ static void capture_publish_complete(capture_task_state_t *state,
 
 static bool capture_run_i2s_preflight(capture_task_state_t *state,
                                       int32_t *read_buf,
-                                      uint32_t *out_samples,
-                                      uint32_t *out_timeouts,
-                                      float *out_effective_sr)
+                                      uint32_t attempt,
+                                      i2s_preflight_result_t *out_result)
 {
     size_t samples_read = 0;
-    uint32_t samples = 0;
-    uint32_t timeouts = 0;
-    uint32_t errors = 0;
     int64_t start_us = esp_timer_get_time();
-    int64_t end_us = start_us + ((int64_t)SDACS_I2S_PREFLIGHT_MS * 1000LL);
+    int64_t elapsed_us = 0;
+    audio_input_counters_t counters = {0};
+    i2s_preflight_result_t result = {
+        .attempt = attempt,
+    };
 
-    while (esp_timer_get_time() < end_us) {
+    audio_input_reset_counters();
+    while ((esp_timer_get_time() - start_us) < ((int64_t)SDACS_I2S_PREFLIGHT_MS * 1000LL)) {
         esp_err_t err = audio_input_read_s24(
             read_buf,
             SDACS_I2S_FRAMES_PER_READ,
@@ -306,44 +370,67 @@ static bool capture_run_i2s_preflight(capture_task_state_t *state,
             SDACS_I2S_READ_TIMEOUT_MS
         );
         if (err == ESP_ERR_TIMEOUT) {
-            timeouts++;
             continue;
         }
         if (err != ESP_OK) {
-            errors++;
             ESP_LOGW(TAG, "I2S preflight read failed: %s", esp_err_to_name(err));
             continue;
         }
-        samples += (uint32_t)samples_read;
+        result.samples += (uint32_t)samples_read;
     }
 
-    int64_t elapsed_us = esp_timer_get_time() - start_us;
-    float effective_sr = elapsed_us > 0
-        ? ((float)samples * 1000000.0f) / (float)elapsed_us
+    elapsed_us = esp_timer_get_time() - start_us;
+    audio_input_get_counters(&counters);
+    result.elapsed_ms = (uint32_t)(elapsed_us / 1000LL);
+    result.expected_samples = elapsed_us > 0
+        ? (uint32_t)(((int64_t)SDACS_SAMPLE_RATE_HZ * elapsed_us) / 1000000LL)
+        : 0U;
+    result.effective_sample_rate_hz = elapsed_us > 0
+        ? ((float)result.samples * 1000000.0f) / (float)elapsed_us
         : 0.0f;
-    bool pass = errors == 0 &&
-        effective_sr >= ((float)SDACS_SAMPLE_RATE_HZ * SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO);
+    result.raw_words_read = counters.total_raw_words;
+    result.effective_raw_word_rate_hz = elapsed_us > 0
+        ? ((float)counters.total_raw_words * 1000000.0f) / (float)elapsed_us
+        : 0.0f;
+    result.avg_read_elapsed_us = counters.total_read_calls > 0U
+        ? (float)counters.total_read_elapsed_us / (float)counters.total_read_calls
+        : 0.0f;
+    result.avg_timeout_elapsed_us = counters.timeouts > 0U
+        ? (float)counters.total_timeout_elapsed_us / (float)counters.timeouts
+        : 0.0f;
+    result.timeout_immediate_count = counters.timeout_immediate_count;
+    result.read_calls = counters.total_read_calls;
+    result.successful_reads = counters.successful_reads;
+    result.timeouts = counters.timeouts;
+    result.errors = counters.errors;
+    result.pass = result.errors == 0 &&
+        result.effective_sample_rate_hz >= ((float)SDACS_SAMPLE_RATE_HZ * SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO);
 
     ESP_LOGI(TAG,
-             "I2S preflight: samples=%u expected=%u effective_sr=%.2f timeouts=%u pass=%s",
-             (unsigned)samples,
-             (unsigned)((SDACS_SAMPLE_RATE_HZ * SDACS_I2S_PREFLIGHT_MS) / 1000U),
-             (double)effective_sr,
-             (unsigned)timeouts,
-             pass ? "true" : "false");
+             "I2S preflight attempt=%u rx_mode=%s selected_samples=%u expected=%u elapsed_ms=%u effective_selected_sr=%.2f raw_words=%" PRIu64 " effective_raw_word_rate=%.2f read_calls=%u successful_reads=%u timeouts=%u immediate_timeouts=%u errors=%u avg_read_us=%.2f avg_timeout_us=%.2f pass=%s",
+             (unsigned)result.attempt,
+             SDACS_I2S_RX_MODE_LABEL,
+             (unsigned)result.samples,
+             (unsigned)result.expected_samples,
+             (unsigned)result.elapsed_ms,
+             (double)result.effective_sample_rate_hz,
+             result.raw_words_read,
+             (double)result.effective_raw_word_rate_hz,
+             (unsigned)result.read_calls,
+             (unsigned)result.successful_reads,
+             (unsigned)result.timeouts,
+             (unsigned)result.timeout_immediate_count,
+             (unsigned)result.errors,
+             (double)result.avg_read_elapsed_us,
+             (double)result.avg_timeout_elapsed_us,
+             result.pass ? "true" : "false");
 
-    if (out_samples) {
-        *out_samples = samples;
-    }
-    if (out_timeouts) {
-        *out_timeouts = timeouts;
-    }
-    if (out_effective_sr) {
-        *out_effective_sr = effective_sr;
+    if (out_result) {
+        *out_result = result;
     }
 
     (void)state;
-    return pass;
+    return result.pass;
 }
 
 static void capture_task_run(void *arg)
@@ -413,29 +500,72 @@ static void capture_task_run(void *arg)
     audio_input_reset_counters();
 
 #if SDACS_I2S_PREFLIGHT_ENABLED
-    uint32_t preflight_samples = 0;
-    uint32_t preflight_timeouts = 0;
-    float preflight_effective_sr = 0.0f;
+    esp_err_t prep_err = audio_input_prepare_for_capture();
+    if (prep_err != ESP_OK) {
+        i2s_preflight_result_t prep_result = {0};
+        device_state_set(SDACS_MODE_ERROR);
+        capture_publish_preflight_failed(
+            state,
+            &prep_result,
+            0,
+            "i2s_prepare_failed",
+            esp_err_to_name(prep_err)
+        );
+        ESP_LOGE(TAG, "capture rejected: I2S prepare failed: %s", esp_err_to_name(prep_err));
+        goto done;
+    }
+
+    audio_input_set_raw_diagnostics_enabled(false);
+    i2s_preflight_result_t preflight_result = {0};
     bool preflight_ok = capture_run_i2s_preflight(
         state,
         read_buf,
-        &preflight_samples,
-        &preflight_timeouts,
-        &preflight_effective_sr
+        1,
+        &preflight_result
     );
+
+    if (!preflight_ok && SDACS_I2S_PREFLIGHT_RECOVERY_RETRIES > 0) {
+        ESP_LOGW(TAG,
+                 "I2S preflight attempt 1 failed; attempting RX recovery before retry");
+        esp_err_t rec_err = audio_input_recover_rx("preflight_attempt_1_failed");
+        if (rec_err == ESP_OK) {
+            preflight_ok = capture_run_i2s_preflight(
+                state,
+                read_buf,
+                2,
+                &preflight_result
+            );
+            if (preflight_ok) {
+                audio_input_counters_t counters = {0};
+                audio_input_get_counters(&counters);
+                ESP_LOGW(TAG,
+                         "I2S preflight recovered: preflight_recovered=true preflight_attempts=2 i2s_rx_restarts=%u",
+                         (unsigned)counters.rx_restarts);
+            }
+        } else {
+            ESP_LOGE(TAG, "I2S recovery failed: %s", esp_err_to_name(rec_err));
+        }
+    }
+
     fft_metrics_reset();
     audio_input_reset_counters();
+    audio_input_set_raw_diagnostics_enabled(true);
+    audio_input_reset_raw_diagnostics();
     if (!preflight_ok) {
         device_state_set(SDACS_MODE_ERROR);
         capture_publish_preflight_failed(
             state,
-            preflight_samples,
-            preflight_effective_sr,
-            preflight_timeouts
+            &preflight_result,
+            preflight_result.attempt ? preflight_result.attempt : 1U,
+            "i2s_preflight_failed",
+            "capture rejected: I2S preflight failed after recovery"
         );
-        ESP_LOGE(TAG, "capture rejected: I2S preflight failed");
+        ESP_LOGE(TAG, "capture rejected: I2S preflight failed after recovery");
         goto done;
     }
+#else
+    audio_input_set_raw_diagnostics_enabled(true);
+    audio_input_reset_raw_diagnostics();
 #endif
 
     capture_set_state(state, SDACS_MODE_CAPTURING,
@@ -609,6 +739,7 @@ static void capture_task_run(void *arg)
                     .i2s_sample_rate_hz = SDACS_SAMPLE_RATE_HZ,
                     .i2s_data_bits = 32,
                     .i2s_valid_bits = SDACS_MIC_VALID_BITS,
+                    .i2s_sample_conversion_mode = SDACS_I2S_SAMPLE_CONVERSION_MODE,
                     .raw_diag = raw_diag,
                     .audio_read_errors = window_audio_read_errors,
                     .audio_read_timeouts = window_audio_read_timeouts,
@@ -625,10 +756,16 @@ static void capture_task_run(void *arg)
                 features.storage_mode[sizeof(features.storage_mode) - 1] = '\0';
                 strncpy(features.i2s_frame_mode, "stereo", sizeof(features.i2s_frame_mode) - 1);
                 features.i2s_frame_mode[sizeof(features.i2s_frame_mode) - 1] = '\0';
+                strncpy(features.i2s_rx_mode, SDACS_I2S_RX_MODE_LABEL, sizeof(features.i2s_rx_mode) - 1);
+                features.i2s_rx_mode[sizeof(features.i2s_rx_mode) - 1] = '\0';
                 strncpy(features.i2s_selected_slot, SDACS_I2S_SELECTED_SLOT_LABEL, sizeof(features.i2s_selected_slot) - 1);
                 features.i2s_selected_slot[sizeof(features.i2s_selected_slot) - 1] = '\0';
                 strncpy(features.i2s_slot_mask, SDACS_I2S_SLOT_MASK_LABEL, sizeof(features.i2s_slot_mask) - 1);
                 features.i2s_slot_mask[sizeof(features.i2s_slot_mask) - 1] = '\0';
+                strncpy(features.i2s_sample_conversion,
+                        SDACS_I2S_SAMPLE_CONVERSION_LABEL,
+                        sizeof(features.i2s_sample_conversion) - 1);
+                features.i2s_sample_conversion[sizeof(features.i2s_sample_conversion) - 1] = '\0';
                 strncpy(features.storage_error,
                         state->ctx.sd_writes_enabled ? run_storage_last_error_name(state->ctx.storage) : "",
                         sizeof(features.storage_error) - 1);
@@ -645,15 +782,18 @@ static void capture_task_run(void *arg)
                 }
 
                 ESP_LOGI(TAG,
-                         "Feature row seq=%u window_ms=%u n=%u expected=%u eff_sr=%.2f sample_rate_ok=%s timeouts=%u f_peak=%.1f audio_error=%s",
+                         "Feature row seq=%u conversion=%s n=%u expected=%u dbfs=%.2f p2p_raw=%" PRId32 " f_peak=%.1f sample_rate_ok=%s window_ms=%u eff_sr=%.2f timeouts=%u audio_error=%s",
                          (unsigned)seq,
-                         (unsigned)window_elapsed_ms,
+                         SDACS_I2S_SAMPLE_CONVERSION_LABEL,
                          (unsigned)metrics.sample_count,
                          (unsigned)expected_samples,
-                         (double)window_effective_sr,
-                         sample_rate_ok ? "true" : "false",
-                         (unsigned)window_audio_read_timeouts,
+                         (double)metrics.dbfs,
+                         metrics.p2p_raw,
                          (double)metrics.fft_peak_hz,
+                         sample_rate_ok ? "true" : "false",
+                         (unsigned)window_elapsed_ms,
+                         (double)window_effective_sr,
+                         (unsigned)window_audio_read_timeouts,
                          audio_error[0] ? audio_error : "");
 
                 ESP_LOGI(TAG,
@@ -693,8 +833,9 @@ static void capture_task_run(void *arg)
 
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
                 ESP_LOGI(TAG,
-                         "RAW DIAG seq=%u n=%u f_peak=%.1f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
+                         "RAW DIAG seq=%u conversion=%s n=%u f_peak=%.1f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
                          (unsigned)seq,
+                         SDACS_I2S_SAMPLE_CONVERSION_LABEL,
                          (unsigned)metrics.sample_count,
                          (double)metrics.fft_peak_hz,
                          raw_diag.current.p2p,

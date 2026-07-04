@@ -41,11 +41,14 @@ typedef struct {
     bool sd_writes_enabled;
     bool storage_mounted;
     char i2s_frame_mode[12];
+    char i2s_rx_mode[16];
     char i2s_selected_slot[8];
     char i2s_slot_mask[8];
     uint32_t i2s_sample_rate_hz;
     uint32_t i2s_data_bits;
     uint32_t i2s_valid_bits;
+    char i2s_sample_conversion[16];
+    uint32_t i2s_sample_conversion_mode;
     audio_input_raw_diagnostics_t raw_diag;
     char storage_error[32];
     char storage_error_detail[128];

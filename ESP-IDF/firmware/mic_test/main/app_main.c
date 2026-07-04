@@ -85,7 +85,7 @@ void app_main(void)
     snprintf(s_storage.last_error_name, sizeof(s_storage.last_error_name), "%s", "SD_DISABLED");
     snprintf(s_storage.last_error_detail, sizeof(s_storage.last_error_detail), "%s", "disabled by build config");
     run_storage_configure_disabled_pins_safe();
-    ESP_LOGW(TAG, "SD local storage disabled by build config; capture will run MQTT/features-only");
+    ESP_LOGW(TAG, "SD local storage disabled by build config; storage_mode=mqtt_only capture will run MQTT/features-only");
     ESP_LOGW(TAG, "SD pins placed in safe disabled state");
 #endif
 

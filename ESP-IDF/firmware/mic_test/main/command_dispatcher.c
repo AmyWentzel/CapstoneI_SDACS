@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -19,6 +20,7 @@
 #include "sdacs_config.h"
 #include "temp_humidity.h"
 #include "wifi_mqtt.h"
+#include "audio_input.h"
 
 static const char *TAG = "cmd_dispatch";
 
@@ -316,6 +318,176 @@ static void handle_storage_remount(const char *request_id)
     } else {
         publish_storage_status("storage_remount", request_id, "rejected", esp_err_to_name(err));
     }
+}
+
+static void publish_i2s_diag_result(const char *request_id,
+                                    uint32_t requested_duration_ms,
+                                    const audio_input_i2s_diag_result_t *diag,
+                                    esp_err_t diag_err)
+{
+    char topic[160];
+    char *payload = calloc(1, SDACS_MQTT_STATUS_JSON_MAX_LEN);
+    int len = 0;
+
+    if (!payload) {
+        ESP_LOGE(TAG, "i2s_diag payload allocation failed");
+        return;
+    }
+    if (s_base_topic[0] == '\0') {
+        free(payload);
+        return;
+    }
+    if (snprintf(topic, sizeof(topic), "%s/debug/i2s_diag", s_base_topic) >= (int)sizeof(topic)) {
+        ESP_LOGW(TAG, "i2s_diag topic too long");
+        free(payload);
+        return;
+    }
+
+    len = snprintf(
+        payload,
+        SDACS_MQTT_STATUS_JSON_MAX_LEN,
+        "{"
+        "\"node_id\":\"%s\","
+        "\"record_type\":\"i2s_diag\","
+        "\"timestamp\":%" PRIi64 ","
+        "\"fw_version\":\"%s\","
+        "\"request_id\":\"%s\","
+        "\"result\":\"%s\","
+        "\"duration_ms\":%u,"
+        "\"elapsed_ms\":%u,"
+        "\"selected_slot\":\"%s\","
+        "\"conversion\":\"%s\","
+        "\"configured_sample_rate_hz\":%u,"
+        "\"data_bits\":32,"
+        "\"slot_bits\":%u,"
+        "\"valid_bits\":%u,"
+        "\"slot_mode\":\"stereo\","
+        "\"slot_mask\":\"%s\","
+        "\"bclk_gpio\":%d,"
+        "\"ws_gpio\":%d,"
+        "\"din_gpio\":%d,"
+        "\"read_mode_tested\":\"%s\","
+        "\"dma_desc_num\":%u,"
+        "\"dma_frame_num\":%u,"
+        "\"bytes_per_successful_read\":%u,"
+        "\"selected_samples_per_successful_read\":%u,"
+        "\"read_calls\":%u,"
+        "\"successful_reads\":%u,"
+        "\"timeout_reads\":%u,"
+        "\"error_reads\":%u,"
+        "\"total_bytes_read\":%" PRIu64 ","
+        "\"total_raw_words\":%" PRIu64 ","
+        "\"total_selected_samples\":%" PRIu64 ","
+        "\"effective_selected_sample_rate_hz\":%.2f,"
+        "\"effective_raw_word_rate_hz\":%.2f,"
+        "\"first_success_ms\":%u,"
+        "\"max_gap_between_successful_reads_ms\":%u,"
+        "\"min_gap_between_successful_reads_ms\":%u,"
+        "\"avg_gap_between_successful_reads_ms\":%.2f,"
+        "\"min_read_elapsed_us\":%u,"
+        "\"max_read_elapsed_us\":%u,"
+        "\"avg_read_elapsed_us\":%.2f,"
+        "\"min_timeout_elapsed_us\":%u,"
+        "\"max_timeout_elapsed_us\":%u,"
+        "\"avg_timeout_elapsed_us\":%.2f,"
+        "\"timeout_immediate_count\":%u,"
+        "\"last_error_name\":\"%s\","
+        "\"raw_word0_hex\":\"0x%08" PRIX32 "\","
+        "\"raw_word1_hex\":\"0x%08" PRIX32 "\","
+        "\"sample0\":%" PRId32 ","
+        "\"min_sample\":%" PRId32 ","
+        "\"max_sample\":%" PRId32 ","
+        "\"p2p_raw\":%" PRId32
+        "}",
+        s_node_id[0] ? s_node_id : SDACS_NODE_ID,
+        (int64_t)esp_timer_get_time(),
+        SDACS_FW_VERSION,
+        request_id ? request_id : "",
+        diag_err == ESP_OK ? "ok" : "error",
+        (unsigned)requested_duration_ms,
+        diag ? (unsigned)diag->elapsed_ms : 0U,
+        SDACS_I2S_SELECTED_SLOT_LABEL,
+        SDACS_I2S_SAMPLE_CONVERSION_LABEL,
+        (unsigned)SDACS_SAMPLE_RATE_HZ,
+        (unsigned)SDACS_MIC_I2S_SLOT_BITS,
+        (unsigned)SDACS_MIC_VALID_BITS,
+        SDACS_I2S_DRIVER_SLOT_MASK_LABEL,
+        SDACS_I2S_BCLK_GPIO,
+        SDACS_I2S_WS_GPIO,
+        SDACS_I2S_DIN_GPIO,
+        SDACS_I2S_RX_MODE_LABEL,
+        (unsigned)SDACS_I2S_DMA_DESC_NUM,
+        (unsigned)SDACS_I2S_DMA_FRAME_NUM,
+        diag ? (unsigned)diag->bytes_per_successful_read : 0U,
+        diag ? (unsigned)diag->selected_samples_per_successful_read : 0U,
+        diag ? (unsigned)diag->read_calls : 0U,
+        diag ? (unsigned)diag->successful_reads : 0U,
+        diag ? (unsigned)diag->timeout_reads : 0U,
+        diag ? (unsigned)diag->error_reads : 0U,
+        diag ? diag->total_bytes_read : 0ULL,
+        diag ? diag->total_raw_words : 0ULL,
+        diag ? diag->total_selected_samples : 0ULL,
+        diag ? (double)diag->effective_selected_sample_rate_hz : 0.0,
+        diag ? (double)diag->effective_raw_word_rate_hz : 0.0,
+        diag ? (unsigned)diag->first_success_ms : 0U,
+        diag ? (unsigned)diag->max_gap_between_successful_reads_ms : 0U,
+        diag ? (unsigned)diag->min_gap_between_successful_reads_ms : 0U,
+        diag ? (double)diag->avg_gap_between_successful_reads_ms : 0.0,
+        diag ? (unsigned)diag->min_read_elapsed_us : 0U,
+        diag ? (unsigned)diag->max_read_elapsed_us : 0U,
+        diag ? (double)diag->avg_read_elapsed_us : 0.0,
+        diag ? (unsigned)diag->min_timeout_elapsed_us : 0U,
+        diag ? (unsigned)diag->max_timeout_elapsed_us : 0U,
+        diag ? (double)diag->avg_timeout_elapsed_us : 0.0,
+        diag ? (unsigned)diag->timeout_immediate_count : 0U,
+        diag ? diag->last_error_name : esp_err_to_name(diag_err),
+        diag ? diag->debug.raw0 : 0U,
+        diag ? diag->debug.raw1 : 0U,
+        diag ? diag->debug.sample0 : 0,
+        diag ? diag->debug.min_sample : 0,
+        diag ? diag->debug.max_sample : 0,
+        diag ? (diag->debug.max_sample - diag->debug.min_sample) : 0
+    );
+
+    if (len <= 0 || len >= SDACS_MQTT_STATUS_JSON_MAX_LEN) {
+        ESP_LOGW(TAG, "i2s_diag JSON truncated; increase SDACS_MQTT_STATUS_JSON_MAX_LEN");
+        free(payload);
+        return;
+    }
+
+    esp_err_t err = wifi_mqtt_publish_status_json(topic, payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "i2s_diag publish failed: %s", esp_err_to_name(err));
+    }
+    free(payload);
+}
+
+static void handle_i2s_diag(const cJSON *root, const char *request_id)
+{
+    uint32_t duration_ms = 3000;
+    audio_input_i2s_diag_result_t diag = {0};
+
+    if (!device_state_is_idle()) {
+        publish_response("i2s_diag", request_id, "rejected", "busy");
+        return;
+    }
+    if (!request_id || request_id[0] == '\0') {
+        publish_response("i2s_diag", "", "rejected", "missing_request_id");
+        return;
+    }
+    if (json_copy_u32(root, "duration_ms", &duration_ms, false)) {
+        if (duration_ms < 100U || duration_ms > 10000U) {
+            publish_response("i2s_diag", request_id, "rejected", "invalid_duration_ms");
+            return;
+        }
+    }
+
+    ESP_LOGI(TAG, "i2s_diag received request_id=%s duration_ms=%u rx_mode=%s",
+             request_id,
+             (unsigned)duration_ms,
+             SDACS_I2S_RX_MODE_LABEL);
+    esp_err_t err = audio_input_run_i2s_diag(duration_ms, &diag);
+    publish_i2s_diag_result(request_id, duration_ms, &diag, err);
 }
 
 static void handle_start_capture(const cJSON *root, const char *request_id)
@@ -620,6 +792,8 @@ void command_dispatcher_handle(const char *topic, const char *payload, int len)
         handle_storage_status(request_id);
     } else if (strcmp(cmd, "storage_remount") == 0) {
         handle_storage_remount(request_id);
+    } else if (strcmp(cmd, "i2s_diag") == 0) {
+        handle_i2s_diag(root, request_id);
     } else if (strcmp(cmd, "ble_advertise") == 0) {
         handle_ble_advertise(root, request_id);
     } else if (strcmp(cmd, "reboot") == 0) {
