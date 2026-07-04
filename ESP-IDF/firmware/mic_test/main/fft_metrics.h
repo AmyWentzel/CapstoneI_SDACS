@@ -29,3 +29,4 @@ esp_err_t fft_metrics_init(void);
 void fft_metrics_push_samples(const int32_t *samples, size_t n);
 void fft_metrics_accumulate_block(const int32_t *samples, size_t n);
 bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db);
+void fft_metrics_reset(void);

@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <string.h>
 
 #include "esp_check.h"
 #include "esp_dsp.h"
@@ -105,6 +106,19 @@ esp_err_t fft_metrics_init(void)
     s_fft.min_sample = INT32_MAX;
     s_fft.max_sample = INT32_MIN;
     return ESP_OK;
+}
+
+void fft_metrics_reset(void)
+{
+    s_fft.fft_index = 0;
+    memset(s_fft.fft_buffer, 0, sizeof(s_fft.fft_buffer));
+    memset(s_fft.fft_in, 0, sizeof(s_fft.fft_in));
+    s_fft.sum_sq = 0.0;
+    s_fft.peak_abs = 0;
+    s_fft.min_sample = INT32_MAX;
+    s_fft.max_sample = INT32_MIN;
+    s_fft.zeros = 0;
+    s_fft.count = 0;
 }
 
 void fft_metrics_push_samples(const int32_t *samples, size_t n)

@@ -84,15 +84,15 @@ void app_main(void)
     s_storage.last_error = ESP_ERR_INVALID_STATE;
     snprintf(s_storage.last_error_name, sizeof(s_storage.last_error_name), "%s", "SD_DISABLED");
     snprintf(s_storage.last_error_detail, sizeof(s_storage.last_error_detail), "%s", "disabled by build config");
+    run_storage_configure_disabled_pins_safe();
     ESP_LOGW(TAG, "SD local storage disabled by build config; capture will run MQTT/features-only");
-    ESP_LOGW(TAG, "SD local storage disabled by build config");
-    ESP_LOGW(TAG, "Capture storage mode: MQTT/features-only");
+    ESP_LOGW(TAG, "SD pins placed in safe disabled state");
 #endif
 
     ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
     ESP_ERROR_CHECK(battery_leds_init());
 
-#if SDACS_BLE_LOCATOR_ENABLED
+#if SDACS_BLE_LOCATOR_ENABLED && !SDACS_BOOT_DISABLE_BLE_LOCATOR
     ESP_LOGI(TAG, "PHASE 0: BLE node-awareness advertisement");
     esp_err_t ble_err = sdacs_ble_locator_advertise_for(
         node_id,

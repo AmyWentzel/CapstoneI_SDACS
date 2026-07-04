@@ -91,7 +91,7 @@ static int get_wifi_rssi_dbm(void)
 
 static esp_err_t publish_heartbeat_now(const char *status)
 {
-    char payload[768];
+    char *payload = calloc(1, SDACS_MQTT_STATUS_JSON_MAX_LEN);
     char batt_soc_buf[24] = "null";
     char batt_voltage_buf[24] = "null";
     char batt_rate_buf[24] = "null";
@@ -104,8 +104,15 @@ static esp_err_t publish_heartbeat_now(const char *status)
     int msg_id = -1;
     fuel_gauge_reading_t batt = {0};
     bool batt_valid = fuel_gauge_get_latest(&batt);
+    esp_err_t ret = ESP_OK;
+
+    if (!payload) {
+        ESP_LOGE(TAG, "heartbeat payload allocation failed");
+        return ESP_ERR_NO_MEM;
+    }
 
     if (!s_mqtt || !s_mqtt_connected || s_heartbeat_topic[0] == '\0') {
+        free(payload);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -123,7 +130,7 @@ static esp_err_t publish_heartbeat_now(const char *status)
     // Node-RED heartbeat parsing now includes batt_soc_percent, batt_voltage_v, and batt_charge_rate_pct_per_hr.
     payload_len = snprintf(
         payload,
-        sizeof(payload),
+        SDACS_MQTT_STATUS_JSON_MAX_LEN,
         "{"
         "\"node_id\":\"%s\","
         "\"record_type\":\"heartbeat\","
@@ -174,21 +181,32 @@ static esp_err_t publish_heartbeat_now(const char *status)
 	        storage_error_detail ? storage_error_detail : "",
 	        (unsigned)sd_mount_attempts
 	    );
-    if (payload_len <= 0 || payload_len >= (int)sizeof(payload)) {
+    if (payload_len <= 0 || payload_len >= SDACS_MQTT_STATUS_JSON_MAX_LEN) {
+        ESP_LOGW(TAG, "heartbeat JSON truncated; increase SDACS_MQTT_STATUS_JSON_MAX_LEN");
+        free(payload);
         return ESP_ERR_INVALID_SIZE;
     }
 
     msg_id = esp_mqtt_client_publish(s_mqtt, s_heartbeat_topic, payload, 0, 1, 1);
-    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+    ret = (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+    free(payload);
+    return ret;
 }
 
 static void heartbeat_task(void *arg)
 {
     (void)arg;
+    uint32_t heartbeat_count = 0;
 
     while (1) {
         if (s_mqtt_connected) {
             (void)publish_heartbeat_now("online");
+            heartbeat_count++;
+            if ((heartbeat_count % 10U) == 0U) {
+                ESP_LOGI(TAG,
+                         "heartbeat stack high-water mark: %u words",
+                         (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(SDACS_HEARTBEAT_INTERVAL_MS));
     }
@@ -368,12 +386,127 @@ static esp_err_t mqtt_start_client(const char *broker_uri)
     s_mqtt = esp_mqtt_client_init(&mqtt_cfg);
     if (!s_mqtt) return ESP_ERR_NO_MEM;
 
-    ESP_ERROR_CHECK(esp_mqtt_client_register_event(
-        s_mqtt, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL));
+    esp_err_t err = esp_mqtt_client_register_event(
+        s_mqtt, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    if (err != ESP_OK) {
+        return err;
+    }
 
-    ESP_ERROR_CHECK(esp_mqtt_client_start(s_mqtt));
+    err = esp_mqtt_client_start(s_mqtt);
+    if (err != ESP_OK) {
+        return err;
+    }
     ESP_LOGI(TAG, "MQTT client start. Broker=%s", broker_uri);
     return ESP_OK;
+}
+
+static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_features_t *f)
+{
+#if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
+    if (!out || !f || len <= 0 || (size_t)len >= out_sz) {
+        return len;
+    }
+    if (out[(size_t)len - 1U] != '}') {
+        return len;
+    }
+
+    size_t pos = (size_t)len - 1U;
+    const audio_input_raw_diagnostics_t *d = &f->raw_diag;
+    int written = snprintf(
+        out + pos,
+        out_sz - pos,
+        ","
+        "\"raw_word0_hex\":\"0x%08" PRIX32 "\","
+        "\"raw_word1_hex\":\"0x%08" PRIX32 "\","
+        "\"raw_word_min_hex\":\"0x%08" PRIX32 "\","
+        "\"raw_word_max_hex\":\"0x%08" PRIX32 "\","
+        "\"raw_word_nonzero_count\":%u,"
+        "\"raw_word_repeated_count\":%u,"
+        "\"converted_sample0\":%" PRId32 ","
+        "\"converted_sample_min\":%" PRId32 ","
+        "\"converted_sample_max\":%" PRId32 ","
+        "\"converted_peak_abs\":%" PRId32 ","
+        "\"converted_p2p_raw\":%" PRId32 ","
+        "\"converted_zeros\":%u,"
+        "\"current_min\":%" PRId32 ","
+        "\"current_max\":%" PRId32 ","
+        "\"current_peak_abs\":%" PRId32 ","
+        "\"current_p2p\":%" PRId32 ","
+        "\"current_rms\":%.2f,"
+        "\"current_dbfs\":%.2f,"
+        "\"shift8_min\":%" PRId32 ","
+        "\"shift8_max\":%" PRId32 ","
+        "\"shift8_peak_abs\":%" PRId32 ","
+        "\"shift8_p2p\":%" PRId32 ","
+        "\"shift8_rms\":%.2f,"
+        "\"shift8_dbfs\":%.2f,"
+        "\"low24_min\":%" PRId32 ","
+        "\"low24_max\":%" PRId32 ","
+        "\"low24_peak_abs\":%" PRId32 ","
+        "\"low24_p2p\":%" PRId32 ","
+        "\"low24_rms\":%.2f,"
+        "\"low24_dbfs\":%.2f,"
+        "\"shift16_min\":%" PRId32 ","
+        "\"shift16_max\":%" PRId32 ","
+        "\"shift16_peak_abs\":%" PRId32 ","
+        "\"shift16_p2p\":%" PRId32 ","
+        "\"shift16_rms\":%.2f,"
+        "\"shift16_dbfs\":%.2f,"
+        "\"dbfs_norm_24bit\":%.2f,"
+        "\"dbfs_norm_32bit\":%.2f,"
+        "\"dbfs_normalization_bits\":%u"
+        "}",
+        d->raw_word0,
+        d->raw_word1,
+        d->raw_word_min,
+        d->raw_word_max,
+        (unsigned)d->raw_word_nonzero_count,
+        (unsigned)d->raw_word_repeated_count,
+        d->converted_sample0,
+        d->converted_sample_min,
+        d->converted_sample_max,
+        d->converted_peak_abs,
+        d->converted_p2p_raw,
+        (unsigned)d->converted_zeros,
+        d->current.min,
+        d->current.max,
+        d->current.peak_abs,
+        d->current.p2p,
+        (double)d->current.rms,
+        (double)d->current.dbfs,
+        d->shift8.min,
+        d->shift8.max,
+        d->shift8.peak_abs,
+        d->shift8.p2p,
+        (double)d->shift8.rms,
+        (double)d->shift8.dbfs,
+        d->low24.min,
+        d->low24.max,
+        d->low24.peak_abs,
+        d->low24.p2p,
+        (double)d->low24.rms,
+        (double)d->low24.dbfs,
+        d->shift16.min,
+        d->shift16.max,
+        d->shift16.peak_abs,
+        d->shift16.p2p,
+        (double)d->shift16.rms,
+        (double)d->shift16.dbfs,
+        (double)d->dbfs_norm_24bit,
+        (double)d->dbfs_norm_32bit,
+        (unsigned)d->dbfs_normalization_bits
+    );
+
+    if (written < 0) {
+        return written;
+    }
+    return (int)(pos + (size_t)written);
+#else
+    (void)out;
+    (void)out_sz;
+    (void)f;
+    return len;
+#endif
 }
 
 // Builds JSON without cJSON to keep dependencies simple.
@@ -402,7 +535,7 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         (void)snprintf(batt_rate_buf, sizeof(batt_rate_buf), "%.2f", (double)f->batt_charge_rate_pct_per_hr);
     }
 
-    return snprintf(out, out_sz,
+    int len = snprintf(out, out_sz,
         "{"
           "\"node_id\":\"%s\","
           "\"node\":\"%s\","
@@ -418,7 +551,17 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"sd_enabled\":%s,"
           "\"sd_writes_enabled\":%s,"
           "\"storage_mounted\":%s,"
+          "\"i2s_frame_mode\":\"%s\","
+          "\"i2s_selected_slot\":\"%s\","
+          "\"i2s_slot_mask\":\"%s\","
+          "\"i2s_sample_rate_hz\":%u,"
+          "\"i2s_data_bits\":%u,"
+          "\"i2s_valid_bits\":%u,"
           "\"n\":%u,"
+          "\"window_elapsed_ms\":%u,"
+          "\"expected_samples\":%u,"
+          "\"effective_sample_rate_hz\":%.2f,"
+          "\"sample_rate_ok\":%s,"
           "\"rms\":%.6f,"
           "\"dbfs\":%.2f,"
           "\"db_spl\":%.2f,"
@@ -443,6 +586,9 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"audio_error\":\"%s\","
           "\"audio_read_errors\":%u,"
           "\"audio_read_timeouts\":%u,"
+          "\"consecutive_timeouts\":%u,"
+          "\"total_i2s_reads\":%u,"
+          "\"successful_i2s_reads\":%u,"
           "\"err\":%u"
         "}",
         f->node_id,
@@ -458,7 +604,17 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->sd_enabled ? "true" : "false",
         f->sd_writes_enabled ? "true" : "false",
         f->storage_mounted ? "true" : "false",
+        f->i2s_frame_mode,
+        f->i2s_selected_slot,
+        f->i2s_slot_mask,
+        (unsigned)f->i2s_sample_rate_hz,
+        (unsigned)f->i2s_data_bits,
+        (unsigned)f->i2s_valid_bits,
         (unsigned)f->n,
+        (unsigned)f->window_elapsed_ms,
+        (unsigned)f->expected_samples,
+        (double)f->effective_sample_rate_hz,
+        f->sample_rate_ok ? "true" : "false",
         f->rms,
         f->dbfs,
         f->db_spl,
@@ -483,12 +639,24 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->audio_error,
         (unsigned)f->audio_read_errors,
         (unsigned)f->audio_read_timeouts,
+        (unsigned)f->consecutive_timeouts,
+        (unsigned)f->total_i2s_reads,
+        (unsigned)f->successful_i2s_reads,
         (unsigned)f->err
     );
+
+    return append_raw_diag_json(out, out_sz, len, f);
 }
 
 static void mqtt_publish_task(void *arg)
 {
+    sdacs_features_t *f = NULL;
+    char *payload = NULL;
+    uint32_t published_count = 0;
+    esp_err_t err = ESP_OK;
+
+    (void)arg;
+
     // Wait for WiFi before starting MQTT
     EventBits_t bits = xEventGroupWaitBits(
         s_wifi_event_group,
@@ -504,22 +672,39 @@ static void mqtt_publish_task(void *arg)
         return;
     }
 
-    ESP_ERROR_CHECK(mqtt_start_client(s_cfg.broker_uri));
+    err = mqtt_start_client(s_cfg.broker_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mqtt_start_client failed: %s", esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelete(NULL);
+        return;
+    }
 
-    sdacs_features_t f;
-    char payload[1536];
+    ESP_LOGI(TAG,
+             "mqtt_pub stack high-water mark: %u words",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
+    f = calloc(1, sizeof(*f));
+    payload = calloc(1, SDACS_MQTT_FEATURE_JSON_MAX_LEN);
+    if (!f || !payload) {
+        ESP_LOGE(TAG, "mqtt_publish_task allocation failed");
+        free(f);
+        free(payload);
+        vTaskDelete(NULL);
+        return;
+    }
 
     while (1) {
-        if (xQueueReceive(s_feat_q, &f, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(s_feat_q, f, portMAX_DELAY) == pdTRUE) {
 
             if (!s_mqtt || !s_mqtt_connected) {
-                // Don’t block or retry here. Drop until connected.
+                // Do not block or retry here. Drop until connected.
                 continue;
             }
 
-            int len = build_features_json(payload, sizeof(payload), &f);
-            if (len <= 0 || (size_t)len >= sizeof(payload)) {
-                ESP_LOGW(TAG, "JSON build truncated; dropping");
+            int len = build_features_json(payload, SDACS_MQTT_FEATURE_JSON_MAX_LEN, f);
+            if (len <= 0 || len >= SDACS_MQTT_FEATURE_JSON_MAX_LEN) {
+                ESP_LOGW(TAG, "features JSON truncated; increase SDACS_MQTT_FEATURE_JSON_MAX_LEN");
                 continue;
             }
 
@@ -534,12 +719,22 @@ static void mqtt_publish_task(void *arg)
             );
 
             if (msg_id >= 0) {
-                ESP_LOGI(TAG, "features published seq=%u topic=%s", (unsigned)f.seq, s_cfg.topic);
+                published_count++;
+                ESP_LOGI(TAG, "features published seq=%u topic=%s", (unsigned)f->seq, s_cfg.topic);
+                if ((published_count % 10U) == 0U) {
+                    ESP_LOGI(TAG,
+                             "mqtt_pub stack high-water mark: %u words",
+                             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+                }
             } else {
-                ESP_LOGW(TAG, "features publish failed seq=%u topic=%s", (unsigned)f.seq, s_cfg.topic);
+                ESP_LOGW(TAG, "features publish failed seq=%u topic=%s", (unsigned)f->seq, s_cfg.topic);
             }
         }
     }
+
+    free(f);
+    free(payload);
+    vTaskDelete(NULL);
 }
 
 esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
@@ -622,16 +817,20 @@ esp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg)
 
     ESP_ERROR_CHECK(wifi_init_sta(s_cfg.ssid, s_cfg.pass));
 
-    // Run publisher task on core 0 (leave core 1 for audio if you want)
-    xTaskCreatePinnedToCore(
+    // Run publisher task on core 0 and leave core 1 for audio capture.
+    BaseType_t pub_ok = xTaskCreatePinnedToCore(
         mqtt_publish_task,
-        "mqtt_publish_task",
-        4096,
+        "mqtt_pub",
+        SDACS_MQTT_PUBLISH_TASK_STACK_SIZE,
         NULL,
-        5,
+        SDACS_MQTT_PUBLISH_TASK_PRIORITY,
         NULL,
-        0
+        SDACS_MQTT_PUBLISH_TASK_CORE
     );
+    if (pub_ok != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create mqtt_pub task");
+        return ESP_FAIL;
+    }
 
     if (!s_heartbeat_task_started) {
         BaseType_t ok = xTaskCreate(

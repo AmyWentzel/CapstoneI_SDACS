@@ -33,6 +33,15 @@ typedef struct {
 
 static const char *TAG = "capture_task";
 
+typedef struct {
+    uint32_t audio_read_errors;
+    uint32_t audio_read_timeouts;
+    uint32_t consecutive_timeouts;
+    uint32_t total_i2s_reads;
+    uint32_t successful_i2s_reads;
+    uint32_t mqtt_feature_drops;
+} capture_io_stats_t;
+
 static void capture_publish_status(capture_task_state_t *state,
                                    sdacs_mode_t mode,
                                    const char *message)
@@ -98,20 +107,84 @@ static void capture_set_state(capture_task_state_t *state,
     capture_publish_status(state, mode, message);
 }
 
+static void capture_publish_preflight_failed(capture_task_state_t *state,
+                                             uint32_t preflight_samples,
+                                             float preflight_effective_sample_rate_hz,
+                                             uint32_t preflight_timeouts)
+{
+    char payload[900];
+    int len = 0;
+
+    if (!state || state->status_topic[0] == '\0') {
+        return;
+    }
+
+    len = snprintf(
+        payload,
+        sizeof(payload),
+        "{"
+        "\"node_id\":\"%s\","
+        "\"record_type\":\"capture_status\","
+        "\"timestamp\":%" PRIi64 ","
+        "\"fw_version\":\"%s\","
+        "\"request_id\":\"%s\","
+        "\"state\":\"error\","
+        "\"status\":\"error\","
+        "\"storage_mode\":\"%s\","
+        "\"sd_enabled\":%s,"
+        "\"sd_writes_enabled\":%s,"
+        "\"preflight_samples\":%u,"
+        "\"preflight_effective_sample_rate_hz\":%.2f,"
+        "\"preflight_timeouts\":%u,"
+        "\"expected_sample_rate_hz\":%u,"
+        "\"audio_error\":\"i2s_preflight_failed\","
+        "\"message\":\"capture rejected: I2S preflight failed\""
+        "}",
+        state->node_id,
+        (int64_t)esp_timer_get_time(),
+        SDACS_FW_VERSION,
+        state->request_id,
+        state->ctx.storage_mode,
+        state->ctx.sd_enabled ? "true" : "false",
+        state->ctx.sd_writes_enabled ? "true" : "false",
+        (unsigned)preflight_samples,
+        (double)preflight_effective_sample_rate_hz,
+        (unsigned)preflight_timeouts,
+        (unsigned)SDACS_SAMPLE_RATE_HZ
+    );
+
+    if (len <= 0 || len >= (int)sizeof(payload)) {
+        ESP_LOGW(TAG, "I2S preflight failure payload too long");
+        return;
+    }
+
+    esp_err_t err = wifi_mqtt_publish_status_json(state->status_topic, payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "I2S preflight failure publish failed: %s", esp_err_to_name(err));
+    }
+}
+
 static void capture_publish_complete(capture_task_state_t *state,
                                      size_t raw_bytes,
                                      size_t wav_bytes,
                                      size_t csv_bytes,
                                      uint32_t total_samples,
+                                     uint32_t expected_total_samples,
                                      int64_t elapsed_ms,
                                      float effective_sample_rate_hz,
+                                     bool sample_rate_ok,
+                                     bool capture_valid,
+                                     const capture_io_stats_t *io_stats,
+                                     const char *audio_error,
+                                     const char *status,
                                      const char *message)
 {
-    char payload[1400];
+    char payload[1800];
     char timestamp[32];
     const char *raw_path = "";
     const char *wav_path = "";
     const char *csv_path = "";
+    const char *status_text = status ? status : (capture_valid ? "complete" : "error");
     int len = 0;
 
     if (!state || state->complete_topic[0] == '\0') {
@@ -133,15 +206,29 @@ static void capture_publish_complete(capture_task_state_t *state,
         "\"record_type\":\"capture_complete\","
         "\"fw_version\":\"%s\","
         "\"request_id\":\"%s\","
-        "\"state\":\"complete\","
-        "\"status\":\"complete\","
+        "\"state\":\"%s\","
+        "\"status\":\"%s\","
+        "\"capture_valid\":%s,"
         "\"storage_mode\":\"%s\","
         "\"sd_enabled\":%s,"
         "\"sd_writes_enabled\":%s,"
+        "\"i2s_frame_mode\":\"stereo\","
+        "\"i2s_selected_slot\":\"%s\","
+        "\"i2s_sample_rate_hz\":%u,"
+        "\"i2s_data_bits\":32,"
+        "\"i2s_valid_bits\":%u,"
         "\"record_seconds\":%u,"
         "\"total_samples\":%u,"
+        "\"expected_total_samples\":%u,"
         "\"elapsed_ms\":%" PRIi64 ","
         "\"effective_sample_rate_hz\":%.2f,"
+        "\"sample_rate_ok\":%s,"
+        "\"audio_read_errors\":%u,"
+        "\"audio_read_timeouts\":%u,"
+        "\"successful_i2s_reads\":%u,"
+        "\"total_i2s_reads\":%u,"
+        "\"mqtt_feature_drops\":%u,"
+        "\"audio_error\":\"%s\","
         "\"raw_path\":\"%s\","
         "\"wav_path\":\"%s\","
         "\"metrics_path\":\"%s\","
@@ -154,13 +241,27 @@ static void capture_publish_complete(capture_task_state_t *state,
         state->node_id,
         SDACS_FW_VERSION,
         state->request_id,
+        status_text,
+        status_text,
+        capture_valid ? "true" : "false",
         state->ctx.storage_mode,
         state->ctx.sd_enabled ? "true" : "false",
         state->ctx.sd_writes_enabled ? "true" : "false",
+        SDACS_I2S_SELECTED_SLOT_LABEL,
+        (unsigned)SDACS_SAMPLE_RATE_HZ,
+        (unsigned)SDACS_MIC_VALID_BITS,
         (unsigned)state->ctx.record_seconds,
         (unsigned)total_samples,
+        (unsigned)expected_total_samples,
         (int64_t)elapsed_ms,
         (double)effective_sample_rate_hz,
+        sample_rate_ok ? "true" : "false",
+        io_stats ? (unsigned)io_stats->audio_read_errors : 0U,
+        io_stats ? (unsigned)io_stats->audio_read_timeouts : 0U,
+        io_stats ? (unsigned)io_stats->successful_i2s_reads : 0U,
+        io_stats ? (unsigned)io_stats->total_i2s_reads : 0U,
+        io_stats ? (unsigned)io_stats->mqtt_feature_drops : 0U,
+        audio_error ? audio_error : "",
         raw_path,
         wav_path,
         csv_path,
@@ -184,18 +285,82 @@ static void capture_publish_complete(capture_task_state_t *state,
     }
 }
 
+static bool capture_run_i2s_preflight(capture_task_state_t *state,
+                                      int32_t *read_buf,
+                                      uint32_t *out_samples,
+                                      uint32_t *out_timeouts,
+                                      float *out_effective_sr)
+{
+    size_t samples_read = 0;
+    uint32_t samples = 0;
+    uint32_t timeouts = 0;
+    uint32_t errors = 0;
+    int64_t start_us = esp_timer_get_time();
+    int64_t end_us = start_us + ((int64_t)SDACS_I2S_PREFLIGHT_MS * 1000LL);
+
+    while (esp_timer_get_time() < end_us) {
+        esp_err_t err = audio_input_read_s24(
+            read_buf,
+            SDACS_I2S_FRAMES_PER_READ,
+            &samples_read,
+            SDACS_I2S_READ_TIMEOUT_MS
+        );
+        if (err == ESP_ERR_TIMEOUT) {
+            timeouts++;
+            continue;
+        }
+        if (err != ESP_OK) {
+            errors++;
+            ESP_LOGW(TAG, "I2S preflight read failed: %s", esp_err_to_name(err));
+            continue;
+        }
+        samples += (uint32_t)samples_read;
+    }
+
+    int64_t elapsed_us = esp_timer_get_time() - start_us;
+    float effective_sr = elapsed_us > 0
+        ? ((float)samples * 1000000.0f) / (float)elapsed_us
+        : 0.0f;
+    bool pass = errors == 0 &&
+        effective_sr >= ((float)SDACS_SAMPLE_RATE_HZ * SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO);
+
+    ESP_LOGI(TAG,
+             "I2S preflight: samples=%u expected=%u effective_sr=%.2f timeouts=%u pass=%s",
+             (unsigned)samples,
+             (unsigned)((SDACS_SAMPLE_RATE_HZ * SDACS_I2S_PREFLIGHT_MS) / 1000U),
+             (double)effective_sr,
+             (unsigned)timeouts,
+             pass ? "true" : "false");
+
+    if (out_samples) {
+        *out_samples = samples;
+    }
+    if (out_timeouts) {
+        *out_timeouts = timeouts;
+    }
+    if (out_effective_sr) {
+        *out_effective_sr = effective_sr;
+    }
+
+    (void)state;
+    return pass;
+}
+
 static void capture_task_run(void *arg)
 {
     capture_task_state_t *state = (capture_task_state_t *)arg;
     size_t samples_read = 0;
     int64_t start_us = esp_timer_get_time();
     int64_t end_us = 0;
-    int64_t next_metrics_us = 0;
+    int64_t window_start_us = 0;
+    int64_t next_publish_us = 0;
+    const int64_t feature_interval_us = 1000000LL;
     uint32_t samples_written = 0;
     uint32_t total_samples = 0;
     uint32_t feature_seq = 0;
-    uint32_t audio_read_errors = 0;
-    uint32_t audio_read_timeouts = 0;
+    uint32_t window_audio_read_timeouts = 0;
+    uint32_t window_audio_read_errors = 0;
+    capture_io_stats_t io_stats = {0};
 
     static int32_t read_buf[SDACS_I2S_FRAMES_PER_READ];
     static int32_t chunk[SDACS_AUDIO_CHUNK_SAMPLES];
@@ -206,6 +371,9 @@ static void capture_task_run(void *arg)
     size_t wav_bytes = 0;
     size_t csv_bytes = 0;
     esp_err_t err = ESP_OK;
+    bool capture_valid = true;
+    bool capture_sample_rate_ok = true;
+    char capture_audio_error[32] = "";
 
     capture_set_state(state, SDACS_MODE_ARMED, "capture command accepted");
 
@@ -241,6 +409,35 @@ static void capture_task_run(void *arg)
         ESP_LOGI(TAG, "SD writes disabled; running MQTT/features-only capture");
     }
 
+    fft_metrics_reset();
+    audio_input_reset_counters();
+
+#if SDACS_I2S_PREFLIGHT_ENABLED
+    uint32_t preflight_samples = 0;
+    uint32_t preflight_timeouts = 0;
+    float preflight_effective_sr = 0.0f;
+    bool preflight_ok = capture_run_i2s_preflight(
+        state,
+        read_buf,
+        &preflight_samples,
+        &preflight_timeouts,
+        &preflight_effective_sr
+    );
+    fft_metrics_reset();
+    audio_input_reset_counters();
+    if (!preflight_ok) {
+        device_state_set(SDACS_MODE_ERROR);
+        capture_publish_preflight_failed(
+            state,
+            preflight_samples,
+            preflight_effective_sr,
+            preflight_timeouts
+        );
+        ESP_LOGE(TAG, "capture rejected: I2S preflight failed");
+        goto done;
+    }
+#endif
+
     capture_set_state(state, SDACS_MODE_CAPTURING,
                       state->ctx.sd_writes_enabled ? "capture started" : "capture started: MQTT/features-only mode");
     (void)temp_humidity_publish_latest_once("capture_start");
@@ -250,7 +447,8 @@ static void capture_task_run(void *arg)
 
     start_us = esp_timer_get_time();
     end_us = start_us + ((int64_t)state->ctx.record_seconds * 1000000LL);
-    next_metrics_us = start_us + 1000000LL;
+    window_start_us = start_us;
+    next_publish_us = start_us + feature_interval_us;
 
     while (esp_timer_get_time() < end_us) {
         err = audio_input_read_s24(
@@ -259,36 +457,42 @@ static void capture_task_run(void *arg)
             &samples_read,
             SDACS_I2S_READ_TIMEOUT_MS
         );
+        io_stats.total_i2s_reads++;
         if (err == ESP_ERR_TIMEOUT) {
-            audio_read_timeouts++;
-            continue;
-        }
-        if (err != ESP_OK) {
-            audio_read_errors++;
+            io_stats.audio_read_timeouts++;
+            io_stats.consecutive_timeouts++;
+            window_audio_read_timeouts++;
+            samples_read = 0;
+        } else if (err != ESP_OK) {
+            io_stats.audio_read_errors++;
+            io_stats.consecutive_timeouts = 0;
+            window_audio_read_errors++;
             ESP_LOGE(TAG, "I2S read failed: %s", esp_err_to_name(err));
             fatal_error = true;
             break;
-        }
-        if (samples_read == 0) {
-            continue;
+        } else {
+            io_stats.successful_i2s_reads++;
+            io_stats.consecutive_timeouts = 0;
         }
 
-        fft_metrics_push_samples(read_buf, samples_read);
-        fft_metrics_accumulate_block(read_buf, samples_read);
-        total_samples += (uint32_t)samples_read;
+        if (samples_read > 0) {
+            fft_metrics_push_samples(read_buf, samples_read);
+            fft_metrics_accumulate_block(read_buf, samples_read);
+            total_samples += (uint32_t)samples_read;
 
-        for (size_t i = 0; i < samples_read; ++i) {
-            chunk[chunk_fill++] = read_buf[i];
-            if (chunk_fill >= SDACS_AUDIO_CHUNK_SAMPLES) {
-                if (state->ctx.sd_writes_enabled) {
-                    if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
-                        ESP_LOGW(TAG, "Failed SD append for raw chunk");
-                        fatal_error = true;
-                        break;
+            for (size_t i = 0; i < samples_read; ++i) {
+                chunk[chunk_fill++] = read_buf[i];
+                if (chunk_fill >= SDACS_AUDIO_CHUNK_SAMPLES) {
+                    if (state->ctx.sd_writes_enabled) {
+                        if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
+                            ESP_LOGW(TAG, "Failed SD append for raw chunk");
+                            fatal_error = true;
+                            break;
+                        }
+                        samples_written += (uint32_t)chunk_fill;
                     }
-                    samples_written += (uint32_t)chunk_fill;
+                    chunk_fill = 0;
                 }
-                chunk_fill = 0;
             }
         }
         if (fatal_error) {
@@ -296,16 +500,42 @@ static void capture_task_run(void *arg)
         }
 
         int64_t now_us = esp_timer_get_time();
-        if (now_us >= next_metrics_us) {
+        if (now_us >= next_publish_us) {
+            int64_t window_elapsed_us = now_us - window_start_us;
+            uint32_t window_elapsed_ms = (uint32_t)(window_elapsed_us / 1000LL);
+            uint32_t expected_samples = (uint32_t)(((int64_t)SDACS_SAMPLE_RATE_HZ * window_elapsed_us) / 1000000LL);
+            float window_effective_sr = 0.0f;
             audio_metrics_t metrics = {0};
-            if (fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db)) {
+            bool have_metrics = fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db);
+            if (!have_metrics) {
+                metrics.dbfs = -120.0f;
+                metrics.laeq_db = metrics.dbfs + state->ctx.cal_offset_db;
+                metrics.peak_db = metrics.laeq_db;
+                metrics.sample_count = 0;
+            }
+            {
+                window_effective_sr = window_elapsed_us > 0
+                    ? ((float)metrics.sample_count * 1000000.0f) / (float)window_elapsed_us
+                    : 0.0f;
+                bool sample_rate_ok = window_effective_sr >=
+                    ((float)SDACS_SAMPLE_RATE_HZ * SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO);
+                char audio_error[32] = "";
+                if (window_audio_read_timeouts > SDACS_I2S_MAX_TIMEOUTS_PER_WINDOW) {
+                    snprintf(audio_error, sizeof(audio_error), "%s", "i2s_timeouts");
+                } else if (!sample_rate_ok) {
+                    snprintf(audio_error, sizeof(audio_error), "%s", "low_effective_sample_rate");
+                } else if (window_audio_read_errors > 0) {
+                    snprintf(audio_error, sizeof(audio_error), "%s", "i2s_read_failed");
+                }
                 audio_input_debug_t i2s_dbg = {0};
+                audio_input_raw_diagnostics_t raw_diag = {0};
                 temp_humidity_reading_t th = {0};
                 float temp_c = NAN;
                 float humidity = NAN;
                 uint32_t seq = ++feature_seq;
                 const char *capture_state = device_state_to_str(device_state_get());
                 (void)audio_input_get_last_debug(&i2s_dbg);
+                (void)audio_input_get_raw_diagnostics(&raw_diag);
                 if (temp_humidity_get_latest(&th)) {
                     temp_c = th.temp_c;
                     humidity = th.rh_percent;
@@ -363,6 +593,10 @@ static void capture_task_run(void *arg)
                     .p2p_raw = metrics.p2p_raw,
                     .zeros = (int)metrics.zeros,
                     .n = metrics.sample_count,
+                    .window_elapsed_ms = window_elapsed_ms,
+                    .expected_samples = expected_samples,
+                    .effective_sample_rate_hz = window_effective_sr,
+                    .sample_rate_ok = sample_rate_ok,
                     .temp_c = temp_c,
                     .rh_percent = humidity,
                     .batt_soc_percent = batt_valid ? batt.soc_percent : NAN,
@@ -372,9 +606,16 @@ static void capture_task_run(void *arg)
                     .sd_enabled = state->ctx.sd_enabled,
                     .sd_writes_enabled = state->ctx.sd_writes_enabled,
                     .storage_mounted = state->ctx.sd_writes_enabled ? run_storage_is_mounted(state->ctx.storage) : false,
-                    .audio_read_errors = audio_read_errors,
-                    .audio_read_timeouts = audio_read_timeouts,
-                    .err = audio_read_errors,
+                    .i2s_sample_rate_hz = SDACS_SAMPLE_RATE_HZ,
+                    .i2s_data_bits = 32,
+                    .i2s_valid_bits = SDACS_MIC_VALID_BITS,
+                    .raw_diag = raw_diag,
+                    .audio_read_errors = window_audio_read_errors,
+                    .audio_read_timeouts = window_audio_read_timeouts,
+                    .consecutive_timeouts = io_stats.consecutive_timeouts,
+                    .total_i2s_reads = io_stats.total_i2s_reads,
+                    .successful_i2s_reads = io_stats.successful_i2s_reads,
+                    .err = audio_error[0] ? 1U : 0U,
                 };
                 strncpy(features.node_id, state->ctx.node_id, sizeof(features.node_id) - 1);
                 features.node_id[sizeof(features.node_id) - 1] = '\0';
@@ -382,6 +623,12 @@ static void capture_task_run(void *arg)
                 features.capture_state[sizeof(features.capture_state) - 1] = '\0';
                 strncpy(features.storage_mode, state->ctx.storage_mode, sizeof(features.storage_mode) - 1);
                 features.storage_mode[sizeof(features.storage_mode) - 1] = '\0';
+                strncpy(features.i2s_frame_mode, "stereo", sizeof(features.i2s_frame_mode) - 1);
+                features.i2s_frame_mode[sizeof(features.i2s_frame_mode) - 1] = '\0';
+                strncpy(features.i2s_selected_slot, SDACS_I2S_SELECTED_SLOT_LABEL, sizeof(features.i2s_selected_slot) - 1);
+                features.i2s_selected_slot[sizeof(features.i2s_selected_slot) - 1] = '\0';
+                strncpy(features.i2s_slot_mask, SDACS_I2S_SLOT_MASK_LABEL, sizeof(features.i2s_slot_mask) - 1);
+                features.i2s_slot_mask[sizeof(features.i2s_slot_mask) - 1] = '\0';
                 strncpy(features.storage_error,
                         state->ctx.sd_writes_enabled ? run_storage_last_error_name(state->ctx.storage) : "",
                         sizeof(features.storage_error) - 1);
@@ -390,19 +637,30 @@ static void capture_task_run(void *arg)
                         state->ctx.sd_writes_enabled ? run_storage_last_error_detail(state->ctx.storage) : "",
                         sizeof(features.storage_error_detail) - 1);
                 features.storage_error_detail[sizeof(features.storage_error_detail) - 1] = '\0';
-                strncpy(features.audio_error,
-                        audio_read_errors ? "i2s_read_failed" : "",
-                        sizeof(features.audio_error) - 1);
+                strncpy(features.audio_error, audio_error, sizeof(features.audio_error) - 1);
                 features.audio_error[sizeof(features.audio_error) - 1] = '\0';
                 if (!wifi_mqtt_try_send(&features)) {
+                    io_stats.mqtt_feature_drops++;
                     ESP_LOGW(TAG, "features queue full; dropped seq=%u", (unsigned)features.seq);
                 }
+
+                ESP_LOGI(TAG,
+                         "Feature row seq=%u window_ms=%u n=%u expected=%u eff_sr=%.2f sample_rate_ok=%s timeouts=%u f_peak=%.1f audio_error=%s",
+                         (unsigned)seq,
+                         (unsigned)window_elapsed_ms,
+                         (unsigned)metrics.sample_count,
+                         (unsigned)expected_samples,
+                         (double)window_effective_sr,
+                         sample_rate_ok ? "true" : "false",
+                         (unsigned)window_audio_read_timeouts,
+                         (double)metrics.fft_peak_hz,
+                         audio_error[0] ? audio_error : "");
 
                 ESP_LOGI(TAG,
                          "Feature row request=%s n=%u expected=%u dbfs=%.2f p2p_raw=%" PRId32 " zeros=%u f_peak=%.1f storage_mode=%s err=%u",
                          state->request_id,
                          (unsigned)metrics.sample_count,
-                         (unsigned)SDACS_SAMPLE_RATE_HZ,
+                         (unsigned)expected_samples,
                          (double)metrics.dbfs,
                          metrics.p2p_raw,
                          (unsigned)metrics.zeros,
@@ -433,11 +691,30 @@ static void capture_task_run(void *arg)
                          (double)metrics.fft_total_energy,
                          (unsigned)metrics.sample_count);
 
+#if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
+                ESP_LOGI(TAG,
+                         "RAW DIAG seq=%u n=%u f_peak=%.1f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
+                         (unsigned)seq,
+                         (unsigned)metrics.sample_count,
+                         (double)metrics.fft_peak_hz,
+                         raw_diag.current.p2p,
+                         (double)raw_diag.current.dbfs,
+                         raw_diag.shift8.p2p,
+                         (double)raw_diag.shift8.dbfs,
+                         raw_diag.low24.p2p,
+                         (double)raw_diag.low24.dbfs,
+                         raw_diag.raw_word0);
+#endif
+
                 ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",
                          metrics.laeq_db, metrics.peak_db, (unsigned)samples_written);
             }
 
-            next_metrics_us += 1000000LL;
+            window_audio_read_timeouts = 0;
+            window_audio_read_errors = 0;
+            audio_input_reset_raw_diagnostics();
+            window_start_us = now_us;
+            next_publish_us = now_us + feature_interval_us;
         }
     }
 
@@ -509,18 +786,53 @@ static void capture_task_run(void *arg)
     float effective_sample_rate_hz = elapsed_us > 0
         ? ((float)total_samples * 1000000.0f) / (float)elapsed_us
         : 0.0f;
+    uint32_t expected_total_samples = state->ctx.record_seconds * SDACS_SAMPLE_RATE_HZ;
+    capture_sample_rate_ok = effective_sample_rate_hz >=
+        ((float)SDACS_SAMPLE_RATE_HZ * SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO);
+    if (!capture_sample_rate_ok) {
+        capture_valid = false;
+        snprintf(capture_audio_error, sizeof(capture_audio_error), "%s", "low_effective_sample_rate");
+    } else if (io_stats.audio_read_errors > 0) {
+        capture_valid = false;
+        snprintf(capture_audio_error, sizeof(capture_audio_error), "%s", "i2s_read_failed");
+    } else if (io_stats.audio_read_timeouts > 0 &&
+               io_stats.successful_i2s_reads == 0) {
+        capture_valid = false;
+        snprintf(capture_audio_error, sizeof(capture_audio_error), "%s", "i2s_timeouts");
+    }
 
     ESP_LOGI(TAG,
-             "Capture complete request=%s storage_mode=%s total_samples=%u elapsed_ms=%" PRIi64 " effective_sr=%.2f",
+             "Capture complete request=%s storage_mode=%s total_samples=%u expected=%u elapsed_ms=%" PRIi64 " effective_sr=%.2f sample_rate_ok=%s audio_error=%s",
              state->request_id,
              state->ctx.storage_mode,
              (unsigned)total_samples,
+             (unsigned)expected_total_samples,
              (int64_t)elapsed_ms,
-             (double)effective_sample_rate_hz);
+             (double)effective_sample_rate_hz,
+             capture_sample_rate_ok ? "true" : "false",
+             capture_audio_error);
 
     if (fatal_error) {
         capture_set_state(state, SDACS_MODE_ERROR,
                           verify_reason[0] ? verify_reason : "capture failed");
+    } else if (!capture_valid) {
+        capture_set_state(state, SDACS_MODE_ERROR,
+                          "capture failed: effective sample rate too low");
+        capture_publish_complete(
+            state,
+            raw_bytes,
+            wav_bytes,
+            csv_bytes,
+            total_samples,
+            expected_total_samples,
+            elapsed_ms,
+            effective_sample_rate_hz,
+            capture_sample_rate_ok,
+            false,
+            &io_stats,
+            capture_audio_error,
+            "error",
+            "capture failed: effective sample rate too low");
     } else {
         capture_set_state(state, SDACS_MODE_COMPLETE, "capture complete");
         (void)temp_humidity_publish_latest_once("capture_complete");
@@ -533,8 +845,14 @@ static void capture_task_run(void *arg)
             wav_bytes,
             csv_bytes,
             total_samples,
+            expected_total_samples,
             elapsed_ms,
             effective_sample_rate_hz,
+            capture_sample_rate_ok,
+            true,
+            &io_stats,
+            "",
+            "complete",
             state->ctx.sd_writes_enabled ? "capture complete" : "capture complete: MQTT/features-only mode");
     }
 

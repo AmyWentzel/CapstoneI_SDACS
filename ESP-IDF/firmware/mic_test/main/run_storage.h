@@ -48,6 +48,7 @@ typedef struct {
 } run_storage_t;
 
 esp_err_t run_storage_init(run_storage_t *rs);
+void run_storage_configure_disabled_pins_safe(void);
 bool run_storage_is_ready(const run_storage_t *rs);
 bool run_storage_is_mounted(const run_storage_t *rs);
 esp_err_t run_storage_last_error(const run_storage_t *rs);

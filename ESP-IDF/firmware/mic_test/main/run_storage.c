@@ -23,6 +23,10 @@
 #include "sdacs_config.h"
 #include "time_sync.h"
 
+#if SDACS_SD_ALLOW_FORMAT_IF_MOUNT_FAILED
+#warning "SDACS_SD_ALLOW_FORMAT_IF_MOUNT_FAILED can erase SD-card data. Do not enable during mic diagnostics."
+#endif
+
 typedef struct __attribute__((packed)) {
     char riff[4];
     uint32_t file_size;
@@ -82,6 +86,42 @@ static void run_storage_prepare_spi_pins(void)
     gpio_set_direction(SDACS_SD_CS_GPIO, GPIO_MODE_OUTPUT);
     gpio_pullup_en(SDACS_SD_CS_GPIO);
     gpio_pullup_en(SDACS_SD_MISO_GPIO);
+}
+
+void run_storage_configure_disabled_pins_safe(void)
+{
+    gpio_config_t cs_cfg = {
+        .pin_bit_mask = 1ULL << SDACS_SD_CS_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config_t input_cfg = {
+        .pin_bit_mask = (1ULL << SDACS_SD_MOSI_GPIO) |
+                        (1ULL << SDACS_SD_SCLK_GPIO) |
+                        (1ULL << SDACS_SD_MISO_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    (void)gpio_config(&cs_cfg);
+    (void)gpio_set_level(SDACS_SD_CS_GPIO, 1);
+    (void)gpio_config(&input_cfg);
+
+    ESP_LOGW(TAG,
+             "SD disabled safe pin state: CS=%d high, MOSI=%d input, SCLK=%d input, MISO=%d input",
+             (int)SDACS_SD_CS_GPIO,
+             (int)SDACS_SD_MOSI_GPIO,
+             (int)SDACS_SD_SCLK_GPIO,
+             (int)SDACS_SD_MISO_GPIO);
+    ESP_LOGW(TAG, "Do not insert SD cards until SD wiring, voltage, and CS behavior are verified.");
+    if (SDACS_SD_CS_GPIO == GPIO_NUM_45) {
+        ESP_LOGW(TAG, "GPIO45 is strapping-sensitive; avoid using it as SD CS in a future PCB revision if another GPIO is available.");
+    }
+    /* No SD power-enable GPIO is available on this board revision. */
 }
 
 static void refresh_path_timestamp(const char *path, time_t now)
@@ -228,7 +268,8 @@ esp_err_t run_storage_init(run_storage_t *rs)
         slot_config.gpio_cs = SDACS_SD_CS_GPIO;
 
         esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-            .format_if_mount_failed = SDACS_SD_FORMAT_IF_MOUNT_FAILED ? true : false,
+            .format_if_mount_failed =
+                (SDACS_SD_ALLOW_FORMAT_IF_MOUNT_FAILED && SDACS_SD_FORMAT_IF_MOUNT_FAILED) ? true : false,
             .max_files = 8,
             .allocation_unit_size = 16 * 1024,
         };

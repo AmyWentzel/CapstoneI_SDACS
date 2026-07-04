@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "audio_input.h"
 #include "esp_err.h"
 #include "run_storage.h"
 
@@ -25,6 +26,10 @@ typedef struct {
     int32_t p2p_raw;         // peak-to-peak raw counts
     int zeros;               // count of exact zero samples in window
     uint32_t n;              // number of samples in the window
+    uint32_t window_elapsed_ms;
+    uint32_t expected_samples;
+    float effective_sample_rate_hz;
+    bool sample_rate_ok;
     float temp_c;
     float rh_percent;
     float batt_soc_percent;
@@ -35,11 +40,21 @@ typedef struct {
     bool sd_enabled;
     bool sd_writes_enabled;
     bool storage_mounted;
+    char i2s_frame_mode[12];
+    char i2s_selected_slot[8];
+    char i2s_slot_mask[8];
+    uint32_t i2s_sample_rate_hz;
+    uint32_t i2s_data_bits;
+    uint32_t i2s_valid_bits;
+    audio_input_raw_diagnostics_t raw_diag;
     char storage_error[32];
     char storage_error_detail[128];
     char audio_error[32];
     uint32_t audio_read_errors;
     uint32_t audio_read_timeouts;
+    uint32_t consecutive_timeouts;
+    uint32_t total_i2s_reads;
+    uint32_t successful_i2s_reads;
     uint32_t err;
 } sdacs_features_t;
 

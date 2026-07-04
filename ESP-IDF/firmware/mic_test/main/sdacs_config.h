@@ -39,6 +39,7 @@
 #define SDACS_SD_MOUNT_RETRY_DELAY_MS    750
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
 #define SDACS_SD_FORMAT_IF_MOUNT_FAILED  0
+#define SDACS_SD_ALLOW_FORMAT_IF_MOUNT_FAILED 0
 /*
  * SDACS_ENABLE_SD_STORAGE = 0 disables SD mount, raw file writing, WAV
  * conversion, and SD metrics CSV during capture. This mode is intended for
@@ -48,6 +49,17 @@
  */
 #define SDACS_ENABLE_SD_STORAGE             0
 #define SDACS_CAPTURE_MQTT_ONLY_WHEN_NO_SD  1
+/*
+ * MQTT feature JSON is larger because of mic diagnostics and storage/audio
+ * status fields. Keep these stacks large enough for MQTT client calls and JSON
+ * formatting; they can be reduced later after stack high-water marks are
+ * measured on hardware.
+ */
+#define SDACS_MQTT_PUBLISH_TASK_STACK_SIZE  12288
+#define SDACS_MQTT_PUBLISH_TASK_PRIORITY    5
+#define SDACS_MQTT_PUBLISH_TASK_CORE        0
+#define SDACS_MQTT_FEATURE_JSON_MAX_LEN     8192
+#define SDACS_MQTT_STATUS_JSON_MAX_LEN      2048
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11
 #define SDACS_I2S_WS_GPIO                GPIO_NUM_13
@@ -57,13 +69,21 @@
 #define SDACS_MIC_VALID_BITS             24
 #define SDACS_MIC_I2S_SLOT_BITS          32
 #define SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL (-26.0f)
+#define SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS 1
 /*
- * ICS-43432 is a mono mic but should be clocked with stereo I2S frame timing.
- * If the LR pin selects left, keep SDACS_I2S_USE_RIGHT_SLOT at 0. If LR selects
- * right, set SDACS_I2S_USE_RIGHT_SLOT to 1 and rebuild.
+ * ICS-43432 is a mono microphone but should be clocked using stereo I2S frame
+ * timing. This branch locks the known-good PCB wiring to the left slot.
  */
-#define SDACS_I2S_SLOT_MODE_STEREO       1
+#define SDACS_I2S_SLOT_MODE_STEREO_FRAME 1
+/* 0 = left slot, 1 = right slot */
 #define SDACS_I2S_USE_RIGHT_SLOT         0
+#if SDACS_I2S_USE_RIGHT_SLOT
+#define SDACS_I2S_SELECTED_SLOT_LABEL    "right"
+#define SDACS_I2S_SLOT_MASK_LABEL        "right"
+#else
+#define SDACS_I2S_SELECTED_SLOT_LABEL    "left"
+#define SDACS_I2S_SLOT_MASK_LABEL        "left"
+#endif
 
 #define SDACS_LED_BATT_1_GPIO            GPIO_NUM_14
 #define SDACS_LED_BATT_2_GPIO            GPIO_NUM_15
@@ -85,11 +105,15 @@
 #define SDACS_CAL_OFFSET_DB              120.0f
 #define SDACS_I2S_READ_TIMEOUT_MS        100
 #define SDACS_WAV_CHUNK_SIZE             1024
+#define SDACS_I2S_PREFLIGHT_ENABLED      1
+#define SDACS_I2S_PREFLIGHT_MS           1000
+#define SDACS_CAPTURE_MIN_EFFECTIVE_SR_RATIO 0.90f
+#define SDACS_I2S_MAX_TIMEOUTS_PER_WINDOW 10
 
 #define SDACS_VALID_UNIX_TIME_EPOCH      1700000000
 #define SDACS_WIFI_TIME_SYNC_WAIT_MS     15000
 #define SDACS_HEARTBEAT_INTERVAL_MS      15000
-#define SDACS_HEARTBEAT_TASK_STACK_SIZE  4096
+#define SDACS_HEARTBEAT_TASK_STACK_SIZE  6144
 #define SDACS_HEARTBEAT_TASK_PRIORITY    4
 #define SDACS_CAPTURE_TASK_STACK_SIZE    8192
 #define SDACS_CAPTURE_TASK_PRIORITY      5
@@ -115,4 +139,5 @@
 #define SDACS_PROVISION_ALWAYS_SYNC_MQTT SDACS_SECRET_ALWAYS_SYNC_MQTT
 
 #define SDACS_BLE_LOCATOR_ENABLED        1
+#define SDACS_BOOT_DISABLE_BLE_LOCATOR   0
 #define SDACS_BLE_LOCATOR_DURATION_MS    15000
