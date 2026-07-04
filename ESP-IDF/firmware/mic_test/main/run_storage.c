@@ -37,6 +37,11 @@ typedef struct __attribute__((packed)) {
 } wav_header_t;
 
 static const char *TAG = "run_storage";
+static const char *METRICS_CSV_HEADER =
+    "timestamp_iso,timestamp_us,node_id,fw_version,capture_state,record_seconds,"
+    "seq,n,rms,dbfs,db_spl,peak_db_spl,cal_offset_db,f_peak_hz,"
+    "fft_low_ratio,fft_mid_ratio,fft_high_ratio,fft_total_energy,p2p_raw,zeros,"
+    "temp_c,rh_percent\n";
 
 static void refresh_path_timestamp(const char *path, time_t now)
 {
@@ -173,7 +178,6 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     char ts[32];
     time_t now;
     bool dir_created = false;
-    static const char *header = "timestamp,node_id,LAeq_dB,peak_dB,dbfs,rms,temp_C,humidity,fft_peak_Hz,fft_low_ratio,fft_mid_ratio,fft_high_ratio,fft_total_energy\n";
 
     if (!rs || !node_id) {
         return ESP_ERR_INVALID_ARG;
@@ -227,7 +231,7 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     if (!csv) {
         return ESP_FAIL;
     }
-    fputs(header, csv);
+    fputs(METRICS_CSV_HEADER, csv);
     fclose(csv);
 
     FILE *cal_txt = fopen(rs->cal_offset_path, "w");
@@ -271,11 +275,31 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
         return false;
     }
 
-    fprintf(f, "%s,%s,%.2f,%.2f,%.2f,%.6f,%.2f,%.2f,%.1f,%.6f,%.6f,%.6f,%.6e\n",
-            rec->timestamp, rec->node_id, rec->laeq_db, rec->peak_db,
-            rec->dbfs, rec->rms, rec->temp_c, rec->humidity, rec->fft_peak_hz,
-            rec->fft_low_ratio, rec->fft_mid_ratio, rec->fft_high_ratio,
-            rec->fft_total_energy);
+    fprintf(f,
+            "%s,%" PRIu64 ",%s,%s,%s,%u,%u,%u,%.6f,%.2f,%.2f,%.2f,%.2f,%.1f,"
+            "%.6f,%.6f,%.6f,%.6e,%" PRId32 ",%u,%.2f,%.2f\n",
+            rec->timestamp,
+            (uint64_t)rec->timestamp_us,
+            rec->node_id,
+            rec->fw_version,
+            rec->capture_state,
+            (unsigned)rec->record_seconds,
+            (unsigned)rec->seq,
+            (unsigned)rec->n,
+            rec->rms,
+            rec->dbfs,
+            rec->db_spl,
+            rec->peak_db_spl,
+            rec->cal_offset_db,
+            rec->fft_peak_hz,
+            rec->fft_low_ratio,
+            rec->fft_mid_ratio,
+            rec->fft_high_ratio,
+            rec->fft_total_energy,
+            rec->p2p_raw,
+            (unsigned)rec->zeros,
+            rec->temp_c,
+            rec->rh_percent);
     fclose(f);
 
     ESP_LOGI(TAG, "SD metrics row: low=%.6f mid=%.6f high=%.6f total=%.6e",

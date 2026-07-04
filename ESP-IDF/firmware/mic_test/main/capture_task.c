@@ -37,7 +37,7 @@ static void capture_publish_status(capture_task_state_t *state,
                                    sdacs_mode_t mode,
                                    const char *message)
 {
-    char payload[384];
+    char payload[448];
     int len = 0;
 
     if (!state || state->status_topic[0] == '\0') {
@@ -56,6 +56,7 @@ static void capture_publish_status(capture_task_state_t *state,
         "\"state\":\"%s\","
         "\"delay_ms\":%u,"
         "\"record_seconds\":%u,"
+        "\"cal_offset_db\":%.2f,"
         "\"message\":\"%s\""
         "}",
         state->node_id,
@@ -65,6 +66,7 @@ static void capture_publish_status(capture_task_state_t *state,
         device_state_to_str(mode),
         (unsigned)state->ctx.delay_ms,
         (unsigned)state->ctx.record_seconds,
+        (double)state->ctx.cal_offset_db,
         message ? message : ""
     );
 
@@ -248,6 +250,8 @@ static void capture_task_run(void *arg)
                 temp_humidity_reading_t th = {0};
                 float temp_c = NAN;
                 float humidity = NAN;
+                uint32_t seq = ++feature_seq;
+                const char *capture_state = device_state_to_str(device_state_get());
                 (void)audio_input_get_last_debug(&i2s_dbg);
                 if (temp_humidity_get_latest(&th)) {
                     temp_c = th.temp_c;
@@ -261,13 +265,23 @@ static void capture_task_run(void *arg)
 
                 metrics_record_t record = {0};
                 time_sync_get_iso8601(record.timestamp, sizeof(record.timestamp));
+                record.timestamp_us = (uint64_t)now_us;
                 strncpy(record.node_id, state->ctx.node_id, sizeof(record.node_id) - 1);
-                record.laeq_db = metrics.laeq_db;
-                record.peak_db = metrics.peak_db;
+                strncpy(record.fw_version, SDACS_FW_VERSION, sizeof(record.fw_version) - 1);
+                strncpy(record.capture_state, capture_state, sizeof(record.capture_state) - 1);
+                record.record_seconds = state->ctx.record_seconds;
+                record.seq = seq;
+                record.n = metrics.sample_count;
+                record.p2p_raw = metrics.p2p_raw;
+                record.zeros = metrics.zeros;
                 record.dbfs = metrics.dbfs;
+                // SPL estimates are only as accurate as the active calibration offset.
+                record.db_spl = metrics.laeq_db;
+                record.peak_db_spl = metrics.peak_db;
+                record.cal_offset_db = state->ctx.cal_offset_db;
                 record.rms = metrics.rms_norm;
                 record.temp_c = temp_c;
-                record.humidity = humidity;
+                record.rh_percent = humidity;
                 record.fft_peak_hz = metrics.fft_peak_hz;
                 record.fft_low_ratio = metrics.fft_low_ratio;
                 record.fft_mid_ratio = metrics.fft_mid_ratio;
@@ -276,11 +290,16 @@ static void capture_task_run(void *arg)
                 (void)run_storage_append_metrics(state->ctx.storage, &record);
 
                 sdacs_features_t features = {
-                    .seq = ++feature_seq,
+                    .seq = seq,
                     .t_us = (uint64_t)now_us,
+                    .timestamp_us = (uint64_t)now_us,
+                    .record_seconds = state->ctx.record_seconds,
                     .rms = metrics.rms_norm,
                     .dbfs = metrics.dbfs,
+                    // SPL estimates are only as accurate as the active calibration offset.
                     .db_spl = metrics.laeq_db,
+                    .peak_db_spl = metrics.peak_db,
+                    .cal_offset_db = state->ctx.cal_offset_db,
                     .f_peak_hz = metrics.fft_peak_hz,
                     .fft_low_ratio = metrics.fft_low_ratio,
                     .fft_mid_ratio = metrics.fft_mid_ratio,
@@ -299,12 +318,18 @@ static void capture_task_run(void *arg)
                 };
                 strncpy(features.node_id, state->ctx.node_id, sizeof(features.node_id) - 1);
                 features.node_id[sizeof(features.node_id) - 1] = '\0';
+                strncpy(features.capture_state, capture_state, sizeof(features.capture_state) - 1);
+                features.capture_state[sizeof(features.capture_state) - 1] = '\0';
                 if (!wifi_mqtt_try_send(&features)) {
                     ESP_LOGW(TAG, "features queue full; dropped seq=%u", (unsigned)features.seq);
                 }
 
                 ESP_LOGI(TAG,
-                         "Audio feature debug: raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f f_peak_hz=%.1f low_ratio=%.4f mid_ratio=%.4f high_ratio=%.4f fft_total_energy=%.6e sample_count=%u",
+                         "Audio feature debug: timestamp_us=%" PRIu64 " capture_state=%s record_seconds=%u cal_offset_db=%.2f raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f peak_db_spl=%.2f f_peak_hz=%.1f low_ratio=%.4f mid_ratio=%.4f high_ratio=%.4f fft_total_energy=%.6e sample_count=%u",
+                         (uint64_t)now_us,
+                         capture_state,
+                         (unsigned)state->ctx.record_seconds,
+                         (double)state->ctx.cal_offset_db,
                          i2s_dbg.raw0,
                          i2s_dbg.sample0,
                          i2s_dbg.min_sample,
@@ -314,6 +339,7 @@ static void capture_task_run(void *arg)
                          (double)metrics.rms_norm,
                          (double)metrics.dbfs,
                          (double)metrics.laeq_db,
+                         (double)metrics.peak_db,
                          (double)metrics.fft_peak_hz,
                          (double)metrics.fft_low_ratio,
                          (double)metrics.fft_mid_ratio,

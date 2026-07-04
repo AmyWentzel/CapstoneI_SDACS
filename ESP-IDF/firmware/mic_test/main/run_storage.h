@@ -9,13 +9,22 @@
 
 typedef struct {
     char timestamp[32];
+    uint64_t timestamp_us;
     char node_id[32];
-    float laeq_db;
-    float peak_db;
+    char fw_version[32];
+    char capture_state[24];
+    uint32_t record_seconds;
+    uint32_t seq;
+    uint32_t n;
+    int32_t p2p_raw;
+    uint32_t zeros;
     float dbfs;
+    float db_spl;
+    float peak_db_spl;
+    float cal_offset_db;
     float rms;
     float temp_c;
-    float humidity;
+    float rh_percent;
     float fft_peak_hz;
     float fft_low_ratio;
     float fft_mid_ratio;

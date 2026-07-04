@@ -6,6 +6,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "sdacs_config.h"
+
 #define CFG_NS "sdacs_cfg"
 
 #define KEY_WIFI_SSID  "wifi_ssid"
@@ -22,7 +24,7 @@
 #define DEFAULT_MQTT_TOPIC ""
 #define DEFAULT_NODE_ID    "node01"
 #define DEFAULT_SAMPLE_HZ  48000U
-#define DEFAULT_CAL_MDB    94000
+#define DEFAULT_CAL_MDB    ((int32_t)(SDACS_CAL_OFFSET_DB * 1000.0f))
 
 static bool s_loaded = false;
 static char s_wifi_ssid[CONFIG_STORE_MAX_WIFI_SSID_LEN + 1];

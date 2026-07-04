@@ -396,13 +396,18 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"node\":\"%s\","
           "\"record_type\":\"features\","
           "\"timestamp\":%" PRIu64 ","
+          "\"timestamp_us\":%" PRIu64 ","
           "\"fw_version\":\"%s\","
           "\"seq\":%u,"
           "\"t_us\":%" PRIu64 ","
+          "\"capture_state\":\"%s\","
+          "\"record_seconds\":%u,"
           "\"n\":%u,"
           "\"rms\":%.6f,"
           "\"dbfs\":%.2f,"
           "\"db_spl\":%.2f,"
+          "\"peak_db_spl\":%.2f,"
+          "\"cal_offset_db\":%.2f,"
           "\"fft_peak_Hz\":%.1f,"
           "\"f_peak_hz\":%.1f,"
           "\"fft_low_ratio\":%.6f,"
@@ -422,13 +427,18 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->node_id,
         f->node_id,
         (uint64_t)f->t_us,
+        (uint64_t)f->timestamp_us,
         SDACS_FW_VERSION,
         (unsigned)f->seq,
         (uint64_t)f->t_us,
+        f->capture_state,
+        (unsigned)f->record_seconds,
         (unsigned)f->n,
         f->rms,
         f->dbfs,
         f->db_spl,
+        f->peak_db_spl,
+        f->cal_offset_db,
         f->f_peak_hz,
         f->f_peak_hz,
         f->fft_low_ratio,
@@ -467,7 +477,7 @@ static void mqtt_publish_task(void *arg)
     ESP_ERROR_CHECK(mqtt_start_client(s_cfg.broker_uri));
 
     sdacs_features_t f;
-    char payload[768];
+    char payload[1024];
 
     while (1) {
         if (xQueueReceive(s_feat_q, &f, portMAX_DELAY) == pdTRUE) {

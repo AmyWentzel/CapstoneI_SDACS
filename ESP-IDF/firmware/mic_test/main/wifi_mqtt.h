@@ -8,9 +8,14 @@ typedef struct {
     char node_id[17];        // "node01"
     uint32_t seq;            // incrementing window counter
     uint64_t t_us;           // timestamp (esp_timer_get_time)
+    uint64_t timestamp_us;   // clearer duplicate of t_us for new consumers
+    char capture_state[24];
+    uint32_t record_seconds;
     float rms;               // normalized RMS (~0..1)
     float dbfs;              // 20*log10(rms)
-    float db_spl;            // dbfs + calibration offset
+    float db_spl;            // depends on the active calibration offset
+    float peak_db_spl;       // depends on the active calibration offset
+    float cal_offset_db;
     float f_peak_hz;          // FFT peak frequency estimate
     float fft_low_ratio;
     float fft_mid_ratio;
