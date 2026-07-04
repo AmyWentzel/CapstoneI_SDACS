@@ -88,7 +88,12 @@ void app_main(void)
 
     time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
 
-    ESP_ERROR_CHECK(run_storage_init(&s_storage));
+    esp_err_t storage_err = run_storage_init(&s_storage);
+    if (storage_err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "SD storage unavailable: %s. Node will stay online, but capture commands will be rejected.",
+                 esp_err_to_name(storage_err));
+    }
     ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
     ESP_ERROR_CHECK(battery_leds_init());
 

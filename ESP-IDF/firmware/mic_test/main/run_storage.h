@@ -34,6 +34,7 @@ typedef struct {
 
 typedef struct {
     sdmmc_card_t *card;
+    bool initialized;
     char run_dir[160];
     char raw_path[256];
     char wav_path[256];
@@ -42,6 +43,7 @@ typedef struct {
 } run_storage_t;
 
 esp_err_t run_storage_init(run_storage_t *rs);
+bool run_storage_is_ready(const run_storage_t *rs);
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id);
 bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t count);
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec);

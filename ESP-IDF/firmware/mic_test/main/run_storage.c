@@ -168,9 +168,15 @@ esp_err_t run_storage_init(run_storage_t *rs)
         return ret;
     }
 
+    rs->initialized = true;
     ESP_LOGI(TAG, "SD card mounted at %s", SDACS_SD_MOUNT_POINT);
     sdmmc_card_print_info(stdout, rs->card);
     return ESP_OK;
+}
+
+bool run_storage_is_ready(const run_storage_t *rs)
+{
+    return rs && rs->initialized && rs->card;
 }
 
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
@@ -179,7 +185,7 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     time_t now;
     bool dir_created = false;
 
-    if (!rs || !node_id) {
+    if (!run_storage_is_ready(rs) || !node_id) {
         return ESP_ERR_INVALID_ARG;
     }
 

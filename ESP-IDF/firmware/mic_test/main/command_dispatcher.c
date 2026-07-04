@@ -197,6 +197,23 @@ static bool json_copy_u32(const cJSON *obj, const char *key, uint32_t *out, bool
     return true;
 }
 
+static bool ensure_storage_ready(void)
+{
+    if (run_storage_is_ready(s_storage)) {
+        return true;
+    }
+
+    ESP_LOGW(TAG, "SD storage unavailable; retrying mount before capture");
+    esp_err_t err = run_storage_init(s_storage);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SD storage retry failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "SD storage mounted after retry");
+    return true;
+}
+
 static void handle_start_capture(const cJSON *root, const char *request_id)
 {
     uint32_t delay_ms = 0;
@@ -263,10 +280,17 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
         return;
     }
 
-    if (!s_storage || s_base_topic[0] == '\0') {
+    if (s_base_topic[0] == '\0') {
         ESP_LOGW(TAG, "start_capture rejected: not ready");
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
                                "capture command rejected: not ready");
+        return;
+    }
+
+    if (!ensure_storage_ready()) {
+        ESP_LOGW(TAG, "start_capture rejected: SD storage unavailable");
+        publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               "capture command rejected: storage unavailable");
         return;
     }
 
