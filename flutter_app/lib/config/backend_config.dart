@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 class BackendConfig {
@@ -9,7 +8,7 @@ class BackendConfig {
 
   static const String defaultBackendIp = String.fromEnvironment(
     'SDACS_BACKEND_IP',
-    defaultValue: '192.168.5.61',
+    defaultValue: '192.168.5.40',
   );
   static const int defaultBackendPort = int.fromEnvironment(
     'SDACS_BACKEND_PORT',
