@@ -57,6 +57,9 @@ static void capture_publish_status(capture_task_state_t *state,
         "\"delay_ms\":%u,"
         "\"record_seconds\":%u,"
         "\"cal_offset_db\":%.2f,"
+        "\"storage_mode\":\"%s\","
+        "\"sd_enabled\":%s,"
+        "\"sd_writes_enabled\":%s,"
         "\"message\":\"%s\""
         "}",
         state->node_id,
@@ -67,6 +70,9 @@ static void capture_publish_status(capture_task_state_t *state,
         (unsigned)state->ctx.delay_ms,
         (unsigned)state->ctx.record_seconds,
         (double)state->ctx.cal_offset_db,
+        state->ctx.storage_mode,
+        state->ctx.sd_enabled ? "true" : "false",
+        state->ctx.sd_writes_enabled ? "true" : "false",
         message ? message : ""
     );
 
@@ -95,14 +101,27 @@ static void capture_set_state(capture_task_state_t *state,
 static void capture_publish_complete(capture_task_state_t *state,
                                      size_t raw_bytes,
                                      size_t wav_bytes,
-                                     size_t csv_bytes)
+                                     size_t csv_bytes,
+                                     uint32_t total_samples,
+                                     int64_t elapsed_ms,
+                                     float effective_sample_rate_hz,
+                                     const char *message)
 {
-    char payload[1024];
+    char payload[1400];
     char timestamp[32];
+    const char *raw_path = "";
+    const char *wav_path = "";
+    const char *csv_path = "";
     int len = 0;
 
     if (!state || state->complete_topic[0] == '\0') {
         return;
+    }
+
+    if (state->ctx.sd_writes_enabled && state->ctx.storage) {
+        raw_path = state->ctx.storage->raw_path;
+        wav_path = state->ctx.storage->wav_path;
+        csv_path = state->ctx.storage->csv_path;
     }
 
     time_sync_get_iso8601(timestamp, sizeof(timestamp));
@@ -115,26 +134,41 @@ static void capture_publish_complete(capture_task_state_t *state,
         "\"fw_version\":\"%s\","
         "\"request_id\":\"%s\","
         "\"state\":\"complete\","
+        "\"status\":\"complete\","
+        "\"storage_mode\":\"%s\","
+        "\"sd_enabled\":%s,"
+        "\"sd_writes_enabled\":%s,"
         "\"record_seconds\":%u,"
+        "\"total_samples\":%u,"
+        "\"elapsed_ms\":%" PRIi64 ","
+        "\"effective_sample_rate_hz\":%.2f,"
         "\"raw_path\":\"%s\","
         "\"wav_path\":\"%s\","
         "\"metrics_path\":\"%s\","
         "\"raw_bytes\":%u,"
         "\"wav_bytes\":%u,"
         "\"metrics_bytes\":%u,"
-        "\"timestamp\":\"%s\""
+        "\"timestamp\":\"%s\","
+        "\"message\":\"%s\""
         "}",
         state->node_id,
         SDACS_FW_VERSION,
         state->request_id,
+        state->ctx.storage_mode,
+        state->ctx.sd_enabled ? "true" : "false",
+        state->ctx.sd_writes_enabled ? "true" : "false",
         (unsigned)state->ctx.record_seconds,
-        state->ctx.storage->raw_path,
-        state->ctx.storage->wav_path,
-        state->ctx.storage->csv_path,
+        (unsigned)total_samples,
+        (int64_t)elapsed_ms,
+        (double)effective_sample_rate_hz,
+        raw_path,
+        wav_path,
+        csv_path,
         (unsigned)raw_bytes,
         (unsigned)wav_bytes,
         (unsigned)csv_bytes,
-        timestamp
+        timestamp,
+        message ? message : ""
     );
 
     if (len <= 0 || len >= (int)sizeof(payload)) {
@@ -158,13 +192,16 @@ static void capture_task_run(void *arg)
     int64_t end_us = 0;
     int64_t next_metrics_us = 0;
     uint32_t samples_written = 0;
+    uint32_t total_samples = 0;
     uint32_t feature_seq = 0;
+    uint32_t audio_read_errors = 0;
+    uint32_t audio_read_timeouts = 0;
 
     static int32_t read_buf[SDACS_I2S_FRAMES_PER_READ];
     static int32_t chunk[SDACS_AUDIO_CHUNK_SAMPLES];
     size_t chunk_fill = 0;
     bool fatal_error = false;
-    char verify_reason[96];
+    char verify_reason[96] = {0};
     size_t raw_bytes = 0;
     size_t wav_bytes = 0;
     size_t csv_bytes = 0;
@@ -175,9 +212,9 @@ static void capture_task_run(void *arg)
     ESP_LOGI(TAG, "Waiting for WiFi+MQTT before delayed capture...");
     esp_err_t werr = wifi_mqtt_wait_connected(SDACS_WIFI_TIME_SYNC_WAIT_MS);
     if (werr != ESP_OK) {
-        ESP_LOGW(TAG, "MQTT not ready (%s). Continuing with local SD capture.", esp_err_to_name(werr));
+        ESP_LOGW(TAG, "MQTT not ready (%s). Capture will still drain I2S.", esp_err_to_name(werr));
     } else {
-        ESP_LOGI(TAG, "WiFi+MQTT ready. Starting delayed SD-first capture.");
+        ESP_LOGI(TAG, "WiFi+MQTT ready. Starting delayed capture.");
     }
 
     ESP_LOGI(TAG, "Delay countdown: %u ms", (unsigned)state->ctx.delay_ms);
@@ -185,15 +222,27 @@ static void capture_task_run(void *arg)
         vTaskDelay(pdMS_TO_TICKS(state->ctx.delay_ms));
     }
 
-    err = run_storage_create_session(state->ctx.storage, state->node_id);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create SD capture session: %s", esp_err_to_name(err));
-        capture_set_state(state, SDACS_MODE_ERROR, "failed to create SD capture session");
-        goto done;
+    ESP_LOGI(TAG, "Capture start request=%s record_seconds=%u storage_mode=%s sd_writes=%s",
+             state->request_id,
+             (unsigned)state->ctx.record_seconds,
+             state->ctx.storage_mode,
+             state->ctx.sd_writes_enabled ? "true" : "false");
+
+    if (state->ctx.sd_writes_enabled) {
+        err = run_storage_create_session(state->ctx.storage, state->node_id);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create SD capture session: %s", esp_err_to_name(err));
+            capture_set_state(state, SDACS_MODE_ERROR, "failed to create SD capture session");
+            goto done;
+        }
+
+        ESP_LOGI(TAG, "SD write started: %s", state->ctx.storage->run_dir);
+    } else {
+        ESP_LOGI(TAG, "SD writes disabled; running MQTT/features-only capture");
     }
 
-    ESP_LOGI(TAG, "SD write started: %s", state->ctx.storage->run_dir);
-    capture_set_state(state, SDACS_MODE_CAPTURING, "capture started");
+    capture_set_state(state, SDACS_MODE_CAPTURING,
+                      state->ctx.sd_writes_enabled ? "capture started" : "capture started: MQTT/features-only mode");
     (void)temp_humidity_publish_latest_once("capture_start");
 #if SDACS_FUEL_GAUGE_ENABLED
     (void)fuel_gauge_publish_latest_once("capture_start");
@@ -211,9 +260,11 @@ static void capture_task_run(void *arg)
             SDACS_I2S_READ_TIMEOUT_MS
         );
         if (err == ESP_ERR_TIMEOUT) {
+            audio_read_timeouts++;
             continue;
         }
         if (err != ESP_OK) {
+            audio_read_errors++;
             ESP_LOGE(TAG, "I2S read failed: %s", esp_err_to_name(err));
             fatal_error = true;
             break;
@@ -224,17 +275,19 @@ static void capture_task_run(void *arg)
 
         fft_metrics_push_samples(read_buf, samples_read);
         fft_metrics_accumulate_block(read_buf, samples_read);
+        total_samples += (uint32_t)samples_read;
 
         for (size_t i = 0; i < samples_read; ++i) {
             chunk[chunk_fill++] = read_buf[i];
             if (chunk_fill >= SDACS_AUDIO_CHUNK_SAMPLES) {
-                if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
-                    ESP_LOGW(TAG, "Failed SD append for raw chunk");
-                    fatal_error = true;
-                    break;
+                if (state->ctx.sd_writes_enabled) {
+                    if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
+                        ESP_LOGW(TAG, "Failed SD append for raw chunk");
+                        fatal_error = true;
+                        break;
+                    }
+                    samples_written += (uint32_t)chunk_fill;
                 }
-
-                samples_written += (uint32_t)chunk_fill;
                 chunk_fill = 0;
             }
         }
@@ -287,7 +340,9 @@ static void capture_task_run(void *arg)
                 record.fft_mid_ratio = metrics.fft_mid_ratio;
                 record.fft_high_ratio = metrics.fft_high_ratio;
                 record.fft_total_energy = metrics.fft_total_energy;
-                (void)run_storage_append_metrics(state->ctx.storage, &record);
+                if (state->ctx.sd_writes_enabled) {
+                    (void)run_storage_append_metrics(state->ctx.storage, &record);
+                }
 
                 sdacs_features_t features = {
                     .seq = seq,
@@ -314,15 +369,46 @@ static void capture_task_run(void *arg)
                     .batt_voltage_v = batt_valid ? batt.voltage_v : NAN,
                     .batt_charge_rate_pct_per_hr = batt_valid ? batt.charge_rate_percent_per_hr : NAN,
                     .batt_valid = batt_valid,
-                    .err = (th.valid ? th.error_count : 0U) + (batt_valid ? batt.error_count : 0U),
+                    .sd_enabled = state->ctx.sd_enabled,
+                    .sd_writes_enabled = state->ctx.sd_writes_enabled,
+                    .storage_mounted = state->ctx.sd_writes_enabled ? run_storage_is_mounted(state->ctx.storage) : false,
+                    .audio_read_errors = audio_read_errors,
+                    .audio_read_timeouts = audio_read_timeouts,
+                    .err = audio_read_errors,
                 };
                 strncpy(features.node_id, state->ctx.node_id, sizeof(features.node_id) - 1);
                 features.node_id[sizeof(features.node_id) - 1] = '\0';
                 strncpy(features.capture_state, capture_state, sizeof(features.capture_state) - 1);
                 features.capture_state[sizeof(features.capture_state) - 1] = '\0';
+                strncpy(features.storage_mode, state->ctx.storage_mode, sizeof(features.storage_mode) - 1);
+                features.storage_mode[sizeof(features.storage_mode) - 1] = '\0';
+                strncpy(features.storage_error,
+                        state->ctx.sd_writes_enabled ? run_storage_last_error_name(state->ctx.storage) : "",
+                        sizeof(features.storage_error) - 1);
+                features.storage_error[sizeof(features.storage_error) - 1] = '\0';
+                strncpy(features.storage_error_detail,
+                        state->ctx.sd_writes_enabled ? run_storage_last_error_detail(state->ctx.storage) : "",
+                        sizeof(features.storage_error_detail) - 1);
+                features.storage_error_detail[sizeof(features.storage_error_detail) - 1] = '\0';
+                strncpy(features.audio_error,
+                        audio_read_errors ? "i2s_read_failed" : "",
+                        sizeof(features.audio_error) - 1);
+                features.audio_error[sizeof(features.audio_error) - 1] = '\0';
                 if (!wifi_mqtt_try_send(&features)) {
                     ESP_LOGW(TAG, "features queue full; dropped seq=%u", (unsigned)features.seq);
                 }
+
+                ESP_LOGI(TAG,
+                         "Feature row request=%s n=%u expected=%u dbfs=%.2f p2p_raw=%" PRId32 " zeros=%u f_peak=%.1f storage_mode=%s err=%u",
+                         state->request_id,
+                         (unsigned)metrics.sample_count,
+                         (unsigned)SDACS_SAMPLE_RATE_HZ,
+                         (double)metrics.dbfs,
+                         metrics.p2p_raw,
+                         (unsigned)metrics.zeros,
+                         (double)metrics.fft_peak_hz,
+                         state->ctx.storage_mode,
+                         (unsigned)features.err);
 
                 ESP_LOGI(TAG,
                          "Audio feature debug: timestamp_us=%" PRIu64 " capture_state=%s record_seconds=%u cal_offset_db=%.2f raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f peak_db_spl=%.2f f_peak_hz=%.1f low_ratio=%.4f mid_ratio=%.4f high_ratio=%.4f fft_total_energy=%.6e sample_count=%u",
@@ -355,7 +441,7 @@ static void capture_task_run(void *arg)
         }
     }
 
-    if (chunk_fill > 0) {
+    if (chunk_fill > 0 && state->ctx.sd_writes_enabled) {
         if (!run_storage_append_raw(state->ctx.storage, chunk, chunk_fill)) {
             ESP_LOGW(TAG, "Failed final SD append");
             fatal_error = true;
@@ -381,33 +467,56 @@ static void capture_task_run(void *arg)
 
     capture_set_state(state, SDACS_MODE_FINALIZING, "capture finalizing");
 
-    err = run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "WAV conversion failed: %s", esp_err_to_name(err));
-        fatal_error = true;
-    } else {
-        ESP_LOGI(TAG, "WAV conversion complete");
-    }
+    if (state->ctx.sd_writes_enabled) {
+        err = run_storage_convert_raw_to_wav(state->ctx.storage, SDACS_SAMPLE_RATE_HZ);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "WAV conversion failed: %s", esp_err_to_name(err));
+            fatal_error = true;
+        } else {
+            ESP_LOGI(TAG, "WAV conversion complete");
+        }
 
-    run_storage_refresh_timestamps(state->ctx.storage);
-    ESP_LOGI(TAG, "SD finalization complete");
+        run_storage_refresh_timestamps(state->ctx.storage);
+        ESP_LOGI(TAG, "SD finalization complete");
+    } else {
+        raw_bytes = 0;
+        wav_bytes = 0;
+        csv_bytes = 0;
+        ESP_LOGI(TAG, "Skipping SD finalization in MQTT/features-only mode");
+    }
 
     ESP_LOGI(TAG, "Recording complete: %.2f s, chunk_msgs=%u",
              (float)(esp_timer_get_time() - start_us) / 1000000.0f,
              (unsigned)samples_written);
 
-    run_storage_verify(state->ctx.storage);
-    err = run_storage_verify_capture(
-        state->ctx.storage,
-        verify_reason,
-        sizeof(verify_reason),
-        &raw_bytes,
-        &wav_bytes,
-        &csv_bytes
-    );
-    if (err != ESP_OK) {
-        fatal_error = true;
+    if (state->ctx.sd_writes_enabled) {
+        run_storage_verify(state->ctx.storage);
+        err = run_storage_verify_capture(
+            state->ctx.storage,
+            verify_reason,
+            sizeof(verify_reason),
+            &raw_bytes,
+            &wav_bytes,
+            &csv_bytes
+        );
+        if (err != ESP_OK) {
+            fatal_error = true;
+        }
     }
+
+    int64_t elapsed_us = esp_timer_get_time() - start_us;
+    int64_t elapsed_ms = elapsed_us / 1000LL;
+    float effective_sample_rate_hz = elapsed_us > 0
+        ? ((float)total_samples * 1000000.0f) / (float)elapsed_us
+        : 0.0f;
+
+    ESP_LOGI(TAG,
+             "Capture complete request=%s storage_mode=%s total_samples=%u elapsed_ms=%" PRIi64 " effective_sr=%.2f",
+             state->request_id,
+             state->ctx.storage_mode,
+             (unsigned)total_samples,
+             (int64_t)elapsed_ms,
+             (double)effective_sample_rate_hz);
 
     if (fatal_error) {
         capture_set_state(state, SDACS_MODE_ERROR,
@@ -418,7 +527,15 @@ static void capture_task_run(void *arg)
 #if SDACS_FUEL_GAUGE_ENABLED
         (void)fuel_gauge_publish_latest_once("capture_complete");
 #endif
-        capture_publish_complete(state, raw_bytes, wav_bytes, csv_bytes);
+        capture_publish_complete(
+            state,
+            raw_bytes,
+            wav_bytes,
+            csv_bytes,
+            total_samples,
+            elapsed_ms,
+            effective_sample_rate_hz,
+            state->ctx.sd_writes_enabled ? "capture complete" : "capture complete: MQTT/features-only mode");
     }
 
 done:

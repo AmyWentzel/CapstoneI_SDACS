@@ -1,6 +1,7 @@
 #include "command_dispatcher.h"
 
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -113,10 +114,13 @@ static void publish_capture_status(const char *request_id,
                                    uint32_t delay_ms,
                                    uint32_t record_seconds,
                                    float cal_offset_db,
+                                   const char *storage_mode,
+                                   bool sd_enabled,
+                                   bool sd_writes_enabled,
                                    const char *message)
 {
     char topic[160];
-    char payload[448];
+    char payload[896];
 
     build_status_topic(topic, sizeof(topic));
     if (topic[0] == '\0') {
@@ -135,6 +139,9 @@ static void publish_capture_status(const char *request_id,
                  "\"delay_ms\":%u,"
                  "\"record_seconds\":%u,"
                  "\"cal_offset_db\":%.2f,"
+                 "\"storage_mode\":\"%s\","
+                 "\"sd_enabled\":%s,"
+                 "\"sd_writes_enabled\":%s,"
                  "\"message\":\"%s\""
                  "}",
                  s_node_id[0] ? s_node_id : SDACS_NODE_ID,
@@ -145,6 +152,9 @@ static void publish_capture_status(const char *request_id,
                  (unsigned)delay_ms,
                  (unsigned)record_seconds,
                  (double)cal_offset_db,
+                 storage_mode ? storage_mode : "",
+                 sd_enabled ? "true" : "false",
+                 sd_writes_enabled ? "true" : "false",
                  message ? message : "") >= (int)sizeof(payload)) {
         ESP_LOGW(TAG, "Capture status payload too long");
         return;
@@ -197,9 +207,10 @@ static bool json_copy_u32(const cJSON *obj, const char *key, uint32_t *out, bool
     return true;
 }
 
+#if SDACS_ENABLE_SD_STORAGE
 static bool ensure_storage_ready(void)
 {
-    if (run_storage_is_ready(s_storage)) {
+    if (run_storage_is_mounted(s_storage)) {
         return true;
     }
 
@@ -212,6 +223,99 @@ static bool ensure_storage_ready(void)
 
     ESP_LOGI(TAG, "SD storage mounted after retry");
     return true;
+}
+
+static void build_storage_reason(char *out, size_t out_sz, const char *prefix)
+{
+    if (!out || out_sz == 0) {
+        return;
+    }
+
+    snprintf(out,
+             out_sz,
+             "%s: %s %s",
+             prefix ? prefix : "SD storage not mounted",
+             run_storage_last_error_name(s_storage),
+             run_storage_last_error_detail(s_storage));
+}
+#endif
+
+static void publish_storage_status(const char *cmd,
+                                   const char *request_id,
+                                   const char *result,
+                                   const char *reason)
+{
+    char topic[160];
+    char payload[640];
+    bool mounted = run_storage_is_mounted(s_storage);
+    const char *last_error = run_storage_last_error_name(s_storage);
+    const char *detail = run_storage_last_error_detail(s_storage);
+    uint32_t attempts = s_storage ? s_storage->mount_attempts : 0U;
+
+    build_status_topic(topic, sizeof(topic));
+    if (topic[0] == '\0') {
+        return;
+    }
+
+    if (snprintf(payload,
+                 sizeof(payload),
+                 "{\"node_id\":\"%s\",\"record_type\":\"command_response\","
+                 "\"timestamp\":%" PRIi64 ",\"fw_version\":\"%s\","
+                 "\"mode\":\"%s\",\"cmd\":\"%s\",\"result\":\"%s\","
+                 "\"reason\":\"%s\",\"request_id\":\"%s\","
+                 "\"storage_mounted\":%s,"
+                 "\"storage_last_error\":\"%s\","
+                 "\"storage_error_detail\":\"%s\","
+                 "\"sd_mount_attempts\":%u}",
+                 s_node_id[0] ? s_node_id : SDACS_NODE_ID,
+                 (int64_t)esp_timer_get_time(),
+                 SDACS_FW_VERSION,
+                 device_state_to_str(device_state_get()),
+                 cmd ? cmd : "storage_status",
+                 result ? result : "",
+                 reason ? reason : "",
+                 request_id ? request_id : "",
+                 mounted ? "true" : "false",
+                 last_error ? last_error : "ESP_OK",
+                 detail ? detail : "",
+                 (unsigned)attempts) >= (int)sizeof(payload)) {
+        ESP_LOGW(TAG, "Storage status payload too long");
+        return;
+    }
+
+    esp_err_t err = wifi_mqtt_publish_status_json(topic, payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Storage status publish failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void handle_storage_status(const char *request_id)
+{
+    publish_storage_status("storage_status", request_id, "ok", "storage_status");
+}
+
+static void handle_storage_remount(const char *request_id)
+{
+#if !SDACS_ENABLE_SD_STORAGE
+    publish_storage_status("storage_remount", request_id, "rejected", "sd_disabled_by_build_config");
+    return;
+#endif
+    if (device_state_get() != SDACS_MODE_IDLE) {
+        publish_storage_status("storage_remount", request_id, "rejected", "busy");
+        return;
+    }
+
+    if (run_storage_is_mounted(s_storage)) {
+        publish_storage_status("storage_remount", request_id, "ok", "already_mounted");
+        return;
+    }
+
+    esp_err_t err = run_storage_init(s_storage);
+    if (err == ESP_OK) {
+        publish_storage_status("storage_remount", request_id, "ok", "mounted");
+    } else {
+        publish_storage_status("storage_remount", request_id, "rejected", esp_err_to_name(err));
+    }
 }
 
 static void handle_start_capture(const cJSON *root, const char *request_id)
@@ -236,22 +340,34 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
         .delay_ms = 0,
         .cal_offset_db = cal_offset_db,
         .record_seconds = SDACS_RECORD_SECONDS,
+#if SDACS_ENABLE_SD_STORAGE
+        .sd_enabled = true,
+        .sd_writes_enabled = true,
+        .storage_mode = "sd_raw_wav_csv",
+#else
+        .sd_enabled = false,
+        .sd_writes_enabled = false,
+        .storage_mode = "mqtt_only",
+#endif
     };
 
     if (!request_id || request_id[0] == '\0') {
         publish_capture_status("", SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "missing request_id");
         return;
     }
 
     if (!json_copy_u32(root, "delay_ms", &delay_ms, true)) {
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "missing or invalid delay_ms");
         return;
     }
 
     if (!json_copy_u32(root, "record_seconds", &record_seconds, true)) {
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "missing or invalid record_seconds");
         return;
     }
@@ -263,12 +379,14 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
 
     if (record_seconds == 0 || record_seconds > 3600) {
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "invalid record_seconds");
         return;
     }
 
     if (delay_ms > 3600000U) {
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "invalid delay_ms");
         return;
     }
@@ -276,6 +394,7 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
     if (!device_state_can_start_capture()) {
         ESP_LOGW(TAG, "start_capture rejected: busy");
         publish_capture_status(request_id, device_state_get(), delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "capture command rejected: busy");
         return;
     }
@@ -283,23 +402,36 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
     if (s_base_topic[0] == '\0') {
         ESP_LOGW(TAG, "start_capture rejected: not ready");
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "capture command rejected: not ready");
         return;
     }
 
+#if SDACS_ENABLE_SD_STORAGE
     if (!ensure_storage_ready()) {
+        char reason[192];
+        build_storage_reason(reason, sizeof(reason), "capture rejected: SD storage not mounted");
         ESP_LOGW(TAG, "start_capture rejected: SD storage unavailable");
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
-                               "capture command rejected: storage unavailable");
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
+                               reason);
         return;
     }
+#elif !SDACS_CAPTURE_MQTT_ONLY_WHEN_NO_SD
+    ESP_LOGW(TAG, "start_capture rejected: SD storage disabled and MQTT-only capture disabled");
+    publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                           ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
+                           "capture rejected: SD storage disabled by build config");
+    return;
+#endif
 
     ctx.delay_ms = delay_ms;
     ctx.record_seconds = record_seconds;
 
     device_state_set(SDACS_MODE_ARMED);
     publish_capture_status(request_id, SDACS_MODE_ARMED, delay_ms, record_seconds, cal_offset_db,
-                           "capture command accepted");
+                           ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
+                           ctx.sd_writes_enabled ? "capture command accepted" : "capture accepted: MQTT/features-only mode");
     (void)temp_humidity_publish_latest_once("capture_armed");
 #if SDACS_FUEL_GAUGE_ENABLED
     (void)fuel_gauge_publish_latest_once("capture_armed");
@@ -310,11 +442,14 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
         device_state_set(SDACS_MODE_IDLE);
         ESP_LOGE(TAG, "Failed to start capture: %s", esp_err_to_name(err));
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
+                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
                                "capture command rejected: start failed");
         return;
     }
 
-    ESP_LOGI(TAG, "start_capture accepted");
+    ESP_LOGI(TAG, "start_capture accepted storage_mode=%s sd_writes=%s",
+             ctx.storage_mode,
+             ctx.sd_writes_enabled ? "true" : "false");
 }
 
 static void handle_ota_update(const cJSON *root, const char *request_id)
@@ -481,6 +616,10 @@ void command_dispatcher_handle(const char *topic, const char *payload, int len)
         handle_ota_update(root, request_id);
     } else if (strcmp(cmd, "report_status") == 0) {
         handle_report_status(request_id);
+    } else if (strcmp(cmd, "storage_status") == 0) {
+        handle_storage_status(request_id);
+    } else if (strcmp(cmd, "storage_remount") == 0) {
+        handle_storage_remount(request_id);
     } else if (strcmp(cmd, "ble_advertise") == 0) {
         handle_ble_advertise(root, request_id);
     } else if (strcmp(cmd, "reboot") == 0) {

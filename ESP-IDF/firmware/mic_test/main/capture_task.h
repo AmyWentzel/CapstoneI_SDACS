@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -13,6 +14,9 @@ typedef struct {
     uint32_t delay_ms;
     float cal_offset_db;
     uint32_t record_seconds;
+    bool sd_enabled;
+    bool sd_writes_enabled;
+    char storage_mode[24];
 } capture_context_t;
 
 esp_err_t capture_task_start(const capture_context_t *ctx);

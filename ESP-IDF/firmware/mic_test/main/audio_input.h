@@ -13,6 +13,7 @@ typedef struct {
     int32_t max_sample;
     uint32_t zero_count;
     size_t bytes_read;
+    size_t raw_words_read;
     size_t samples_read;
 } audio_input_debug_t;
 

@@ -54,6 +54,7 @@ static bool s_heartbeat_task_started = false;
 static volatile bool s_ota_in_progress = false;
 static volatile bool s_ota_ready = true;
 static int64_t s_boot_time_us = 0;
+static run_storage_t *s_storage_status = NULL;
 
 // Keep queue small; we only publish ~1 msg/sec
 #define FEATURES_QUEUE_LEN  8
@@ -90,10 +91,14 @@ static int get_wifi_rssi_dbm(void)
 
 static esp_err_t publish_heartbeat_now(const char *status)
 {
-    char payload[512];
+    char payload[768];
     char batt_soc_buf[24] = "null";
     char batt_voltage_buf[24] = "null";
     char batt_rate_buf[24] = "null";
+    bool storage_mounted = run_storage_is_mounted(s_storage_status);
+    const char *storage_last_error = run_storage_last_error_name(s_storage_status);
+    const char *storage_error_detail = run_storage_last_error_detail(s_storage_status);
+    uint32_t sd_mount_attempts = s_storage_status ? s_storage_status->mount_attempts : 0U;
     uint64_t uptime_s = 0;
     int payload_len = 0;
     int msg_id = -1;
@@ -136,11 +141,15 @@ static esp_err_t publish_heartbeat_now(const char *status)
         "\"batt_soc_percent\":%s,"
         "\"batt_voltage_v\":%s,"
         "\"batt_charge_rate_pct_per_hr\":%s,"
-        "\"batt_sample_count\":%u,"
-        "\"batt_error_count\":%u,"
-        "\"batt_last_sample_time_us\":%" PRIi64 ","
-        "\"batt_valid\":%s"
-        "}",
+	        "\"batt_sample_count\":%u,"
+	        "\"batt_error_count\":%u,"
+	        "\"batt_last_sample_time_us\":%" PRIi64 ","
+	        "\"batt_valid\":%s,"
+	        "\"storage_mounted\":%s,"
+	        "\"storage_last_error\":\"%s\","
+	        "\"storage_error_detail\":\"%s\","
+	        "\"sd_mount_attempts\":%u"
+	        "}",
         s_node_id[0] ? s_node_id : sdacs_node_id(),
         (int64_t)esp_timer_get_time(),
         status ? status : "online",
@@ -156,11 +165,15 @@ static esp_err_t publish_heartbeat_now(const char *status)
         batt_soc_buf,
         batt_voltage_buf,
         batt_rate_buf,
-        (unsigned)batt.sample_count,
-        (unsigned)batt.error_count,
-        (int64_t)batt.last_sample_time_us,
-        batt_valid ? "true" : "false"
-    );
+	        (unsigned)batt.sample_count,
+	        (unsigned)batt.error_count,
+	        (int64_t)batt.last_sample_time_us,
+	        batt_valid ? "true" : "false",
+	        storage_mounted ? "true" : "false",
+	        storage_last_error ? storage_last_error : "ESP_OK",
+	        storage_error_detail ? storage_error_detail : "",
+	        (unsigned)sd_mount_attempts
+	    );
     if (payload_len <= 0 || payload_len >= (int)sizeof(payload)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -389,7 +402,6 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         (void)snprintf(batt_rate_buf, sizeof(batt_rate_buf), "%.2f", (double)f->batt_charge_rate_pct_per_hr);
     }
 
-    // err is the compact sum of temp/humidity and fuel gauge sample error counters.
     return snprintf(out, out_sz,
         "{"
           "\"node_id\":\"%s\","
@@ -402,6 +414,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"t_us\":%" PRIu64 ","
           "\"capture_state\":\"%s\","
           "\"record_seconds\":%u,"
+          "\"storage_mode\":\"%s\","
+          "\"sd_enabled\":%s,"
+          "\"sd_writes_enabled\":%s,"
+          "\"storage_mounted\":%s,"
           "\"n\":%u,"
           "\"rms\":%.6f,"
           "\"dbfs\":%.2f,"
@@ -422,6 +438,11 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"batt_voltage_v\":%s,"
           "\"batt_charge_rate_pct_per_hr\":%s,"
           "\"batt_valid\":%s,"
+          "\"storage_error\":\"%s\","
+          "\"storage_error_detail\":\"%s\","
+          "\"audio_error\":\"%s\","
+          "\"audio_read_errors\":%u,"
+          "\"audio_read_timeouts\":%u,"
           "\"err\":%u"
         "}",
         f->node_id,
@@ -433,6 +454,10 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         (uint64_t)f->t_us,
         f->capture_state,
         (unsigned)f->record_seconds,
+        f->storage_mode,
+        f->sd_enabled ? "true" : "false",
+        f->sd_writes_enabled ? "true" : "false",
+        f->storage_mounted ? "true" : "false",
         (unsigned)f->n,
         f->rms,
         f->dbfs,
@@ -453,6 +478,11 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         batt_voltage_buf,
         batt_rate_buf,
         batt_valid_str,
+        f->storage_error,
+        f->storage_error_detail,
+        f->audio_error,
+        (unsigned)f->audio_read_errors,
+        (unsigned)f->audio_read_timeouts,
         (unsigned)f->err
     );
 }
@@ -477,7 +507,7 @@ static void mqtt_publish_task(void *arg)
     ESP_ERROR_CHECK(mqtt_start_client(s_cfg.broker_uri));
 
     sdacs_features_t f;
-    char payload[1024];
+    char payload[1536];
 
     while (1) {
         if (xQueueReceive(s_feat_q, &f, portMAX_DELAY) == pdTRUE) {
@@ -709,6 +739,11 @@ esp_err_t wifi_mqtt_set_ota_state(bool ota_ready, bool ota_in_progress)
     s_ota_ready = ota_ready;
     s_ota_in_progress = ota_in_progress;
     return ESP_OK;
+}
+
+void wifi_mqtt_set_storage_status_provider(run_storage_t *storage)
+{
+    s_storage_status = storage;
 }
 
 bool wifi_mqtt_try_send(const sdacs_features_t *f)

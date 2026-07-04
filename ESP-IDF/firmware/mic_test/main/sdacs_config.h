@@ -1,6 +1,7 @@
 #pragma once
 
 #include "driver/gpio.h"
+#include "driver/spi_master.h"
 
 #if __has_include("sdacs_secrets.h")
 #include "sdacs_secrets.h"
@@ -32,7 +33,21 @@
 
 #define SDACS_NODE_ID                    SDACS_SECRET_NODE_ID
 #define SDACS_FW_VERSION                 "ota-enable-v2"
+#define SDACS_SD_SPI_HOST                SPI2_HOST
+#define SDACS_SD_SPI_MAX_FREQ_KHZ        5000
+#define SDACS_SD_MOUNT_RETRY_COUNT       5
+#define SDACS_SD_MOUNT_RETRY_DELAY_MS    750
 #define SDACS_SD_MOUNT_POINT             "/sdcard"
+#define SDACS_SD_FORMAT_IF_MOUNT_FAILED  0
+/*
+ * SDACS_ENABLE_SD_STORAGE = 0 disables SD mount, raw file writing, WAV
+ * conversion, and SD metrics CSV during capture. This mode is intended for
+ * MEMS mic/I2S validation; Node-RED/MQTT logging becomes the primary dataset
+ * path. Set SDACS_ENABLE_SD_STORAGE back to 1 later if local SD recording is
+ * needed.
+ */
+#define SDACS_ENABLE_SD_STORAGE             0
+#define SDACS_CAPTURE_MQTT_ONLY_WHEN_NO_SD  1
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11
 #define SDACS_I2S_WS_GPIO                GPIO_NUM_13
@@ -42,6 +57,13 @@
 #define SDACS_MIC_VALID_BITS             24
 #define SDACS_MIC_I2S_SLOT_BITS          32
 #define SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL (-26.0f)
+/*
+ * ICS-43432 is a mono mic but should be clocked with stereo I2S frame timing.
+ * If the LR pin selects left, keep SDACS_I2S_USE_RIGHT_SLOT at 0. If LR selects
+ * right, set SDACS_I2S_USE_RIGHT_SLOT to 1 and rebuild.
+ */
+#define SDACS_I2S_SLOT_MODE_STEREO       1
+#define SDACS_I2S_USE_RIGHT_SLOT         0
 
 #define SDACS_LED_BATT_1_GPIO            GPIO_NUM_14
 #define SDACS_LED_BATT_2_GPIO            GPIO_NUM_15

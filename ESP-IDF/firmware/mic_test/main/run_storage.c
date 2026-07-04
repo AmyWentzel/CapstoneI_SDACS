@@ -10,8 +10,11 @@
 #include <time.h>
 #include <utime.h>
 
+#include "driver/gpio.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_rom_crc.h"
 #include "esp_timer.h"
@@ -40,8 +43,46 @@ static const char *TAG = "run_storage";
 static const char *METRICS_CSV_HEADER =
     "timestamp_iso,timestamp_us,node_id,fw_version,capture_state,record_seconds,"
     "seq,n,rms,dbfs,db_spl,peak_db_spl,cal_offset_db,f_peak_hz,"
-    "fft_low_ratio,fft_mid_ratio,fft_high_ratio,fft_total_energy,p2p_raw,zeros,"
-    "temp_c,rh_percent\n";
+	    "fft_low_ratio,fft_mid_ratio,fft_high_ratio,fft_total_energy,p2p_raw,zeros,"
+	    "temp_c,rh_percent\n";
+
+static void set_storage_error(run_storage_t *rs, esp_err_t err, const char *detail)
+{
+    const char *name = esp_err_to_name(err);
+
+    if (!rs) {
+        return;
+    }
+
+    rs->last_error = err;
+    snprintf(rs->last_error_name, sizeof(rs->last_error_name), "%s", name ? name : "UNKNOWN");
+    snprintf(rs->last_error_detail, sizeof(rs->last_error_detail), "%s", detail ? detail : "");
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SD storage error: %s (%s)",
+                 rs->last_error_name,
+                 rs->last_error_detail[0] ? rs->last_error_detail : "no detail");
+    }
+}
+
+static void run_storage_prepare_spi_pins(void)
+{
+    ESP_LOGI(TAG,
+             "SD SPI pins: MOSI=%d MISO=%d SCLK=%d CS=%d",
+             (int)SDACS_SD_MOSI_GPIO,
+             (int)SDACS_SD_MISO_GPIO,
+             (int)SDACS_SD_SCLK_GPIO,
+             (int)SDACS_SD_CS_GPIO);
+
+    if (SDACS_SD_CS_GPIO == GPIO_NUM_45) {
+        ESP_LOGW(TAG, "SD CS uses GPIO45, which is strapping-sensitive on ESP32-S3 boards.");
+    }
+
+    gpio_set_level(SDACS_SD_CS_GPIO, 1);
+    gpio_set_direction(SDACS_SD_CS_GPIO, GPIO_MODE_OUTPUT);
+    gpio_pullup_en(SDACS_SD_CS_GPIO);
+    gpio_pullup_en(SDACS_SD_MISO_GPIO);
+}
 
 static void refresh_path_timestamp(const char *path, time_t now)
 {
@@ -125,58 +166,201 @@ esp_err_t run_storage_init(run_storage_t *rs)
         return ESP_ERR_INVALID_ARG;
     }
 
-    memset(rs, 0, sizeof(*rs));
-
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;
-
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = SDACS_SD_MOSI_GPIO,
-        .miso_io_num = SDACS_SD_MISO_GPIO,
-        .sclk_io_num = SDACS_SD_SCLK_GPIO,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 16 * 1024,
-    };
-
-    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(ret));
-        return ret;
+    if (run_storage_is_mounted(rs)) {
+        ESP_LOGI(TAG, "SD card already mounted at %s", SDACS_SD_MOUNT_POINT);
+        return ESP_OK;
     }
 
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.host_id = host.slot;
-    slot_config.gpio_cs = SDACS_SD_CS_GPIO;
+    rs->card = NULL;
+    rs->mounted = false;
+    rs->spi_bus_initialized = false;
+    rs->mount_attempts = 0;
+    rs->run_dir[0] = '\0';
+    rs->raw_path[0] = '\0';
+    rs->wav_path[0] = '\0';
+    rs->csv_path[0] = '\0';
+    rs->cal_offset_path[0] = '\0';
 
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
-        .max_files = 8,
-        .allocation_unit_size = 16 * 1024,
-    };
+    run_storage_prepare_spi_pins();
 
-    ret = esp_vfs_fat_sdspi_mount(
-        SDACS_SD_MOUNT_POINT,
-        &host,
-        &slot_config,
-        &mount_config,
-        &rs->card
-    );
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount SD card: %s", esp_err_to_name(ret));
-        spi_bus_free(host.slot);
-        return ret;
+    esp_err_t final_err = ESP_FAIL;
+    bool local_bus_initialized = false;
+
+    for (uint32_t attempt = 1; attempt <= SDACS_SD_MOUNT_RETRY_COUNT; ++attempt) {
+        rs->mount_attempts = attempt;
+        ESP_LOGI(TAG, "SD mount attempt %u/%u",
+                 (unsigned)attempt,
+                 (unsigned)SDACS_SD_MOUNT_RETRY_COUNT);
+
+        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+        host.slot = SDACS_SD_SPI_HOST;
+        host.max_freq_khz = SDACS_SD_SPI_MAX_FREQ_KHZ;
+
+        spi_bus_config_t bus_cfg = {
+            .mosi_io_num = SDACS_SD_MOSI_GPIO,
+            .miso_io_num = SDACS_SD_MISO_GPIO,
+            .sclk_io_num = SDACS_SD_SCLK_GPIO,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+            .max_transfer_sz = 16 * 1024,
+        };
+
+        esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+        if (ret == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "SPI bus already initialized; reusing host %d", (int)host.slot);
+            ret = ESP_OK;
+            local_bus_initialized = false;
+            rs->spi_bus_initialized = true;
+        } else if (ret != ESP_OK) {
+            final_err = ret;
+            set_storage_error(rs, ret, "spi_bus_initialize failed");
+            if (attempt < SDACS_SD_MOUNT_RETRY_COUNT) {
+                vTaskDelay(pdMS_TO_TICKS(SDACS_SD_MOUNT_RETRY_DELAY_MS));
+            }
+            continue;
+        } else {
+            local_bus_initialized = true;
+            rs->spi_bus_initialized = true;
+        }
+
+        sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+        slot_config.host_id = host.slot;
+        slot_config.gpio_cs = SDACS_SD_CS_GPIO;
+
+        esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+            .format_if_mount_failed = SDACS_SD_FORMAT_IF_MOUNT_FAILED ? true : false,
+            .max_files = 8,
+            .allocation_unit_size = 16 * 1024,
+        };
+
+        ret = esp_vfs_fat_sdspi_mount(
+            SDACS_SD_MOUNT_POINT,
+            &host,
+            &slot_config,
+            &mount_config,
+            &rs->card
+        );
+        if (ret != ESP_OK) {
+            final_err = ret;
+            set_storage_error(rs, ret, "esp_vfs_fat_sdspi_mount failed");
+            if (local_bus_initialized) {
+                spi_bus_free(host.slot);
+                rs->spi_bus_initialized = false;
+                local_bus_initialized = false;
+            }
+            if (attempt < SDACS_SD_MOUNT_RETRY_COUNT) {
+                vTaskDelay(pdMS_TO_TICKS(SDACS_SD_MOUNT_RETRY_DELAY_MS));
+            }
+            continue;
+        }
+
+        rs->mounted = true;
+        set_storage_error(rs, ESP_OK, "mounted");
+        ESP_LOGI(TAG, "SD card mounted at %s", SDACS_SD_MOUNT_POINT);
+        if (rs->card) {
+            uint64_t size_bytes = (uint64_t)rs->card->csd.capacity * rs->card->csd.sector_size;
+            ESP_LOGI(TAG,
+                     "SD card: name=%s type=%s freq=%d kHz size=%u MB",
+                     rs->card->cid.name,
+                     rs->card->is_sdio ? "SDIO" : "SD",
+                     (int)rs->card->max_freq_khz,
+                     (unsigned)(size_bytes / (1024ULL * 1024ULL)));
+        }
+        sdmmc_card_print_info(stdout, rs->card);
+
+        ret = run_storage_self_test(rs);
+        if (ret != ESP_OK) {
+            final_err = ret;
+            rs->mounted = false;
+            esp_vfs_fat_sdcard_unmount(SDACS_SD_MOUNT_POINT, rs->card);
+            rs->card = NULL;
+            if (local_bus_initialized) {
+                spi_bus_free(host.slot);
+                rs->spi_bus_initialized = false;
+                local_bus_initialized = false;
+            }
+            set_storage_error(rs, ret, "mounted but write self-test failed");
+            return ret;
+        }
+
+        return ESP_OK;
     }
 
-    rs->initialized = true;
-    ESP_LOGI(TAG, "SD card mounted at %s", SDACS_SD_MOUNT_POINT);
-    sdmmc_card_print_info(stdout, rs->card);
-    return ESP_OK;
+    rs->mounted = false;
+    ESP_LOGE(TAG,
+             "SD unavailable after %u attempts: %s",
+             (unsigned)rs->mount_attempts,
+             esp_err_to_name(final_err));
+    return final_err;
 }
 
 bool run_storage_is_ready(const run_storage_t *rs)
 {
-    return rs && rs->initialized && rs->card;
+    return run_storage_is_mounted(rs);
+}
+
+bool run_storage_is_mounted(const run_storage_t *rs)
+{
+    return rs && rs->mounted && rs->card;
+}
+
+esp_err_t run_storage_last_error(const run_storage_t *rs)
+{
+    return rs ? rs->last_error : ESP_ERR_INVALID_ARG;
+}
+
+const char *run_storage_last_error_name(const run_storage_t *rs)
+{
+    return (rs && rs->last_error_name[0]) ? rs->last_error_name : "ESP_OK";
+}
+
+const char *run_storage_last_error_detail(const run_storage_t *rs)
+{
+    return (rs && rs->last_error_detail[0]) ? rs->last_error_detail : "";
+}
+
+esp_err_t run_storage_self_test(run_storage_t *rs)
+{
+    const char *path = SDACS_SD_MOUNT_POINT "/sdacs_boot_self_test.txt";
+    const char *content = "sdacs storage self test\n";
+    struct stat st;
+
+    if (!run_storage_is_mounted(rs)) {
+        set_storage_error(rs, ESP_ERR_INVALID_STATE, "self-test requested while not mounted");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        ESP_LOGE(TAG, "SD mounted but write test failed opening %s (errno=%d: %s)",
+                 path, errno, strerror(errno));
+        set_storage_error(rs, ESP_FAIL, "self-test fopen failed");
+        return ESP_FAIL;
+    }
+
+    if (fputs(content, f) < 0) {
+        ESP_LOGE(TAG, "SD mounted but write test failed writing %s (errno=%d: %s)",
+                 path, errno, strerror(errno));
+        fclose(f);
+        set_storage_error(rs, ESP_FAIL, "self-test write failed");
+        return ESP_FAIL;
+    }
+
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    if (stat(path, &st) != 0 || st.st_size <= 0) {
+        ESP_LOGE(TAG, "SD mounted but write test stat failed for %s (errno=%d: %s)",
+                 path, errno, strerror(errno));
+        set_storage_error(rs, ESP_FAIL, "self-test stat failed");
+        return ESP_FAIL;
+    }
+
+    unlink(path);
+    ESP_LOGI(TAG, "SD self-test write OK: %s (%ld bytes)", path, (long)st.st_size);
+    set_storage_error(rs, ESP_OK, "self-test OK");
+    return ESP_OK;
 }
 
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
@@ -185,7 +369,11 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     time_t now;
     bool dir_created = false;
 
-    if (!run_storage_is_ready(rs) || !node_id) {
+    if (!run_storage_is_mounted(rs)) {
+        ESP_LOGW(TAG, "SD storage not mounted; cannot create capture session");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!node_id) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -262,7 +450,11 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
 
 bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t count)
 {
-    if (!rs || !samples || count == 0) {
+    if (!run_storage_is_mounted(rs)) {
+        ESP_LOGW(TAG, "SD storage not mounted; cannot append raw audio");
+        return false;
+    }
+    if (!samples || count == 0) {
         return false;
     }
 
@@ -271,7 +463,11 @@ bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t co
 
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
 {
-    if (!rs || !rec) {
+    if (!run_storage_is_mounted(rs)) {
+        ESP_LOGW(TAG, "SD storage not mounted; cannot append metrics");
+        return false;
+    }
+    if (!rec) {
         return false;
     }
 
@@ -316,8 +512,9 @@ bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec)
 
 esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate_hz)
 {
-    if (!rs) {
-        return ESP_ERR_INVALID_ARG;
+    if (!run_storage_is_mounted(rs)) {
+        ESP_LOGW(TAG, "SD storage not mounted; cannot convert raw audio to WAV");
+        return ESP_ERR_INVALID_STATE;
     }
 
     FILE *raw_file = fopen(rs->raw_path, "rb");
@@ -388,7 +585,8 @@ esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate
 
 void run_storage_refresh_timestamps(run_storage_t *rs)
 {
-    if (!rs) {
+    if (!run_storage_is_mounted(rs)) {
+        ESP_LOGW(TAG, "SD storage not mounted; skipping timestamp refresh");
         return;
     }
     if (!time_sync_is_valid()) {
@@ -406,7 +604,8 @@ void run_storage_refresh_timestamps(run_storage_t *rs)
 
 void run_storage_verify(run_storage_t *rs)
 {
-    if (!rs) {
+    if (!run_storage_is_mounted(rs)) {
+        ESP_LOGW(TAG, "SD storage not mounted; skipping capture file verification");
         return;
     }
 
@@ -447,11 +646,11 @@ esp_err_t run_storage_verify_capture(run_storage_t *rs, char *reason, size_t rea
 {
     esp_err_t err = ESP_OK;
 
-    if (!rs) {
+    if (!run_storage_is_mounted(rs)) {
         if (reason && reason_sz > 0) {
-            snprintf(reason, reason_sz, "storage not initialized");
+            snprintf(reason, reason_sz, "SD storage not mounted");
         }
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (reason && reason_sz > 0) {

@@ -45,14 +45,12 @@ esp_err_t audio_input_init(void)
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SDACS_SAMPLE_RATE_HZ),
         /*
-         * The board uses a mono ICS-43432 schematic. The microphone still outputs
-         * into one I2S left/right time slot selected by its LR pin. Start with mono
-         * Philips mode and left slot; if hardware debug shows zeros, test right
-         * slot or stereo slot timing as a separate follow-up.
+         * ICS-43432 is a mono mic using stereo I2S frame timing. Its LR pin
+         * selects which left/right slot carries valid data.
          */
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
             I2S_DATA_BIT_WIDTH_32BIT,
-            I2S_SLOT_MODE_MONO),
+            I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = SDACS_I2S_BCLK_GPIO,
@@ -62,20 +60,26 @@ esp_err_t audio_input_init(void)
         },
     };
 
+#if SDACS_I2S_USE_RIGHT_SLOT
+    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_RIGHT;
+    const char *selected_slot = "right";
+#else
     std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
+    const char *selected_slot = "left";
+#endif
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_audio.rx_chan, &std_cfg), TAG, "init std mode failed");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_audio.rx_chan), TAG, "enable failed");
 
     s_audio.initialized = true;
-    ESP_LOGI(TAG, "I2S initialized: mic=%s format=philips slot_mode=mono slot_mask=left BCLK=%d WS=%d DIN=%d SR=%d valid_bits=%d slot_bits=%d sensitivity=%.1f dBFS@94dB SPL",
+    ESP_LOGI(TAG, "I2S initialized: mic=%s format=philips slot_mode=stereo_frame selected_slot=%s BCLK=%d WS=%d DIN=%d SR=%d valid_bits=%d slot_bits=%d",
              SDACS_MIC_MODEL,
+             selected_slot,
              SDACS_I2S_BCLK_GPIO,
              SDACS_I2S_WS_GPIO,
              SDACS_I2S_DIN_GPIO,
              SDACS_SAMPLE_RATE_HZ,
              SDACS_MIC_VALID_BITS,
-             SDACS_MIC_I2S_SLOT_BITS,
-             (double)SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL);
+             SDACS_MIC_I2S_SLOT_BITS);
     return ESP_OK;
 }
 
@@ -105,16 +109,18 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         return err;
     }
 
-    *samples_read = bytes_read / sizeof(int32_t);
-    if (*samples_read > max_samples) {
-        *samples_read = max_samples;
+    size_t raw_words_read = bytes_read / sizeof(int32_t);
+    size_t selected_samples_read = raw_words_read;
+    if (selected_samples_read > max_samples) {
+        selected_samples_read = max_samples;
     }
+    *samples_read = selected_samples_read;
 
     int32_t min_sample = INT32_MAX;
     int32_t max_sample = INT32_MIN;
     uint32_t zero_count = 0;
 
-    for (size_t i = 0; i < *samples_read; ++i) {
+    for (size_t i = 0; i < selected_samples_read; ++i) {
         int32_t sample = i2s_word_to_s24(s_audio.raw[i]);
         dst[i] = sample;
 
@@ -129,27 +135,29 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         }
     }
 
-    if (*samples_read == 0) {
+    if (selected_samples_read == 0) {
         min_sample = 0;
         max_sample = 0;
     }
 
     ++s_i2s_debug_read_count;
     s_audio.last_debug = (audio_input_debug_t){
-        .raw0 = (*samples_read > 0) ? (uint32_t)s_audio.raw[0] : 0U,
-        .sample0 = (*samples_read > 0) ? dst[0] : 0,
+        .raw0 = (selected_samples_read > 0) ? (uint32_t)s_audio.raw[0] : 0U,
+        .sample0 = (selected_samples_read > 0) ? dst[0] : 0,
         .min_sample = min_sample,
         .max_sample = max_sample,
         .zero_count = zero_count,
         .bytes_read = bytes_read,
-        .samples_read = *samples_read,
+        .raw_words_read = raw_words_read,
+        .samples_read = selected_samples_read,
     };
 
     if ((s_i2s_debug_read_count % 20U) == 0U) {
         ESP_LOGI(TAG,
-                 "I2S debug: bytes=%" PRIu32 " samples=%" PRIu32 " raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%" PRIu32,
+                 "I2S debug: bytes_read=%" PRIu32 " raw_words_read=%" PRIu32 " selected_samples_read=%" PRIu32 " raw0=0x%08" PRIX32 " sample0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%" PRIu32,
                  (uint32_t)bytes_read,
-                 (uint32_t)*samples_read,
+                 (uint32_t)raw_words_read,
+                 (uint32_t)selected_samples_read,
                  s_audio.last_debug.raw0,
                  s_audio.last_debug.sample0,
                  min_sample,

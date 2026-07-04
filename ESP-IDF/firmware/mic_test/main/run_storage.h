@@ -34,7 +34,12 @@ typedef struct {
 
 typedef struct {
     sdmmc_card_t *card;
-    bool initialized;
+    bool mounted;
+    bool spi_bus_initialized;
+    esp_err_t last_error;
+    uint32_t mount_attempts;
+    char last_error_name[32];
+    char last_error_detail[128];
     char run_dir[160];
     char raw_path[256];
     char wav_path[256];
@@ -44,6 +49,11 @@ typedef struct {
 
 esp_err_t run_storage_init(run_storage_t *rs);
 bool run_storage_is_ready(const run_storage_t *rs);
+bool run_storage_is_mounted(const run_storage_t *rs);
+esp_err_t run_storage_last_error(const run_storage_t *rs);
+const char *run_storage_last_error_name(const run_storage_t *rs);
+const char *run_storage_last_error_detail(const run_storage_t *rs);
+esp_err_t run_storage_self_test(run_storage_t *rs);
 esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id);
 bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t count);
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec);

@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -71,6 +72,26 @@ void app_main(void)
         return;
     }
 
+    wifi_mqtt_set_storage_status_provider(&s_storage);
+#if SDACS_ENABLE_SD_STORAGE
+    esp_err_t sd_err = run_storage_init(&s_storage);
+    if (sd_err != ESP_OK) {
+        ESP_LOGE(TAG, "SD storage unavailable after boot: %s", esp_err_to_name(sd_err));
+        ESP_LOGE(TAG, "Node will continue without local capture storage. Capture commands must be rejected until SD is available.");
+    }
+#else
+    s_storage.mounted = false;
+    s_storage.last_error = ESP_ERR_INVALID_STATE;
+    snprintf(s_storage.last_error_name, sizeof(s_storage.last_error_name), "%s", "SD_DISABLED");
+    snprintf(s_storage.last_error_detail, sizeof(s_storage.last_error_detail), "%s", "disabled by build config");
+    ESP_LOGW(TAG, "SD local storage disabled by build config; capture will run MQTT/features-only");
+    ESP_LOGW(TAG, "SD local storage disabled by build config");
+    ESP_LOGW(TAG, "Capture storage mode: MQTT/features-only");
+#endif
+
+    ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
+    ESP_ERROR_CHECK(battery_leds_init());
+
 #if SDACS_BLE_LOCATOR_ENABLED
     ESP_LOGI(TAG, "PHASE 0: BLE node-awareness advertisement");
     esp_err_t ble_err = sdacs_ble_locator_advertise_for(
@@ -87,15 +108,6 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_mqtt_start(NULL));
 
     time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
-
-    esp_err_t storage_err = run_storage_init(&s_storage);
-    if (storage_err != ESP_OK) {
-        ESP_LOGE(TAG,
-                 "SD storage unavailable: %s. Node will stay online, but capture commands will be rejected.",
-                 esp_err_to_name(storage_err));
-    }
-    ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
-    ESP_ERROR_CHECK(battery_leds_init());
 
     if (!temp_humidity_start(
             SDACS_TEMP_HUMIDITY_I2C_PORT,

@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "run_storage.h"
 
 typedef struct {
     char node_id[17];        // "node01"
@@ -30,6 +31,15 @@ typedef struct {
     float batt_voltage_v;
     float batt_charge_rate_pct_per_hr;
     bool batt_valid;
+    char storage_mode[24];
+    bool sd_enabled;
+    bool sd_writes_enabled;
+    bool storage_mounted;
+    char storage_error[32];
+    char storage_error_detail[128];
+    char audio_error[32];
+    uint32_t audio_read_errors;
+    uint32_t audio_read_timeouts;
     uint32_t err;
 } sdacs_features_t;
 
@@ -55,6 +65,7 @@ esp_err_t wifi_mqtt_set_command_callback(wifi_mqtt_cmd_cb_t cb);
 esp_err_t wifi_mqtt_publish_status_json(const char *topic, const char *json);
 esp_err_t wifi_mqtt_publish_heartbeat(const char *status);
 esp_err_t wifi_mqtt_set_ota_state(bool ota_ready, bool ota_in_progress);
+void wifi_mqtt_set_storage_status_provider(run_storage_t *storage);
 esp_err_t wifi_mqtt_get_base_topic(char *out, size_t out_sz);
 
 // Optional: check if MQTT is connected (for debug/UI)

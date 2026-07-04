@@ -167,9 +167,9 @@ capture with raw I2S word 0, converted sample 0, min/max, `p2p_raw`, `zeros`,
 
 ICS-43432 SPL conversion uses `SDACS_CAL_OFFSET_DB = 120.0f`, derived from the
 microphone sensitivity of `-26 dBFS @ 94 dB SPL` (`94 - (-26) = 120`). The I2S
-configuration is Philips-format, mono, left-slot first; if hardware debug shows
-zeros or a pinned signal, the next controlled test is changing only the slot mask
-to right.
+configuration is Philips-format with stereo I2S frame timing while reading the
+selected mono mic slot. If hardware debug shows zeros or a pinned signal, the
+next controlled test is changing `SDACS_I2S_USE_RIGHT_SLOT` to `1`.
 
 Fuel gauge is still sampled periodically for LEDs and battery state, but MQTT
 `fuel_gauge` records are only published on `capture_start`, `capture_complete`,
@@ -189,6 +189,22 @@ mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/capture_complete' -v
 
 Expected record types include `features`, `temp_humidity`, `fuel_gauge`,
 `heartbeat`, and `capture_complete`.
+
+## SD Storage Diagnostics
+
+Heartbeat records include `storage_mounted`, `storage_last_error`,
+`storage_error_detail`, and `sd_mount_attempts`. To validate SD behavior:
+
+- Boot with SD inserted and confirm `storage_mounted=true` in heartbeat/status.
+- Send `{"cmd":"storage_status","request_id":"storage_001"}`.
+- Start a 10 s capture and confirm raw/WAV/CSV files are created.
+- Boot without SD inserted and confirm Wi-Fi/MQTT still come online.
+- Confirm capture is rejected with `SD storage not mounted`.
+- Insert or fix the SD card and send `{"cmd":"storage_remount","request_id":"storage_remount_001"}` while idle.
+
+Lab OTA note: the current sdkconfig keeps HTTP OTA disabled
+(`# CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP is not set`). Use HTTPS OTA URLs unless a
+separate lab-mode config intentionally enables HTTP.
 
 The fixed Node-RED export adds an inject-on-deploy path that overwrites
 `/home/vortex/sdacs_logs/sdacs_telemetry.csv` with the CSV header before append
