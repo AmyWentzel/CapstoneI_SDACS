@@ -58,7 +58,7 @@
 #define SDACS_MQTT_PUBLISH_TASK_STACK_SIZE  12288
 #define SDACS_MQTT_PUBLISH_TASK_PRIORITY    5
 #define SDACS_MQTT_PUBLISH_TASK_CORE        0
-#define SDACS_MQTT_FEATURE_JSON_MAX_LEN     8192
+#define SDACS_MQTT_FEATURE_JSON_MAX_LEN     12288
 #define SDACS_MQTT_STATUS_JSON_MAX_LEN      2048
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11
@@ -73,26 +73,27 @@
 #define SDACS_I2S_CONVERSION_SHIFT8      0
 #define SDACS_I2S_CONVERSION_LOW24       1
 /*
- * Production sample conversion used by RMS, dbFS, p2p_raw, FFT, and f_peak_hz.
+ * Production MEMS conversion.
  *
- * SHIFT8:
+ * The PCB ties the ICS-43432 LR/CONFIG pin to GND, so the mic is expected on
+ * the left I2S slot. stereo_raw mode reads both 32-bit slots and firmware
+ * manually selects the left word.
+ *
+ * SHIFT8 is the production path for the next validation test:
  *   sign_extend_24(raw_word >> 8)
  *
- * LOW24:
- *   sign_extend_24(raw_word & 0x00FFFFFF)
- *
- * This is a test setting for MEMS validation. Do not treat LOW24 as final
- * calibration until quiet/tone tests prove it is correct.
+ * LOW24 is kept only as a diagnostic because low24 made quiet and 1 kHz
+ * captures look similarly loud and did not recover the 1 kHz FFT peak.
  */
-#define SDACS_I2S_SAMPLE_CONVERSION_MODE SDACS_I2S_CONVERSION_LOW24
+#define SDACS_I2S_SAMPLE_CONVERSION_MODE SDACS_I2S_CONVERSION_SHIFT8
 #if SDACS_I2S_SAMPLE_CONVERSION_MODE == SDACS_I2S_CONVERSION_LOW24
 #define SDACS_I2S_SAMPLE_CONVERSION_LABEL "low24"
 #else
 #define SDACS_I2S_SAMPLE_CONVERSION_LABEL "shift8"
 #endif
 /*
- * ICS-43432 is a mono microphone but should be clocked using stereo I2S frame
- * timing. This branch locks the known-good PCB wiring to the left slot.
+ * ICS-43432 is a mono microphone using stereo I2S frame timing. The board ties
+ * LR/CONFIG to GND, so keep the hardware-selected slot on left.
  */
 #define SDACS_I2S_SLOT_MODE_STEREO_FRAME 1
 /* 0 = left slot, 1 = right slot */
@@ -136,6 +137,24 @@
 #define SDACS_RECORD_SECONDS             20
 #define SDACS_AUDIO_CHUNK_SAMPLES        2048
 #define SDACS_FFT_SIZE                   1024
+#define SDACS_FFT_ACOUSTIC_PEAK_MIN_HZ   200.0f
+#define SDACS_FFT_ACOUSTIC_PEAK_MAX_HZ   12000.0f
+#define SDACS_BAND_SUB_MIN_HZ            20.0f
+#define SDACS_BAND_SUB_MAX_HZ            40.0f
+#define SDACS_BAND_BASS_MIN_HZ           40.0f
+#define SDACS_BAND_BASS_MAX_HZ           160.0f
+#define SDACS_BAND_LOW_MID_MIN_HZ        160.0f
+#define SDACS_BAND_LOW_MID_MAX_HZ        500.0f
+#define SDACS_BAND_MID_MIN_HZ            500.0f
+#define SDACS_BAND_MID_MAX_HZ            2000.0f
+#define SDACS_BAND_PRESENCE_MIN_HZ       2000.0f
+#define SDACS_BAND_PRESENCE_MAX_HZ       5000.0f
+#define SDACS_BAND_HIGH_MIN_HZ           5000.0f
+#define SDACS_BAND_HIGH_MAX_HZ           12000.0f
+#define SDACS_TONE_1KHZ_CENTER_HZ        1000.0f
+#define SDACS_TONE_1KHZ_BAND_HALF_WIDTH_HZ 125.0f
+#define SDACS_TONE_1KHZ_RATIO_THRESHOLD  0.13f
+#define SDACS_TONE_1KHZ_PEAK_TOLERANCE_HZ 150.0f
 #define SDACS_CAL_OFFSET_DB              120.0f
 #define SDACS_I2S_READ_TIMEOUT_MS        20
 #define SDACS_WAV_CHUNK_SIZE             1024

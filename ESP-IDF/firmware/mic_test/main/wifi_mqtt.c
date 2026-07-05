@@ -572,6 +572,46 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"cal_offset_db\":%.2f,"
           "\"fft_peak_Hz\":%.1f,"
           "\"f_peak_hz\":%.1f,"
+          "\"f_peak_full_hz\":%.1f,"
+          "\"f_peak_acoustic_hz\":%.1f,"
+          "\"f_peak_acoustic_energy\":%.6e,"
+          "\"tone_1khz_energy\":%.6e,"
+          "\"tone_1khz_ratio\":%.6f,"
+          "\"tone_1khz_peak_hz\":%.1f,"
+          "\"tone_1khz_peak_energy\":%.6e,"
+          "\"tone_1khz_ratio_hit\":%s,"
+          "\"tone_1khz_peak_hit\":%s,"
+          "\"tone_1khz_detected\":%s,"
+          "\"acoustic_band_energy\":%.6e,"
+          "\"low_rumble_energy\":%.6e,"
+          "\"low_rumble_ratio\":%.6f,"
+          "\"band_sub_energy\":%.6e,"
+          "\"band_bass_energy\":%.6e,"
+          "\"band_low_mid_energy\":%.6e,"
+          "\"band_mid_energy\":%.6e,"
+          "\"band_presence_energy\":%.6e,"
+          "\"band_high_energy\":%.6e,"
+          "\"band_sub_ratio\":%.6f,"
+          "\"band_bass_ratio\":%.6f,"
+          "\"band_low_mid_ratio\":%.6f,"
+          "\"band_mid_ratio\":%.6f,"
+          "\"band_presence_ratio\":%.6f,"
+          "\"band_high_ratio\":%.6f,"
+          "\"band_sub_peak_hz\":%.1f,"
+          "\"band_bass_peak_hz\":%.1f,"
+          "\"band_low_mid_peak_hz\":%.1f,"
+          "\"band_mid_peak_hz\":%.1f,"
+          "\"band_presence_peak_hz\":%.1f,"
+          "\"band_high_peak_hz\":%.1f,"
+          "\"band_sub_peak_energy\":%.6e,"
+          "\"band_bass_peak_energy\":%.6e,"
+          "\"band_low_mid_peak_energy\":%.6e,"
+          "\"band_mid_peak_energy\":%.6e,"
+          "\"band_presence_peak_energy\":%.6e,"
+          "\"band_high_peak_energy\":%.6e,"
+          "\"dominant_band_name\":\"%s\","
+          "\"dominant_band_ratio\":%.6f,"
+          "\"dominant_band_peak_hz\":%.1f,"
           "\"fft_low_ratio\":%.6f,"
           "\"fft_mid_ratio\":%.6f,"
           "\"fft_high_ratio\":%.6f,"
@@ -628,6 +668,46 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->cal_offset_db,
         f->f_peak_hz,
         f->f_peak_hz,
+        f->f_peak_full_hz,
+        f->f_peak_acoustic_hz,
+        f->f_peak_acoustic_energy,
+        f->tone_1khz_energy,
+        f->tone_1khz_ratio,
+        f->tone_1khz_peak_hz,
+        f->tone_1khz_peak_energy,
+        f->tone_1khz_ratio_hit ? "true" : "false",
+        f->tone_1khz_peak_hit ? "true" : "false",
+        f->tone_1khz_detected ? "true" : "false",
+        f->acoustic_band_energy,
+        f->low_rumble_energy,
+        f->low_rumble_ratio,
+        f->band_sub_energy,
+        f->band_bass_energy,
+        f->band_low_mid_energy,
+        f->band_mid_energy,
+        f->band_presence_energy,
+        f->band_high_energy,
+        f->band_sub_ratio,
+        f->band_bass_ratio,
+        f->band_low_mid_ratio,
+        f->band_mid_ratio,
+        f->band_presence_ratio,
+        f->band_high_ratio,
+        f->band_sub_peak_hz,
+        f->band_bass_peak_hz,
+        f->band_low_mid_peak_hz,
+        f->band_mid_peak_hz,
+        f->band_presence_peak_hz,
+        f->band_high_peak_hz,
+        f->band_sub_peak_energy,
+        f->band_bass_peak_energy,
+        f->band_low_mid_peak_energy,
+        f->band_mid_peak_energy,
+        f->band_presence_peak_energy,
+        f->band_high_peak_energy,
+        f->dominant_band_name,
+        f->dominant_band_ratio,
+        f->dominant_band_peak_hz,
         f->fft_low_ratio,
         f->fft_mid_ratio,
         f->fft_high_ratio,
