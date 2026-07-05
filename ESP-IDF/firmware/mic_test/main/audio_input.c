@@ -59,17 +59,25 @@ typedef struct {
 
 static raw_diag_accum_t s_raw_diag = {0};
 
-static size_t audio_input_read_bytes(void)
+static size_t audio_input_raw_words_per_read(void)
 {
 #if SDACS_I2S_RX_MODE == SDACS_I2S_RX_MODE_STEREO_RAW
-    return (size_t)SDACS_I2S_FRAMES_PER_READ * 2U * sizeof(int32_t);
+    return (size_t)SDACS_I2S_FRAMES_PER_READ * 2U;
 #else
-    return (size_t)SDACS_I2S_FRAMES_PER_READ * sizeof(int32_t);
+    return (size_t)SDACS_I2S_FRAMES_PER_READ;
 #endif
+}
+
+static size_t audio_input_read_bytes(void)
+{
+    return audio_input_raw_words_per_read() * sizeof(int32_t);
 }
 
 static size_t audio_input_selected_sample_capacity(void)
 {
+    /* One selected mic sample is produced for each I2S frame. In stereo_raw,
+     * each frame contains two raw 32-bit words: left then right.
+     */
     return SDACS_I2S_FRAMES_PER_READ;
 }
 
@@ -337,6 +345,17 @@ esp_err_t audio_input_init(void)
         return ESP_OK;
     }
 
+    const size_t read_bytes = audio_input_read_bytes();
+    if (read_bytes > 3500U) {
+        ESP_LOGE(TAG,
+                 "I2S read size too large for DMA: read_bytes=%u raw_words=%u frames=%u rx_mode=%s",
+                 (unsigned)read_bytes,
+                 (unsigned)audio_input_raw_words_per_read(),
+                 (unsigned)SDACS_I2S_FRAMES_PER_READ,
+                 SDACS_I2S_RX_MODE_LABEL);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     i2s_chan_config_t chan_cfg =
         I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = SDACS_I2S_DMA_DESC_NUM;
@@ -376,7 +395,7 @@ esp_err_t audio_input_init(void)
     s_audio.rx_enabled = true;
     raw_diag_reset_internal();
     ESP_LOGI(TAG,
-             "I2S mic config: mic=%s format=philips frame=stereo selected_slot=%s conversion=%s sample_rate=%d clk_src=%d mclk_multiple=%d data_bits=%d slot_bits=%d valid_bits=%d BCLK=%d WS=%d DIN=%d slot_mask=%s driver_rx=%s dma_desc_num=%u dma_frame_num=%u",
+             "I2S mic config: mic=%s format=philips frame=stereo selected_slot=%s conversion=%s sample_rate=%d clk_src=%d mclk_multiple=%d data_bits=%d slot_bits=%d valid_bits=%d BCLK=%d WS=%d DIN=%d slot_mask=%s driver_rx=%s dma_desc_num=%u dma_frame_num=%u read_frames=%u read_raw_words=%u read_bytes=%u expected_selected_samples_per_read=%u",
              SDACS_MIC_MODEL,
              SDACS_I2S_SELECTED_SLOT_LABEL,
              SDACS_I2S_SAMPLE_CONVERSION_LABEL,
@@ -392,7 +411,11 @@ esp_err_t audio_input_init(void)
              SDACS_I2S_DRIVER_SLOT_MASK_LABEL,
              SDACS_I2S_RX_MODE_LABEL,
              (unsigned)SDACS_I2S_DMA_DESC_NUM,
-             (unsigned)SDACS_I2S_DMA_FRAME_NUM);
+             (unsigned)SDACS_I2S_DMA_FRAME_NUM,
+             (unsigned)SDACS_I2S_FRAMES_PER_READ,
+             (unsigned)audio_input_raw_words_per_read(),
+             (unsigned)read_bytes,
+             (unsigned)audio_input_selected_sample_capacity());
     return ESP_OK;
 }
 

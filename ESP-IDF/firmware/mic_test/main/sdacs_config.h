@@ -117,7 +117,7 @@
 #endif
 #define SDACS_I2S_VERBOSE_TIMEOUT_LOGS   0
 #define SDACS_I2S_DMA_DESC_NUM           8
-#define SDACS_I2S_DMA_FRAME_NUM          512
+#define SDACS_I2S_DMA_FRAME_NUM          256
 
 #define SDACS_LED_BATT_1_GPIO            GPIO_NUM_14
 #define SDACS_LED_BATT_2_GPIO            GPIO_NUM_15
@@ -132,7 +132,7 @@
 #define SDACS_SD_CS_GPIO                 GPIO_NUM_45
 
 #define SDACS_SAMPLE_RATE_HZ             48000
-#define SDACS_I2S_FRAMES_PER_READ        512
+#define SDACS_I2S_FRAMES_PER_READ        256
 #define SDACS_RECORD_SECONDS             20
 #define SDACS_AUDIO_CHUNK_SAMPLES        2048
 #define SDACS_FFT_SIZE                   1024
