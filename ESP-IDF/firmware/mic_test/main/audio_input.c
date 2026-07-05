@@ -642,6 +642,7 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         .samples_read = selected_samples_read,
     };
 
+#if SDACS_I2S_DEBUG_LOGS
     if ((s_i2s_debug_read_count % 20U) == 0U) {
         ESP_LOGI(TAG,
                  "I2S debug: bytes_read=%" PRIu32 " raw_words_read=%" PRIu32 " selected_samples_read=%" PRIu32 " raw0=0x%08" PRIX32 " raw1=0x%08" PRIX32 " raw_min=0x%08" PRIX32 " raw_max=0x%08" PRIX32 " sample0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " peak_abs=%" PRId32 " p2p_raw=%" PRId32 " zeros=%" PRIu32 " raw_nonzero=%" PRIu32 " raw_repeated=%" PRIu32,
@@ -661,6 +662,7 @@ esp_err_t audio_input_read_s24(int32_t *dst,
                  nonzero_count,
                  repeated_count);
     }
+#endif
 
     return ESP_OK;
 }

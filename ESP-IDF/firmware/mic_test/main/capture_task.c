@@ -723,10 +723,19 @@ static void capture_task_run(void *arg)
                     .tone_1khz_ratio = metrics.tone_1khz_ratio,
                     .tone_1khz_peak_hz = metrics.tone_1khz_peak_hz,
                     .tone_1khz_peak_energy = metrics.tone_1khz_peak_energy,
+                    .tone_1khz_local_total_energy = metrics.tone_1khz_local_total_energy,
+                    .tone_1khz_local_noise_energy = metrics.tone_1khz_local_noise_energy,
+                    .tone_1khz_local_noise_avg_energy = metrics.tone_1khz_local_noise_avg_energy,
+                    .tone_1khz_local_ratio = metrics.tone_1khz_local_ratio,
+                    .tone_1khz_contrast_db = metrics.tone_1khz_contrast_db,
                     .tone_1khz_ratio_hit = metrics.tone_1khz_ratio_hit,
                     .tone_1khz_peak_hit = metrics.tone_1khz_peak_hit,
+                    .tone_1khz_contrast_hit = metrics.tone_1khz_contrast_hit,
                     .tone_1khz_detected = metrics.tone_1khz_detected,
+                    .tone_1khz_local_noise_bins = metrics.tone_1khz_local_noise_bins,
+                    .tone_1khz_band_bins = metrics.tone_1khz_band_bins,
                     .acoustic_band_energy = metrics.acoustic_band_energy,
+                    .room_band_total_energy = metrics.room_band_total_energy,
                     .low_rumble_energy = metrics.low_rumble_energy,
                     .low_rumble_ratio = metrics.low_rumble_ratio,
                     .band_sub_energy = metrics.band_sub_energy,
@@ -824,8 +833,9 @@ static void capture_task_run(void *arg)
                     ESP_LOGW(TAG, "features queue full; dropped seq=%u", (unsigned)features.seq);
                 }
 
+#if SDACS_FEATURE_VERBOSE_LOGS
                 ESP_LOGI(TAG,
-                         "Feature row seq=%u conversion=%s rx_mode=%s f_peak=%.1f acoustic=%.1f dominant=%s ratio=%.3f peak=%.1f bass=%.3f low_mid=%.3f mid=%.3f presence=%.3f high=%.3f tone_1khz_peak=%.1f tone_1khz_ratio=%.3f ratio_hit=%s peak_hit=%s tone_1khz_detected=%s dbfs=%.2f p2p_raw=%" PRId32 " n=%u expected=%u sample_rate_ok=%s window_ms=%u eff_sr=%.2f timeouts=%u audio_error=%s",
+                         "Feature row seq=%u conversion=%s rx_mode=%s f_peak=%.1f acoustic=%.1f dominant=%s ratio=%.3f peak=%.1f room_total=%.6e bass=%.3f low_mid=%.3f mid=%.3f presence=%.3f high=%.3f tone_1khz_peak=%.1f tone_1khz_ratio=%.3f tone_local=%.3f contrast_db=%.2f ratio_hit=%s peak_hit=%s contrast_hit=%s tone_1khz_detected=%s dbfs=%.2f p2p_raw=%" PRId32 " n=%u expected=%u sample_rate_ok=%s window_ms=%u eff_sr=%.2f timeouts=%u audio_error=%s",
                          (unsigned)seq,
                          SDACS_I2S_SAMPLE_CONVERSION_LABEL,
                          SDACS_I2S_RX_MODE_LABEL,
@@ -834,6 +844,7 @@ static void capture_task_run(void *arg)
                          metrics.dominant_band_name,
                          (double)metrics.dominant_band_ratio,
                          (double)metrics.dominant_band_peak_hz,
+                         (double)metrics.room_band_total_energy,
                          (double)metrics.band_bass_ratio,
                          (double)metrics.band_low_mid_ratio,
                          (double)metrics.band_mid_ratio,
@@ -841,8 +852,11 @@ static void capture_task_run(void *arg)
                          (double)metrics.band_high_ratio,
                          (double)metrics.tone_1khz_peak_hz,
                          (double)metrics.tone_1khz_ratio,
+                         (double)metrics.tone_1khz_local_ratio,
+                         (double)metrics.tone_1khz_contrast_db,
                          metrics.tone_1khz_ratio_hit ? "true" : "false",
                          metrics.tone_1khz_peak_hit ? "true" : "false",
+                         metrics.tone_1khz_contrast_hit ? "true" : "false",
                          metrics.tone_1khz_detected ? "true" : "false",
                          (double)metrics.dbfs,
                          metrics.p2p_raw,
@@ -867,7 +881,7 @@ static void capture_task_run(void *arg)
                          (unsigned)features.err);
 
                 ESP_LOGI(TAG,
-                         "Audio feature debug: timestamp_us=%" PRIu64 " capture_state=%s record_seconds=%u cal_offset_db=%.2f raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f peak_db_spl=%.2f f_peak_hz=%.1f f_peak_full_hz=%.1f f_peak_acoustic_hz=%.1f dominant_band=%s dominant_ratio=%.4f dominant_peak=%.1f bass=%.4f low_mid=%.4f mid=%.4f presence=%.4f high=%.4f tone_1khz_peak_hz=%.1f tone_1khz_ratio=%.4f tone_1khz_detected=%s low_rumble_ratio=%.4f low_ratio=%.4f mid_ratio=%.4f high_ratio=%.4f fft_total_energy=%.6e sample_count=%u",
+                         "Audio feature debug: timestamp_us=%" PRIu64 " capture_state=%s record_seconds=%u cal_offset_db=%.2f raw0=0x%08" PRIX32 " s0=%" PRId32 " min=%" PRId32 " max=%" PRId32 " p2p_raw=%" PRId32 " zeros=%u rms=%.6f dbfs=%.2f db_spl=%.2f peak_db_spl=%.2f f_peak_hz=%.1f f_peak_full_hz=%.1f f_peak_acoustic_hz=%.1f dominant_band=%s dominant_ratio=%.4f dominant_peak=%.1f room_total=%.6e bass=%.4f low_mid=%.4f mid=%.4f presence=%.4f high=%.4f tone_1khz_peak_hz=%.1f tone_1khz_ratio=%.4f tone_local=%.4f contrast_db=%.2f contrast_hit=%s tone_1khz_detected=%s low_rumble_ratio=%.4f low_ratio=%.4f mid_ratio=%.4f high_ratio=%.4f fft_total_energy=%.6e sample_count=%u",
                          (uint64_t)now_us,
                          capture_state,
                          (unsigned)state->ctx.record_seconds,
@@ -888,6 +902,7 @@ static void capture_task_run(void *arg)
                          metrics.dominant_band_name,
                          (double)metrics.dominant_band_ratio,
                          (double)metrics.dominant_band_peak_hz,
+                         (double)metrics.room_band_total_energy,
                          (double)metrics.band_bass_ratio,
                          (double)metrics.band_low_mid_ratio,
                          (double)metrics.band_mid_ratio,
@@ -895,6 +910,9 @@ static void capture_task_run(void *arg)
                          (double)metrics.band_high_ratio,
                          (double)metrics.tone_1khz_peak_hz,
                          (double)metrics.tone_1khz_ratio,
+                         (double)metrics.tone_1khz_local_ratio,
+                         (double)metrics.tone_1khz_contrast_db,
+                         metrics.tone_1khz_contrast_hit ? "true" : "false",
                          metrics.tone_1khz_detected ? "true" : "false",
                          (double)metrics.low_rumble_ratio,
                          (double)metrics.fft_low_ratio,
@@ -926,6 +944,36 @@ static void capture_task_run(void *arg)
 
                 ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",
                          metrics.laeq_db, metrics.peak_db, (unsigned)samples_written);
+#else
+                if (SDACS_CAPTURE_LOG_EVERY_N_ROWS > 0 &&
+                    (seq % SDACS_CAPTURE_LOG_EVERY_N_ROWS) == 0U) {
+                    ESP_LOGI(TAG,
+                             "Feature row seq=%u rx=%s conv=%s n=%u eff_sr=%.2f sr_ok=%s timeouts=%u dominant=%s dom_ratio=%.3f room_total=%.6e sub=%.3f bass=%.3f low_mid=%.3f mid=%.3f presence=%.3f high=%.3f tone_ratio=%.3f tone_local=%.3f contrast_db=%.2f contrast_hit=%s tone_detected=%s dbfs=%.2f audio_error=%s",
+                             (unsigned)seq,
+                             SDACS_I2S_RX_MODE_LABEL,
+                             SDACS_I2S_SAMPLE_CONVERSION_LABEL,
+                             (unsigned)metrics.sample_count,
+                             (double)window_effective_sr,
+                             sample_rate_ok ? "true" : "false",
+                             (unsigned)window_audio_read_timeouts,
+                             metrics.dominant_band_name,
+                             (double)metrics.dominant_band_ratio,
+                             (double)metrics.room_band_total_energy,
+                             (double)metrics.band_sub_ratio,
+                             (double)metrics.band_bass_ratio,
+                             (double)metrics.band_low_mid_ratio,
+                             (double)metrics.band_mid_ratio,
+                             (double)metrics.band_presence_ratio,
+                             (double)metrics.band_high_ratio,
+                             (double)metrics.tone_1khz_ratio,
+                             (double)metrics.tone_1khz_local_ratio,
+                             (double)metrics.tone_1khz_contrast_db,
+                             metrics.tone_1khz_contrast_hit ? "true" : "false",
+                             metrics.tone_1khz_detected ? "true" : "false",
+                             (double)metrics.dbfs,
+                             audio_error[0] ? audio_error : "");
+                }
+#endif
             }
 
             window_audio_read_timeouts = 0;

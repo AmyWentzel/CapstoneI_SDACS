@@ -579,10 +579,19 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
           "\"tone_1khz_ratio\":%.6f,"
           "\"tone_1khz_peak_hz\":%.1f,"
           "\"tone_1khz_peak_energy\":%.6e,"
+          "\"tone_1khz_local_total_energy\":%.6e,"
+          "\"tone_1khz_local_noise_energy\":%.6e,"
+          "\"tone_1khz_local_noise_avg_energy\":%.6e,"
+          "\"tone_1khz_local_ratio\":%.6f,"
+          "\"tone_1khz_contrast_db\":%.2f,"
           "\"tone_1khz_ratio_hit\":%s,"
           "\"tone_1khz_peak_hit\":%s,"
+          "\"tone_1khz_contrast_hit\":%s,"
           "\"tone_1khz_detected\":%s,"
+          "\"tone_1khz_local_noise_bins\":%d,"
+          "\"tone_1khz_band_bins\":%d,"
           "\"acoustic_band_energy\":%.6e,"
+          "\"room_band_total_energy\":%.6e,"
           "\"low_rumble_energy\":%.6e,"
           "\"low_rumble_ratio\":%.6f,"
           "\"band_sub_energy\":%.6e,"
@@ -675,10 +684,19 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         f->tone_1khz_ratio,
         f->tone_1khz_peak_hz,
         f->tone_1khz_peak_energy,
+        f->tone_1khz_local_total_energy,
+        f->tone_1khz_local_noise_energy,
+        f->tone_1khz_local_noise_avg_energy,
+        f->tone_1khz_local_ratio,
+        f->tone_1khz_contrast_db,
         f->tone_1khz_ratio_hit ? "true" : "false",
         f->tone_1khz_peak_hit ? "true" : "false",
+        f->tone_1khz_contrast_hit ? "true" : "false",
         f->tone_1khz_detected ? "true" : "false",
+        f->tone_1khz_local_noise_bins,
+        f->tone_1khz_band_bins,
         f->acoustic_band_energy,
+        f->room_band_total_energy,
         f->low_rumble_energy,
         f->low_rumble_ratio,
         f->band_sub_energy,

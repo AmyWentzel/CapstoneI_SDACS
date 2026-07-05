@@ -35,10 +35,19 @@ typedef struct {
     float tone_1khz_ratio;
     float tone_1khz_peak_hz;
     float tone_1khz_peak_energy;
+    float tone_1khz_local_total_energy;
+    float tone_1khz_local_noise_energy;
+    float tone_1khz_local_noise_avg_energy;
+    float tone_1khz_local_ratio;
+    float tone_1khz_contrast_db;
     bool tone_1khz_ratio_hit;
     bool tone_1khz_peak_hit;
+    bool tone_1khz_contrast_hit;
     bool tone_1khz_detected;
+    int tone_1khz_local_noise_bins;
+    int tone_1khz_band_bins;
     float acoustic_band_energy;
+    float room_band_total_energy;
     float low_rumble_energy;
     float low_rumble_ratio;
     float band_sub_energy;
@@ -188,12 +197,22 @@ static fft_band_metrics_t compute_fft_band_metrics(void)
             metrics.low_rumble_energy += energy;
         }
 
-        if (freq_hz >= tone_low_hz && freq_hz <= tone_high_hz) {
+        const bool in_tone_band = freq_hz >= tone_low_hz && freq_hz <= tone_high_hz;
+        const bool in_local_region =
+            freq_hz >= SDACS_TONE_1KHZ_CONTRAST_MIN_HZ &&
+            freq_hz <= SDACS_TONE_1KHZ_CONTRAST_MAX_HZ;
+
+        if (in_tone_band) {
             metrics.tone_1khz_energy += energy;
+            metrics.tone_1khz_band_bins++;
             if (energy > tone_peak_energy) {
                 tone_peak_energy = energy;
                 tone_peak_bin = i;
             }
+        }
+        if (in_local_region && !in_tone_band) {
+            metrics.tone_1khz_local_noise_energy += energy;
+            metrics.tone_1khz_local_noise_bins++;
         }
 
         update_band(freq_hz, energy,
@@ -242,7 +261,24 @@ static fft_band_metrics_t compute_fft_band_metrics(void)
     metrics.acoustic_peak_energy = acoustic_peak_energy;
     metrics.tone_1khz_peak_hz = ((float)tone_peak_bin * SDACS_SAMPLE_RATE_HZ) / SDACS_FFT_SIZE;
     metrics.tone_1khz_peak_energy = tone_peak_energy;
+    metrics.tone_1khz_local_total_energy =
+        metrics.tone_1khz_energy + metrics.tone_1khz_local_noise_energy;
+    metrics.tone_1khz_local_noise_avg_energy =
+        (metrics.tone_1khz_local_noise_bins > 0)
+            ? (metrics.tone_1khz_local_noise_energy / (float)metrics.tone_1khz_local_noise_bins)
+            : 0.0f;
+    metrics.tone_1khz_local_ratio =
+        metrics.tone_1khz_energy / fmaxf(metrics.tone_1khz_local_noise_energy, 1e-20f);
+    metrics.tone_1khz_contrast_db =
+        10.0f * log10f(fmaxf(metrics.tone_1khz_local_ratio, 1e-20f));
     metrics.total_energy = metrics.low_energy + metrics.mid_energy + metrics.high_energy;
+    metrics.room_band_total_energy =
+        metrics.band_sub_energy +
+        metrics.band_bass_energy +
+        metrics.band_low_mid_energy +
+        metrics.band_mid_energy +
+        metrics.band_presence_energy +
+        metrics.band_high_energy;
     if (metrics.total_energy > ratio_epsilon) {
         metrics.low_ratio = metrics.low_energy / metrics.total_energy;
         metrics.mid_ratio = metrics.mid_energy / metrics.total_energy;
@@ -251,12 +287,14 @@ static fft_band_metrics_t compute_fft_band_metrics(void)
     }
     if (metrics.acoustic_band_energy > ratio_epsilon) {
         metrics.tone_1khz_ratio = metrics.tone_1khz_energy / metrics.acoustic_band_energy;
-        metrics.band_sub_ratio = metrics.band_sub_energy / metrics.acoustic_band_energy;
-        metrics.band_bass_ratio = metrics.band_bass_energy / metrics.acoustic_band_energy;
-        metrics.band_low_mid_ratio = metrics.band_low_mid_energy / metrics.acoustic_band_energy;
-        metrics.band_mid_ratio = metrics.band_mid_energy / metrics.acoustic_band_energy;
-        metrics.band_presence_ratio = metrics.band_presence_energy / metrics.acoustic_band_energy;
-        metrics.band_high_ratio = metrics.band_high_energy / metrics.acoustic_band_energy;
+    }
+    if (metrics.room_band_total_energy > ratio_epsilon) {
+        metrics.band_sub_ratio = metrics.band_sub_energy / metrics.room_band_total_energy;
+        metrics.band_bass_ratio = metrics.band_bass_energy / metrics.room_band_total_energy;
+        metrics.band_low_mid_ratio = metrics.band_low_mid_energy / metrics.room_band_total_energy;
+        metrics.band_mid_ratio = metrics.band_mid_energy / metrics.room_band_total_energy;
+        metrics.band_presence_ratio = metrics.band_presence_energy / metrics.room_band_total_energy;
+        metrics.band_high_ratio = metrics.band_high_energy / metrics.room_band_total_energy;
     }
     /*
      * Diagnostic tone detection threshold. Tune after real quiet/tone captures
@@ -265,9 +303,13 @@ static fft_band_metrics_t compute_fft_band_metrics(void)
     bool ratio_hit = metrics.tone_1khz_ratio >= SDACS_TONE_1KHZ_RATIO_THRESHOLD;
     bool tone_peak_hit = fabsf(metrics.tone_1khz_peak_hz - SDACS_TONE_1KHZ_CENTER_HZ) <=
         SDACS_TONE_1KHZ_PEAK_TOLERANCE_HZ;
+    bool contrast_hit =
+        metrics.tone_1khz_contrast_db >= SDACS_TONE_1KHZ_CONTRAST_THRESHOLD_DB &&
+        metrics.tone_1khz_local_ratio >= SDACS_TONE_1KHZ_MIN_LOCAL_RATIO;
     metrics.tone_1khz_ratio_hit = ratio_hit;
     metrics.tone_1khz_peak_hit = tone_peak_hit;
-    metrics.tone_1khz_detected = ratio_hit && tone_peak_hit;
+    metrics.tone_1khz_contrast_hit = contrast_hit;
+    metrics.tone_1khz_detected = tone_peak_hit && (ratio_hit || contrast_hit);
     set_dominant_band(&metrics);
 
     return metrics;
@@ -377,10 +419,19 @@ bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
         .tone_1khz_ratio = fft_metrics.tone_1khz_ratio,
         .tone_1khz_peak_hz = fft_metrics.tone_1khz_peak_hz,
         .tone_1khz_peak_energy = fft_metrics.tone_1khz_peak_energy,
+        .tone_1khz_local_total_energy = fft_metrics.tone_1khz_local_total_energy,
+        .tone_1khz_local_noise_energy = fft_metrics.tone_1khz_local_noise_energy,
+        .tone_1khz_local_noise_avg_energy = fft_metrics.tone_1khz_local_noise_avg_energy,
+        .tone_1khz_local_ratio = fft_metrics.tone_1khz_local_ratio,
+        .tone_1khz_contrast_db = fft_metrics.tone_1khz_contrast_db,
         .tone_1khz_ratio_hit = fft_metrics.tone_1khz_ratio_hit,
         .tone_1khz_peak_hit = fft_metrics.tone_1khz_peak_hit,
+        .tone_1khz_contrast_hit = fft_metrics.tone_1khz_contrast_hit,
         .tone_1khz_detected = fft_metrics.tone_1khz_detected,
+        .tone_1khz_local_noise_bins = fft_metrics.tone_1khz_local_noise_bins,
+        .tone_1khz_band_bins = fft_metrics.tone_1khz_band_bins,
         .acoustic_band_energy = fft_metrics.acoustic_band_energy,
+        .room_band_total_energy = fft_metrics.room_band_total_energy,
         .low_rumble_energy = fft_metrics.low_rumble_energy,
         .low_rumble_ratio = fft_metrics.low_rumble_ratio,
         .band_sub_energy = fft_metrics.band_sub_energy,
