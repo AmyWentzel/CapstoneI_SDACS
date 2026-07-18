@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'widgets/acoustic_map_card.dart';
+
 import '../../widgets/sdacs_app_bar.dart';
+import 'widgets/acoustic_map_card.dart';
 import 'widgets/fft_peak_graph.dart';
 import 'widgets/node_comparison_graph.dart';
 import 'widgets/spl_graph.dart';
@@ -15,6 +16,8 @@ class GraphsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: const [
+          AcousticMapCard(),
+          SizedBox(height: 12),
           SplGraph(),
           SizedBox(height: 12),
           FftPeakGraph(),

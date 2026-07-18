@@ -50,10 +50,21 @@ class NodeState(BaseModel):
     last_seen_iso: str | None = None
 
 
+CaptureLabel = Literal[
+    "noisy",
+    "speech",
+    "low",
+    "mid",
+    "high",
+    "quiet_room_white_noise",
+]
+
+
 class CaptureStartRequest(BaseModel):
     delay_ms: int = 5000
     record_seconds: int = 20
     request_id: str | None = None
+    label: CaptureLabel | None = None
 
 
 class CommandRequest(BaseModel):

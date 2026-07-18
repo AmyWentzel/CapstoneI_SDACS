@@ -98,10 +98,7 @@ class SdacsApiService {
         '/api/nodes/${Uri.encodeComponent(nodeId)}/features/latest',
       );
       if (latest is Map<String, dynamic>) {
-        return NodeTelemetry.fromJson({
-          ...row,
-          'latest_features': latest,
-        });
+        return NodeTelemetry.fromJson({...row, 'latest_features': latest});
       }
     } on SdacsApiException {
       // Keep sparse node rows visible even when one latest-feature lookup fails.
@@ -122,10 +119,14 @@ class SdacsApiService {
   Future<CaptureSession> startCapture({
     required int delayMs,
     required int recordSeconds,
+    String? label,
+    String? requestId,
   }) async {
     final json = await _postJson('/api/capture/start', {
       'delay_ms': delayMs,
       'record_seconds': recordSeconds,
+      'label': ?label,
+      'request_id': ?requestId,
     });
     if (json is! Map<String, dynamic>) {
       throw const SdacsApiException('Backend returned invalid capture data.');

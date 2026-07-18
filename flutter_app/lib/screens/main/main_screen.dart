@@ -8,6 +8,7 @@ import '../../models/calibration_result.dart';
 import '../../models/node_telemetry.dart';
 import '../../services/sdacs_api_service.dart';
 import '../../services/websocket_telemetry_service.dart';
+import '../../shared/sdacs_capture_labels.dart';
 import '../../widgets/sdacs_error_banner.dart';
 import 'widgets/latest_calibration_card.dart';
 import 'widgets/node_status_card.dart';
@@ -29,6 +30,8 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   final Map<String, NodeTelemetry> _nodesById = {};
+
+  String _selectedCaptureLabelId = 'speech';
 
   BackendConfig? _activeConfig;
   SdacsApiService? _apiService;
@@ -127,15 +130,24 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     final messenger = ScaffoldMessenger.of(context);
+    final selectedLabel = sdacsCaptureLabels.firstWhere(
+      (label) => label.id == _selectedCaptureLabelId,
+    );
+    final requestId =
+        'capture_${DateTime.now().toUtc().millisecondsSinceEpoch}';
 
     try {
       final session = await apiService.startCapture(
         delayMs: 5000,
-        recordSeconds: 20,
+        recordSeconds: 60,
+        label: selectedLabel.id,
+        requestId: requestId,
       );
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Capture command sent: ${session.sessionId}'),
+          content: Text(
+            '${selectedLabel.displayName} capture sent: ${session.sessionId}',
+          ),
         ),
       );
     } on SdacsApiException catch (error) {
@@ -177,8 +189,9 @@ class _MainScreenState extends State<MainScreen> {
             IconButton(
               tooltip: 'Refresh telemetry',
               icon: const Icon(Icons.refresh),
-              onPressed:
-                  _isLoading ? null : () => unawaited(_loadInitialNodes()),
+              onPressed: _isLoading
+                  ? null
+                  : () => unawaited(_loadInitialNodes()),
             ),
           ],
         ),
@@ -194,6 +207,12 @@ class _MainScreenState extends State<MainScreen> {
                   child: Column(
                     children: [
                       _HeroSection(
+                        selectedLabelId: _selectedCaptureLabelId,
+                        onLabelChanged: (labelId) {
+                          setState(() {
+                            _selectedCaptureLabelId = labelId;
+                          });
+                        },
                         onStartTest: () => _startTest(context),
                       ),
                       if (_errorMessage != null) ...[
@@ -248,8 +267,14 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 class _HeroSection extends StatelessWidget {
-  const _HeroSection({required this.onStartTest});
+  const _HeroSection({
+    required this.selectedLabelId,
+    required this.onLabelChanged,
+    required this.onStartTest,
+  });
 
+  final String selectedLabelId;
+  final ValueChanged<String> onLabelChanged;
   final VoidCallback onStartTest;
 
   @override
@@ -263,11 +288,7 @@ class _HeroSection extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF181020),
-            Color(0xFF101018),
-            Color(0xFF08080C),
-          ],
+          colors: [Color(0xFF181020), Color(0xFF101018), Color(0xFF08080C)],
         ),
       ),
       child: Column(
@@ -289,10 +310,10 @@ class _HeroSection extends StatelessWidget {
             'Smart Distributed Acoustic\nCalibration System',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                  height: 1.05,
-                ),
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              height: 1.05,
+            ),
           ),
           const SizedBox(height: 14),
           const Text(
@@ -302,6 +323,35 @@ class _HeroSection extends StatelessWidget {
               color: MainScreen.textMuted,
               fontSize: 15,
               height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 24),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: DropdownButtonFormField<String>(
+              initialValue: selectedLabelId,
+              isExpanded: true,
+              dropdownColor: MainScreen.panelLight,
+              decoration: InputDecoration(
+                labelText: 'Capture label',
+                helperText: 'Stored with the next four-node capture.',
+                filled: true,
+                fillColor: MainScreen.panelLight,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              items: sdacsCaptureLabels.map((label) {
+                return DropdownMenuItem<String>(
+                  value: label.id,
+                  child: Text(label.displayName),
+                );
+              }).toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  onLabelChanged(value);
+                }
+              },
             ),
           ),
           const SizedBox(height: 28),
@@ -409,9 +459,9 @@ class _RoomMap extends StatelessWidget {
                 Text(
                   'Room Node Layout',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                      ),
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 const Text(
@@ -436,10 +486,7 @@ class _RoomMap extends StatelessWidget {
               ),
             ),
           ),
-          const Positioned(
-            top: 265,
-            child: _SpeakerSource(),
-          ),
+          const Positioned(top: 265, child: _SpeakerSource()),
           if (nodes.isNotEmpty)
             Positioned(top: 135, left: 85, child: _MapNode(node: nodes[0])),
           if (nodes.length > 1)
@@ -455,10 +502,7 @@ class _RoomMap extends StatelessWidget {
                 style: TextStyle(color: MainScreen.textMuted),
               ),
             ),
-          const Positioned(
-            bottom: 14,
-            child: _SuggestionCard(),
-          ),
+          const Positioned(bottom: 14, child: _SuggestionCard()),
         ],
       ),
     );
@@ -476,9 +520,7 @@ class _SpeakerSource extends StatelessWidget {
       decoration: BoxDecoration(
         color: MainScreen.background,
         borderRadius: BorderRadius.circular(26),
-        border: Border.all(
-          color: MainScreen.accent.withValues(alpha: 0.5),
-        ),
+        border: Border.all(color: MainScreen.accent.withValues(alpha: 0.5)),
       ),
       child: const Column(
         mainAxisSize: MainAxisSize.min,
@@ -491,18 +533,12 @@ class _SpeakerSource extends StatelessWidget {
           SizedBox(height: 10),
           Text(
             'Test Source',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w900,
-            ),
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
           ),
           SizedBox(height: 3),
           Text(
             'Studio Monitor',
-            style: TextStyle(
-              color: MainScreen.textMuted,
-              fontSize: 12,
-            ),
+            style: TextStyle(color: MainScreen.textMuted, fontSize: 12),
           ),
         ],
       ),
@@ -556,18 +592,12 @@ class _MapNode extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               '${node.dbSpl} dB SPL',
-              style: TextStyle(
-                color: splColor,
-                fontWeight: FontWeight.w900,
-              ),
+              style: TextStyle(color: splColor, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 2),
             Text(
               '${node.peakFrequencyHz} Hz peak',
-              style: const TextStyle(
-                color: MainScreen.textMuted,
-                fontSize: 12,
-              ),
+              style: const TextStyle(color: MainScreen.textMuted, fontSize: 12),
             ),
             const SizedBox(height: 10),
             LinearProgressIndicator(
@@ -581,10 +611,7 @@ class _MapNode extends StatelessWidget {
             Text(
               '$splStatus - ${node.batterySoc.toStringAsFixed(0)}% battery',
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: MainScreen.textMuted,
-                fontSize: 11,
-              ),
+              style: const TextStyle(color: MainScreen.textMuted, fontSize: 11),
             ),
           ],
         ),
@@ -604,9 +631,7 @@ class _SuggestionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: MainScreen.accent.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: MainScreen.accent.withValues(alpha: 0.25),
-        ),
+        border: Border.all(color: MainScreen.accent.withValues(alpha: 0.25)),
       ),
       child: const Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -617,11 +642,7 @@ class _SuggestionCard extends StatelessWidget {
             child: Text(
               'Suggestion: compare front and rear node levels to identify uneven room response.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                height: 1.4,
-              ),
+              style: TextStyle(color: Colors.white, fontSize: 12, height: 1.4),
             ),
           ),
         ],
@@ -640,8 +661,7 @@ class _SystemPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final avgBattery = nodes.isEmpty
         ? 0
-        : nodes.map((n) => n.batterySoc).reduce((a, b) => a + b) /
-            nodes.length;
+        : nodes.map((n) => n.batterySoc).reduce((a, b) => a + b) / nodes.length;
 
     final avgSpl = nodes.isEmpty
         ? 0

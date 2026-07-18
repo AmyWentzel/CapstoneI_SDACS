@@ -52,13 +52,14 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 
   void _saveSetup() {
-    final port = int.tryParse(_backendPortController.text.trim()) ??
+    final port =
+        int.tryParse(_backendPortController.text.trim()) ??
         BackendConfig.defaultBackendPort;
 
-    BackendConfigScope.controllerOf(context, listen: false).updateAddress(
-      backendIp: _backendIpController.text,
-      backendPort: port,
-    );
+    BackendConfigScope.controllerOf(
+      context,
+      listen: false,
+    ).updateAddress(backendIp: _backendIpController.text, backendPort: port);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

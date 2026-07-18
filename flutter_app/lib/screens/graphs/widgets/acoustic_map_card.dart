@@ -47,6 +47,7 @@ class _AcousticMapCardState extends State<AcousticMapCard> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
+        _result = null;
         _error = error.toString();
         _loading = false;
       });
@@ -62,10 +63,8 @@ class _AcousticMapCardState extends State<AcousticMapCard> {
     final dropdownItems = <DropdownMenuItem<String>>[
       const DropdownMenuItem(value: 'latest', child: Text('Latest capture')),
       ...sdacsCaptureLabels.map(
-        (label) => DropdownMenuItem(
-          value: label.id,
-          child: Text(label.displayName),
-        ),
+        (label) =>
+            DropdownMenuItem(value: label.id, child: Text(label.displayName)),
       ),
     ];
 
@@ -92,7 +91,7 @@ class _AcousticMapCardState extends State<AcousticMapCard> {
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              value: _requestedLabel,
+              initialValue: _requestedLabel,
               decoration: const InputDecoration(
                 labelText: 'Capture label',
                 border: OutlineInputBorder(),
@@ -124,10 +123,14 @@ class _AcousticMapCardState extends State<AcousticMapCard> {
                   minScale: 0.8,
                   maxScale: 4,
                   child: Image.network(
-                    service.imageUri(_requestedLabel, cacheBust: _cacheBust).toString(),
+                    service
+                        .imageUri(_requestedLabel, cacheBust: _cacheBust)
+                        .toString(),
                     fit: BoxFit.contain,
                     errorBuilder: (context, error, stackTrace) => const Center(
-                      child: Text('The backend could not render the acoustic-map image.'),
+                      child: Text(
+                        'The backend could not render the acoustic-map image.',
+                      ),
                     ),
                   ),
                 ),

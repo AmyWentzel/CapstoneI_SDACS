@@ -88,19 +88,25 @@ class AcousticMapResult {
       runId: json['run_id']?.toString() ?? 'unknown',
       selectedLabel: json['selected_label']?.toString() ?? 'latest',
       selectedLabelDisplay:
-          json['selected_label_display']?.toString() ?? json['selected_label']?.toString() ?? 'Latest',
+          json['selected_label_display']?.toString() ??
+          json['selected_label']?.toString() ??
+          'Latest',
       availableLabels: rawLabels.map((value) => value.toString()).toList(),
       labelCatalog: rawCatalog
           .whereType<Map>()
-          .map((value) => AcousticMapLabelStatus.fromJson(
-                value.map((key, item) => MapEntry(key.toString(), item)),
-              ))
+          .map(
+            (value) => AcousticMapLabelStatus.fromJson(
+              value.map((key, item) => MapEntry(key.toString(), item)),
+            ),
+          )
           .toList(),
       nodes: rawNodes
           .whereType<Map>()
-          .map((value) => AcousticMapNode.fromJson(
-                value.map((key, item) => MapEntry(key.toString(), item)),
-              ))
+          .map(
+            (value) => AcousticMapNode.fromJson(
+              value.map((key, item) => MapEntry(key.toString(), item)),
+            ),
+          )
           .toList(),
     );
   }

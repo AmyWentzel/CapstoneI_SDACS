@@ -61,6 +61,8 @@ def build_router(
             "delay_ms": request.delay_ms,
             "record_seconds": request.record_seconds,
         }
+        if request.label is not None:
+            payload["label"] = request.label
         published = mqtt_client.publish_json(settings.command_topic_all, payload)
         return PublishResult(topic=settings.command_topic_all, payload=payload, published=published)
 

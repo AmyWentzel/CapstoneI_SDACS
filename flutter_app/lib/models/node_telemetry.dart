@@ -265,8 +265,9 @@ class NodeTelemetry {
         }
       }
       if (value is num) {
-        final milliseconds =
-            value > 100000000000 ? value.toInt() : value * 1000;
+        final milliseconds = value > 100000000000
+            ? value.toInt()
+            : value * 1000;
         return DateTime.fromMillisecondsSinceEpoch(milliseconds.toInt());
       }
     }

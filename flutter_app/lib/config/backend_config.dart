@@ -32,10 +32,7 @@ class BackendConfig {
   @override
   int get hashCode => Object.hash(backendIp, backendPort);
 
-  BackendConfig copyWith({
-    String? backendIp,
-    int? backendPort,
-  }) {
+  BackendConfig copyWith({String? backendIp, int? backendPort}) {
     return BackendConfig(
       backendIp: backendIp ?? this.backendIp,
       backendPort: backendPort ?? this.backendPort,
@@ -45,7 +42,7 @@ class BackendConfig {
 
 class BackendConfigController extends ChangeNotifier {
   BackendConfigController([BackendConfig config = const BackendConfig()])
-      : _config = config;
+    : _config = config;
 
   BackendConfig _config;
 
@@ -70,12 +67,7 @@ class BackendConfigController extends ChangeNotifier {
       return;
     }
 
-    update(
-      BackendConfig(
-        backendIp: normalizedIp,
-        backendPort: backendPort,
-      ),
-    );
+    update(BackendConfig(backendIp: normalizedIp, backendPort: backendPort));
   }
 }
 
@@ -97,8 +89,9 @@ class BackendConfigScope extends InheritedNotifier<BackendConfigController> {
     final scope = listen
         ? context.dependOnInheritedWidgetOfExactType<BackendConfigScope>()
         : context
-            .getElementForInheritedWidgetOfExactType<BackendConfigScope>()
-            ?.widget as BackendConfigScope?;
+                  .getElementForInheritedWidgetOfExactType<BackendConfigScope>()
+                  ?.widget
+              as BackendConfigScope?;
     assert(scope != null, 'No BackendConfigScope found in context.');
     return scope!.notifier!;
   }
