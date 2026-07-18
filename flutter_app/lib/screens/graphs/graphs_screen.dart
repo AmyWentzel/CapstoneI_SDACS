@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-
+import 'widgets/acoustic_map_card.dart';
 import '../../widgets/sdacs_app_bar.dart';
 import 'widgets/fft_peak_graph.dart';
 import 'widgets/node_comparison_graph.dart';

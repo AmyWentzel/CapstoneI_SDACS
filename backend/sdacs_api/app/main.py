@@ -38,3 +38,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(build_router(settings, state_store, mqtt_client, websocket_manager))
+from .acoustic_map_fastapi import router as acoustic_map_router
+app.include_router(acoustic_map_router)
