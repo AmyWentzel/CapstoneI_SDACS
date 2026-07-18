@@ -4,7 +4,7 @@ class BackendConfig {
     this.nodeRedPort = defaultNodeRedPort,
   });
 
-  static const String defaultBackendIp = '192.168.1.50';
+  static const String defaultBackendIp = '192.168.0.227';
   static const int defaultNodeRedPort = 1880;
 
   final String backendIp;
