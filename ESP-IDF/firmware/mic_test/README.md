@@ -61,6 +61,31 @@ to publish heartbeat, battery, temp/humidity, audio, and feature topics under
 Node-RED can trigger `scan_now` on the RPi5 gateway. The ESP32 nodes do not scan
 for BLE devices and do not receive commands over BLE.
 
+For reliable dashboard Scan Now behavior, import
+`node_red/sdacs_flow_fixed.json`. Its Scan Now button first publishes:
+
+```json
+{"cmd":"ble_advertise","request_id":"ble_scan_YYYYMMDDHHMMSS","duration_ms":15000}
+```
+
+to `sdacs/group/all/cmd`, waits about 1 second, then publishes the Raspberry Pi
+gateway scan command to `sdacs/ble/gateway/rpi5/cmd`:
+
+```json
+{"command":"scan_now","scan_seconds":15,"source":"node-red"}
+```
+
+Each node advertises as `SDACS-<node_id>` with manufacturer payload
+`SDACS:<node_id>` during the requested window.
+
+## SDACS Hardware Pinout
+
+- ICS-43432 I2S microphone: BCLK GPIO11, DOUT/DIN GPIO12, LRCLK/WS GPIO13.
+- SHT41 temperature/humidity sensor: I2C SDA GPIO47, SCL GPIO48, address `0x44`.
+- MAX17048 fuel gauge: shared I2C bus, address `0x36`.
+- Battery LED array: GPIO14, GPIO15, GPIO16, GPIO17, GPIO18, GPIO1.
+- Metro ESP32-S3 microSD: SCK GPIO39, MOSI GPIO42, MISO GPIO21, CS GPIO45.
+
 ## Flashing Four Unique Nodes
 
 Node identity is compiled into the firmware through `SDACS_SECRET_NODE_ID`.
@@ -69,11 +94,11 @@ per node so BLE, MQTT, storage, telemetry JSON, OTA status, and future
 API/Flutter integrations all use the same fixed identity.
 
 ```powershell
-.\flash_metro.ps1 -Port COMx  -NodeId node01 -Erase
+.\flash_metro.ps1 -Port COM7  -NodeId node01 -Erase
 .\flash_metro.ps1 -Port COM9  -NodeId node02 -Erase
-.\flash_metro.ps1 -Port COM5 -NodeId node03 -Erase
-.\flash_metro.ps1 -Port COM8 -NodeId node04 -Erase
-```id
+.\flash_metro.ps1 -Port COM10 -NodeId node03 -Erase
+.\flash_metro.ps1 -Port COM11 -NodeId node04 -Erase
+```
 
 Expected BLE names:
 
@@ -129,102 +154,61 @@ Example Node-RED group command:
 Accepted commands publish capture status on `sdacs/node/<node_id>/status`, then
 the node waits `delay_ms`, records to SD, finalizes raw/WAV/metrics files,
 verifies they are non-empty, and only then publishes
-`sdacs/node/<node_id>/capture_complete`. Audio chunks and capture feature data
-are not streamed live during capture; Node-RED receives completion only after SD
-finalization succeeds.
+`sdacs/node/<node_id>/capture_complete`. Audio chunks are not streamed over
+MQTT; compact feature metrics are published during capture on
+`sdacs/node/<node_id>/features`.
 
-### Copying Firmware `.bin` Files to the Raspberry Pi for OTA
+Feature telemetry uses compact summary JSON only; raw audio samples are not sent
+over MQTT. The feature `err` field is the compact sum of the latest SHT41
+temp/humidity and MAX17048 fuel gauge sample error counters at the time the
+feature record was built. Serial logs include `Audio feature debug` lines during
+capture with raw I2S word 0, converted sample 0, min/max, `p2p_raw`, `zeros`,
+`rms`, `dbfs`, `db_spl`, `f_peak_hz`, and `sample_count`.
 
-After building the ESP32-S3 firmware in ESP-IDF, the OTA binary is generated in the firmware build directory:
+ICS-43432 SPL conversion uses `SDACS_CAL_OFFSET_DB = 120.0f`, derived from the
+microphone sensitivity of `-26 dBFS @ 94 dB SPL` (`94 - (-26) = 120`). The I2S
+configuration is Philips-format with stereo I2S frame timing while reading the
+selected mono mic slot. If hardware debug shows zeros or a pinned signal, the
+next controlled test is changing `SDACS_I2S_USE_RIGHT_SLOT` to `1`.
 
-```powershell
-C:\ws\CapstoneI_SDACS\ESP-IDF\firmware\mic_test\build\mic_test.bin
-```
+Fuel gauge is still sampled periodically for LEDs and battery state, but MQTT
+`fuel_gauge` records are only published on `capture_start`, `capture_complete`,
+and `report_status`, so CSV storage is not dominated by battery rows.
 
-From the Windows ESP-IDF terminal, copy the binary to the Raspberry Pi using `scp`:
+## MQTT Telemetry Verification
 
-```powershell
-cd C:\ws\CapstoneI_SDACS\ESP-IDF\firmware\mic_test
-scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node04.bin
-```
-
-Change the destination filename depending on which node is being updated:
-
-```powershell
-scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node01.bin
-scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node02.bin
-scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node03.bin
-scp .\build\mic_test.bin vortex@192.168.5.40:/home/vortex/sdacs_ota/firmware/node04.bin
-```
-
-On the Raspberry Pi, confirm that the file was copied successfully:
+Use these subscriptions while booting a node and running a group capture:
 
 ```bash
-ls -lh /home/vortex/sdacs_ota/firmware/
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/features' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/temp_humidity' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/fuel_gauge' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/status/heartbeat' -v
+mosquitto_sub -h 192.168.5.40 -t 'sdacs/node/+/capture_complete' -v
 ```
 
-The OTA URL used by Node-RED should point to the copied file, for example:
+Expected record types include `features`, `temp_humidity`, `fuel_gauge`,
+`heartbeat`, and `capture_complete`.
 
-```text
-http://192.168.5.40:1880/firmware/node04.bin
-```
+## SD Storage Diagnostics
 
-### OTA Using Localhost on the Raspberry Pi
+Heartbeat records include `storage_mounted`, `storage_last_error`,
+`storage_error_detail`, and `sd_mount_attempts`. To validate SD behavior:
 
-If Node-RED and the firmware files are hosted on the same Raspberry Pi, you can verify that the firmware is being served locally using `localhost`:
+- Boot with SD inserted and confirm `storage_mounted=true` in heartbeat/status.
+- Send `{"cmd":"storage_status","request_id":"storage_001"}`.
+- Start a 10 s capture and confirm raw/WAV/CSV files are created.
+- Boot without SD inserted and confirm Wi-Fi/MQTT still come online.
+- Confirm capture is rejected with `SD storage not mounted`.
+- Insert or fix the SD card and send `{"cmd":"storage_remount","request_id":"storage_remount_001"}` while idle.
 
-```text
-http://localhost:1880/firmware/node04.bin
-```
+Lab OTA note: the current sdkconfig keeps HTTP OTA disabled
+(`# CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP is not set`). Use HTTPS OTA URLs unless a
+separate lab-mode config intentionally enables HTTP.
 
-You can test access to the firmware file directly on the Raspberry Pi:
-
-```bash
-curl -I http://localhost:1880/firmware/node04.bin
-```
-
-Or download the file locally to verify that it is accessible:
-
-```bash
-curl -O http://localhost:1880/firmware/node04.bin
-```
-
-When configuring OTA for ESP32 devices, use the Raspberry Pi's IP address rather than `localhost`, since `localhost` on the ESP32 refers to the ESP32 itself. For example:
-
-```text
-http://192.168.5.40:1880/firmware/node04.bin
-```
-
-### Node-RED Firmware Hosting Configuration
-
-Before using OTA, confirm that Node-RED is running on the Raspberry Pi and that the `/firmware` static route serves files from:
-
-```text
-/home/vortex/sdacs_ota/firmware
-```
-
-If the firmware folder does not exist, create it on the Raspberry Pi:
-
-```bash
-mkdir -p /home/vortex/sdacs_ota/firmware
-```
-
-If Node-RED cannot access the file, update permissions:
-
-```bash
-chmod 755 /home/vortex/sdacs_ota
-chmod 755 /home/vortex/sdacs_ota/firmware
-chmod 644 /home/vortex/sdacs_ota/firmware/*.bin
-```
-
-After configuring Node-RED, verify that the firmware file is reachable from another device on the network:
-
-```bash
-curl -I http://192.168.5.40:1880/firmware/node04.bin
-```
-
-A successful response should return an HTTP status code such as `200 OK`, indicating that the firmware is ready to be downloaded by ESP32 devices during OTA updates.
-
+The fixed Node-RED export adds an inject-on-deploy path that overwrites
+`/home/vortex/sdacs_logs/sdacs_telemetry.csv` with the CSV header before append
+rows begin. The download endpoint remains `/sdacs/download/csv`.
 
 ## Technical support and feedback
 
