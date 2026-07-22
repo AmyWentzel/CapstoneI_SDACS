@@ -29,6 +29,9 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  static const int _testCaptureDurationSeconds = 60;
+  static const int _synchronizedStartDelayMs = 5000;
+
   final Map<String, NodeTelemetry> _nodesById = {};
 
   String _selectedCaptureLabelId = 'speech';
@@ -39,6 +42,7 @@ class _MainScreenState extends State<MainScreen> {
   StreamSubscription<NodeTelemetry>? _telemetrySubscription;
   bool _isLoading = true;
   bool _backendOnline = false;
+  bool _isSubmittingTest = false;
   String? _errorMessage;
 
   List<NodeTelemetry> get _nodes {
@@ -125,9 +129,13 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _startTest(BuildContext context) async {
     final apiService = _apiService;
-    if (apiService == null) {
+    if (apiService == null || _isSubmittingTest) {
       return;
     }
+
+    setState(() {
+      _isSubmittingTest = true;
+    });
 
     final messenger = ScaffoldMessenger.of(context);
     final selectedLabel = sdacsCaptureLabels.firstWhere(
@@ -138,15 +146,17 @@ class _MainScreenState extends State<MainScreen> {
 
     try {
       final session = await apiService.startCapture(
-        delayMs: 5000,
-        recordSeconds: 60,
+        delayMs: _synchronizedStartDelayMs,
+        recordSeconds: _testCaptureDurationSeconds,
         label: selectedLabel.id,
         requestId: requestId,
       );
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            '${selectedLabel.displayName} capture sent: ${session.sessionId}',
+            '${selectedLabel.displayName} '
+            '$_testCaptureDurationSeconds-second capture request sent: '
+            '${session.sessionId}',
           ),
         ),
       );
@@ -154,6 +164,12 @@ class _MainScreenState extends State<MainScreen> {
       messenger.showSnackBar(
         SnackBar(content: Text('Capture failed: ${error.message}')),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmittingTest = false;
+        });
+      }
     }
   }
 
@@ -214,6 +230,7 @@ class _MainScreenState extends State<MainScreen> {
                           });
                         },
                         onStartTest: () => _startTest(context),
+                        isSubmittingTest: _isSubmittingTest,
                       ),
                       if (_errorMessage != null) ...[
                         const SizedBox(height: 16),
@@ -271,11 +288,13 @@ class _HeroSection extends StatelessWidget {
     required this.selectedLabelId,
     required this.onLabelChanged,
     required this.onStartTest,
+    required this.isSubmittingTest,
   });
 
   final String selectedLabelId;
   final ValueChanged<String> onLabelChanged;
   final VoidCallback onStartTest;
+  final bool isSubmittingTest;
 
   @override
   Widget build(BuildContext context) {
@@ -375,7 +394,7 @@ class _HeroSection extends StatelessWidget {
               _ActionButton(
                 icon: Icons.play_arrow_rounded,
                 label: 'Test',
-                onPressed: onStartTest,
+                onPressed: isSubmittingTest ? null : onStartTest,
               ),
               _ActionButton(
                 icon: Icons.insights,
@@ -400,7 +419,7 @@ class _ActionButton extends StatelessWidget {
 
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final bool filled;
 
   @override

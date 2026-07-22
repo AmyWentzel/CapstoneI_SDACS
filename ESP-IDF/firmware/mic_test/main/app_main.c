@@ -79,7 +79,7 @@ void app_main(void)
     time_sync_try_sntp(SDACS_WIFI_TIME_SYNC_WAIT_MS);
 
     ESP_ERROR_CHECK(run_storage_init(&s_storage));
-    ESP_ERROR_CHECK(run_storage_create_session(&s_storage, SDACS_NODE_ID));
+    ESP_ERROR_CHECK(run_storage_create_session(&s_storage, SDACS_NODE_ID, SDACS_RECORD_SECONDS));
     ESP_ERROR_CHECK(shared_i2c_bus_init(&i2c_cfg));
 
     bool th_ok = temp_humidity_start(

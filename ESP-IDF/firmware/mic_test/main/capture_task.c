@@ -235,7 +235,8 @@ esp_err_t capture_task_start(const capture_context_t *ctx)
     BaseType_t ok;
     int topic_len = 0;
 
-    if (!ctx || !ctx->storage || !ctx->node_id || !ctx->base_topic) {
+    if (!ctx || !ctx->storage || !ctx->node_id || !ctx->base_topic ||
+        ctx->record_seconds == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 

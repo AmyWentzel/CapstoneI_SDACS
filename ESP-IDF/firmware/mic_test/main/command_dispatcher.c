@@ -1,5 +1,6 @@
 #include "command_dispatcher.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -14,6 +15,8 @@
 #include "wifi_mqtt.h"
 
 static const char *TAG = "cmd_dispatch";
+static const uint32_t COMMAND_CAPTURE_DEFAULT_SECONDS = 60;
+static const uint32_t COMMAND_CAPTURE_MAX_SECONDS = 600;
 
 static run_storage_t *s_storage = NULL;
 static char s_node_id[32];
@@ -85,15 +88,31 @@ static bool json_copy_string(const cJSON *obj, const char *key, char *out, size_
     return true;
 }
 
-static void handle_start_capture(const char *request_id)
+static uint32_t resolve_record_seconds(const cJSON *root)
 {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "record_seconds");
+
+    if (!cJSON_IsNumber(item) || item->valuedouble != (double)item->valueint ||
+        item->valueint < 1 || item->valueint > (int)COMMAND_CAPTURE_MAX_SECONDS) {
+        return COMMAND_CAPTURE_DEFAULT_SECONDS;
+    }
+
+    return (uint32_t)item->valueint;
+}
+
+static void handle_start_capture(const cJSON *root, const char *request_id)
+{
+    uint32_t record_seconds = resolve_record_seconds(root);
     capture_context_t ctx = {
         .storage = s_storage,
         .node_id = s_node_id[0] ? s_node_id : SDACS_NODE_ID,
         .base_topic = s_base_topic,
         .cal_offset_db = SDACS_CAL_OFFSET_DB,
-        .record_seconds = SDACS_RECORD_SECONDS,
+        .record_seconds = record_seconds,
     };
+
+    ESP_LOGI(TAG, "Start capture request: request_id=%s record_seconds=%" PRIu32,
+             request_id ? request_id : "", record_seconds);
 
     if (!device_state_can_start_capture()) {
         publish_response("start_capture", request_id, "rejected", "busy");
@@ -107,7 +126,7 @@ static void handle_start_capture(const char *request_id)
 
     device_state_set(SDACS_MODE_CAPTURING);
 
-    esp_err_t err = run_storage_create_session(s_storage, ctx.node_id);
+    esp_err_t err = run_storage_create_session(s_storage, ctx.node_id, ctx.record_seconds);
     if (err == ESP_OK) {
         err = capture_task_start(&ctx);
     }
@@ -219,7 +238,7 @@ void command_dispatcher_handle(const char *topic, const char *payload, int len)
     ESP_LOGI(TAG, "Command received: topic=%s cmd=%s", topic ? topic : "(null)", cmd[0] ? cmd : "(missing)");
 
     if (strcmp(cmd, "start_capture") == 0) {
-        handle_start_capture(request_id);
+        handle_start_capture(root, request_id);
     } else if (strcmp(cmd, "ota_update") == 0) {
         handle_ota_update(root, request_id);
     } else if (strcmp(cmd, "report_status") == 0) {

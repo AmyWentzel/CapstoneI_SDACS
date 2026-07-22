@@ -62,7 +62,7 @@ CaptureLabel = Literal[
 
 class CaptureStartRequest(BaseModel):
     delay_ms: int = 5000
-    record_seconds: int = 20
+    record_seconds: int = Field(default=60, ge=1, le=600)
     request_id: str | None = None
     label: CaptureLabel | None = None
 
