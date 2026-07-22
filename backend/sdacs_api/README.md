@@ -4,9 +4,12 @@ FastAPI bridge between SDACS ESP32-S3 MQTT telemetry and the Flutter app.
 
 ## Configuration
 
+This packaged application is the authoritative production backend. Do not run a
+second flat FastAPI application.
+
 Defaults:
 
-- MQTT broker: `192.168.5.40:1883`
+- MQTT broker: `127.0.0.1:1883`
 - API bind: `0.0.0.0:8000`
 
 Environment overrides:
@@ -101,7 +104,78 @@ Invoke-RestMethod -Method Post http://localhost:8000/api/capture/start `
   -Body '{"delay_ms":5000,"record_seconds":20}'
 ```
 
-This phase intentionally keeps state in memory and does not add SQLite.
+Live node state remains in memory. Capture sessions and capture-associated
+telemetry are persisted with `CREATE TABLE IF NOT EXISTS` migrations in the
+existing SQLite database configured by `SDACS_SQLITE_PATH`.
+
+## Capture processing and Edge Impulse
+
+Normal `POST /api/capture/start` requests are unlabelled. The returned
+`capture_id` is preserved through MQTT, node completion tracking, acoustic
+artifacts, model status, fusion, and Flutter results. An optional
+`validation_label` is available for controlled validation only and is never a
+model feature.
+
+Capture artifacts are stored below `SDACS_CAPTURE_DATA_DIR` as:
+
+```text
+captures/<capture_id>/
+  manifest.json
+  acoustic_input.csv
+  acoustic_summary.json
+  acoustic_map.png
+  edge_impulse_input.csv
+  edge_impulse_schema.json
+  edge_impulse_result.json
+  combined_result.json
+  processor_stdout.log
+  processor_stderr.log
+```
+
+The active acoustic processor is `python_sdacs_acoustic_map`. Until the final
+model and feature schema are available, keep `SDACS_EI_ENABLED=false`. The
+production adapter returns an explicit unavailable status and never fabricates
+predictions or confidence values.
+
+## Raspberry Pi service
+
+Authoritative application import and service configuration:
+
+```ini
+[Service]
+WorkingDirectory=/home/kyledavid36/sdacs/backend/sdacs_api
+Environment=SDACS_MQTT_HOST=127.0.0.1
+Environment=SDACS_MQTT_PORT=1883
+Environment=SDACS_EI_ENABLED=false
+Environment=SDACS_CAPTURE_DATA_DIR=/home/kyledavid36/sdacs/captures
+Environment=SDACS_SQLITE_PATH=/home/vortex/sdacs_logs/sdacs_telemetry.db
+ExecStart=/home/kyledavid36/sdacs/backend/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Deploy source without generated environments or caches:
+
+```bash
+rsync -av --delete \
+  --exclude='.git/' --exclude='venv/' --exclude='.venv/' \
+  --exclude='__pycache__/' --exclude='*.pyc' --exclude='build/' \
+  --exclude='.dart_tool/' \
+  ./ kyledavid36@raspberrypi:/home/kyledavid36/sdacs/
+
+/home/kyledavid36/sdacs/backend/venv/bin/python -m pip install \
+  -r /home/kyledavid36/sdacs/backend/sdacs_api/requirements.txt
+sudo systemctl daemon-reload
+sudo systemctl restart sdacs-api
+sudo systemctl status sdacs-api --no-pager
+```
+
+When the final model is ready, set both:
+
+```ini
+Environment=SDACS_EI_ENABLED=true
+Environment=SDACS_EIM_PATH=/home/kyledavid36/sdacs/models/<final-model>.eim
+```
+
+Do not enable inference until that file and its exact schema have been validated.
 
 ## Raspberry Pi BLE scanning
 

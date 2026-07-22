@@ -484,7 +484,11 @@ static void capture_task_run(void *arg)
              state->ctx.sd_writes_enabled ? "true" : "false");
 
     if (state->ctx.sd_writes_enabled) {
-        err = run_storage_create_session(state->ctx.storage, state->node_id);
+        err = run_storage_create_session(
+            state->ctx.storage,
+            state->node_id,
+            state->ctx.record_seconds
+        );
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to create SD capture session: %s", esp_err_to_name(err));
             capture_set_state(state, SDACS_MODE_ERROR, "failed to create SD capture session");

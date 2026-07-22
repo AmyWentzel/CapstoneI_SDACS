@@ -404,7 +404,7 @@ esp_err_t run_storage_self_test(run_storage_t *rs)
     return ESP_OK;
 }
 
-esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
+esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id, uint32_t record_seconds)
 {
     char ts[32];
     time_t now;
@@ -414,7 +414,7 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
         ESP_LOGW(TAG, "SD storage not mounted; cannot create capture session");
         return ESP_ERR_INVALID_STATE;
     }
-    if (!node_id) {
+    if (!node_id || record_seconds == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -475,7 +475,7 @@ esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id)
     }
     fprintf(cal_txt, "node_id=%s\n", node_id);
     fprintf(cal_txt, "sample_rate_hz=%d\n", SDACS_SAMPLE_RATE_HZ);
-    fprintf(cal_txt, "record_seconds=%d\n", SDACS_RECORD_SECONDS);
+    fprintf(cal_txt, "record_seconds=%u\n", (unsigned)record_seconds);
     fprintf(cal_txt, "i2s_bclk_gpio=%d\n", SDACS_I2S_BCLK_GPIO);
     fprintf(cal_txt, "i2s_ws_gpio=%d\n", SDACS_I2S_WS_GPIO);
     fprintf(cal_txt, "i2s_din_gpio=%d\n", SDACS_I2S_DIN_GPIO);

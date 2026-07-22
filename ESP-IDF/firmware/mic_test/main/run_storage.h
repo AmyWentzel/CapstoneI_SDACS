@@ -55,7 +55,7 @@ esp_err_t run_storage_last_error(const run_storage_t *rs);
 const char *run_storage_last_error_name(const run_storage_t *rs);
 const char *run_storage_last_error_detail(const run_storage_t *rs);
 esp_err_t run_storage_self_test(run_storage_t *rs);
-esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id);
+esp_err_t run_storage_create_session(run_storage_t *rs, const char *node_id, uint32_t record_seconds);
 bool run_storage_append_raw(run_storage_t *rs, const int32_t *samples, size_t count);
 bool run_storage_append_metrics(run_storage_t *rs, const metrics_record_t *rec);
 esp_err_t run_storage_convert_raw_to_wav(run_storage_t *rs, uint32_t sample_rate_hz);

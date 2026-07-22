@@ -59,12 +59,23 @@ CaptureLabel = Literal[
     "quiet_room_white_noise",
 ]
 
+RuntimeClass = Literal["quiet_room", "noisy", "speech"]
+
 
 class CaptureStartRequest(BaseModel):
     delay_ms: int = 5000
     record_seconds: int = Field(default=60, ge=1, le=600)
     request_id: str | None = None
     label: CaptureLabel | None = None
+    validation_label: RuntimeClass | None = None
+
+
+class CaptureStartResponse(BaseModel):
+    capture_id: str
+    status: Literal["requested"]
+    requested_at: str
+    scheduled_start_at: str
+    record_seconds: int
 
 
 class CommandRequest(BaseModel):

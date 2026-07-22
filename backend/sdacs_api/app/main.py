@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
+from .capture_service import CaptureService
 from .mqtt_client import SdacsMqttClient
 from .routes import build_router
 from .state_store import StateStore
@@ -17,15 +18,19 @@ logging.basicConfig(level=logging.INFO)
 settings = get_settings()
 state_store = StateStore()
 websocket_manager = WebSocketManager()
-mqtt_client = SdacsMqttClient(settings, state_store, websocket_manager)
+capture_service = CaptureService(settings)
+mqtt_client = SdacsMqttClient(settings, state_store, websocket_manager, capture_service.observe)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    mqtt_client.start(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    capture_service.start(loop)
+    mqtt_client.start(loop)
     try:
         yield
     finally:
+        capture_service.stop()
         mqtt_client.stop()
 
 
@@ -37,6 +42,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(build_router(settings, state_store, mqtt_client, websocket_manager))
+app.include_router(build_router(settings, state_store, mqtt_client, websocket_manager, capture_service))
 from .acoustic_map_fastapi import router as acoustic_map_router
 app.include_router(acoustic_map_router)

@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
 from pydantic import ValidationError
@@ -72,10 +73,12 @@ class SdacsMqttClient:
         settings: Settings,
         state_store: StateStore,
         websocket_manager: WebSocketManager,
+        telemetry_observer: Callable[[TelemetryUpdate], None] | None = None,
     ) -> None:
         self.settings = settings
         self.state_store = state_store
         self.websocket_manager = websocket_manager
+        self.telemetry_observer = telemetry_observer
         self.connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client = mqtt.Client(
@@ -98,7 +101,10 @@ class SdacsMqttClient:
 
     def publish_json(self, topic: str, payload: dict[str, Any]) -> bool:
         result = self._client.publish(topic, json.dumps(payload), qos=1)
-        return result.rc == mqtt.MQTT_ERR_SUCCESS
+        accepted = result.rc == mqtt.MQTT_ERR_SUCCESS
+        if not accepted:
+            LOG.error("MQTT publish rejected for topic %s (rc=%s)", topic, result.rc)
+        return accepted
 
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
         self.connected = reason_code == 0
@@ -128,6 +134,11 @@ class SdacsMqttClient:
             return
 
         telemetry = self.state_store.update(telemetry)
+        if self.telemetry_observer is not None:
+            try:
+                self.telemetry_observer(telemetry)
+            except Exception:
+                LOG.exception("Capture observer failed for %s", telemetry.request_id)
         if self._loop is not None:
             payload = telemetry.model_dump(mode="json")
             asyncio.run_coroutine_threadsafe(self.websocket_manager.broadcast(payload), self._loop)

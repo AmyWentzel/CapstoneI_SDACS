@@ -6,10 +6,10 @@ import '../../app/app_routes.dart';
 import '../../config/backend_config.dart';
 import '../../models/ble_scan_result.dart';
 import '../../models/calibration_result.dart';
+import '../../models/capture_session.dart';
 import '../../models/node_telemetry.dart';
 import '../../services/sdacs_api_service.dart';
 import '../../services/websocket_telemetry_service.dart';
-import '../../shared/sdacs_capture_labels.dart';
 import '../../widgets/sdacs_error_banner.dart';
 import 'widgets/latest_calibration_card.dart';
 import 'widgets/node_status_card.dart';
@@ -36,8 +36,6 @@ class _MainScreenState extends State<MainScreen> {
   final Map<String, NodeTelemetry> _nodesById = {};
   final Map<String, BleNodeScanResult> _bleResultsByNodeId = {};
 
-  String _selectedCaptureLabelId = 'speech';
-
   BackendConfig? _activeConfig;
   SdacsApiService? _apiService;
   WebSocketTelemetryService? _telemetryService;
@@ -46,6 +44,8 @@ class _MainScreenState extends State<MainScreen> {
   bool _backendOnline = false;
   bool _isSubmittingTest = false;
   bool _isBleScanning = false;
+  Timer? _capturePollTimer;
+  CaptureSession? _activeCapture;
   DateTime? _lastBleScanAt;
   String? _errorMessage;
 
@@ -80,6 +80,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    _capturePollTimer?.cancel();
     unawaited(_telemetrySubscription?.cancel());
     unawaited(_telemetryService?.disconnect());
     super.dispose();
@@ -142,23 +143,23 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     final messenger = ScaffoldMessenger.of(context);
-    final selectedLabel = sdacsCaptureLabels.firstWhere(
-      (label) => label.id == _selectedCaptureLabelId,
-    );
+    _capturePollTimer?.cancel();
+    setState(() => _activeCapture = null);
     final requestId =
-        'capture_${DateTime.now().toUtc().millisecondsSinceEpoch}';
+        'capture_${DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'[-:.]'), '')}';
 
     try {
       final session = await apiService.startCapture(
         delayMs: _synchronizedStartDelayMs,
         recordSeconds: _testCaptureDurationSeconds,
-        label: selectedLabel.id,
         requestId: requestId,
       );
+      if (!mounted) return;
+      setState(() => _activeCapture = session);
+      _startCapturePolling(session.captureId);
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            '${selectedLabel.displayName} '
             '$_testCaptureDurationSeconds-second capture request sent: '
             '${session.sessionId}',
           ),
@@ -175,6 +176,22 @@ class _MainScreenState extends State<MainScreen> {
         });
       }
     }
+  }
+
+  void _startCapturePolling(String captureId) {
+    _capturePollTimer?.cancel();
+    _capturePollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      final apiService = _apiService;
+      if (apiService == null) return;
+      try {
+        final session = await apiService.getCapture(captureId);
+        if (!mounted || _activeCapture?.captureId != captureId) return;
+        setState(() => _activeCapture = session);
+        if (session.isTerminal) _capturePollTimer?.cancel();
+      } on SdacsApiException {
+        // Keep the current capture visible and retry transient failures.
+      }
+    });
   }
 
   Future<void> _scanBleNodes(BuildContext context) async {
@@ -254,16 +271,11 @@ class _MainScreenState extends State<MainScreen> {
                   child: Column(
                     children: [
                       _HeroSection(
-                        selectedLabelId: _selectedCaptureLabelId,
-                        onLabelChanged: (labelId) {
-                          setState(() {
-                            _selectedCaptureLabelId = labelId;
-                          });
-                        },
                         onStartTest: () => _startTest(context),
                         isSubmittingTest: _isSubmittingTest,
                         onScanBle: () => _scanBleNodes(context),
                         isBleScanning: _isBleScanning,
+                        capture: _activeCapture,
                       ),
                       if (_errorMessage != null) ...[
                         const SizedBox(height: 16),
@@ -326,20 +338,18 @@ class _MainScreenState extends State<MainScreen> {
 
 class _HeroSection extends StatelessWidget {
   const _HeroSection({
-    required this.selectedLabelId,
-    required this.onLabelChanged,
     required this.onStartTest,
     required this.isSubmittingTest,
     required this.onScanBle,
     required this.isBleScanning,
+    required this.capture,
   });
 
-  final String selectedLabelId;
-  final ValueChanged<String> onLabelChanged;
   final VoidCallback onStartTest;
   final bool isSubmittingTest;
   final VoidCallback onScanBle;
   final bool isBleScanning;
+  final CaptureSession? capture;
 
   @override
   Widget build(BuildContext context) {
@@ -389,35 +399,14 @@ class _HeroSection extends StatelessWidget {
               height: 1.5,
             ),
           ),
-          const SizedBox(height: 24),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: DropdownButtonFormField<String>(
-              initialValue: selectedLabelId,
-              isExpanded: true,
-              dropdownColor: MainScreen.panelLight,
-              decoration: InputDecoration(
-                labelText: 'Capture label',
-                helperText: 'Stored with the next four-node capture.',
-                filled: true,
-                fillColor: MainScreen.panelLight,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              items: sdacsCaptureLabels.map((label) {
-                return DropdownMenuItem<String>(
-                  value: label.id,
-                  child: Text(label.displayName),
-                );
-              }).toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  onLabelChanged(value);
-                }
-              },
+          if (capture != null) ...[
+            const SizedBox(height: 20),
+            Text(
+              '${capture!.captureId} — ${_captureStatusLabel(capture!)}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: MainScreen.accentLight),
             ),
-          ),
+          ],
           const SizedBox(height: 28),
           Wrap(
             alignment: WrapAlignment.center,
@@ -450,13 +439,35 @@ class _HeroSection extends StatelessWidget {
               _ActionButton(
                 icon: Icons.insights,
                 label: 'Results',
-                onPressed: () => Navigator.pushNamed(context, AppRoutes.graphs),
+                onPressed: capture == null
+                    ? null
+                    : () => Navigator.pushNamed(
+                        context,
+                        AppRoutes.graphs,
+                        arguments: capture!.captureId,
+                      ),
               ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  String _captureStatusLabel(CaptureSession session) {
+    const labels = {
+      'requested': 'Capture requested',
+      'capturing': 'Capturing',
+      'waiting_for_nodes': 'Waiting for nodes',
+      'processing': 'Processing',
+      'complete': 'Results ready',
+      'acoustic_only': 'Acoustic analysis ready; model unavailable',
+      'partial': 'Partial',
+      'failed': 'Failed',
+    };
+    return labels[session.processingStage] ??
+        labels[session.status] ??
+        session.status;
   }
 }
 

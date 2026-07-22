@@ -1,32 +1,68 @@
 class CaptureSession {
   const CaptureSession({
-    required this.sessionId,
+    required this.captureId,
     required this.status,
-    required this.startedAt,
+    required this.requestedAt,
+    required this.scheduledStartAt,
     required this.durationSeconds,
-    required this.delayMs,
-    required this.nodeIds,
+    required this.completedNodes,
+    required this.missingNodes,
+    this.processingStage,
+    this.modelStatus,
   });
 
-  final String sessionId;
+  final String captureId;
   final String status;
-  final DateTime startedAt;
+  final DateTime requestedAt;
+  final DateTime scheduledStartAt;
   final int durationSeconds;
-  final int delayMs;
-  final List<String> nodeIds;
+  final List<String> completedNodes;
+  final List<String> missingNodes;
+  final String? processingStage;
+  final String? modelStatus;
 
-  factory CaptureSession.fromCaptureStartResponse(Map<String, dynamic> json) {
-    final payload = json['payload'] is Map<String, dynamic>
-        ? json['payload'] as Map<String, dynamic>
-        : <String, dynamic>{};
+  String get sessionId => captureId;
+  bool get isTerminal =>
+      const {'complete', 'partial', 'failed', 'acoustic_only'}.contains(status);
 
+  factory CaptureSession.fromJson(Map<String, dynamic> json) {
+    List<String> strings(String key) =>
+        (json[key] as List<dynamic>? ?? const [])
+            .map((value) => value.toString())
+            .toList();
+    final requested = json['requested_at']?.toString();
+    final scheduled = json['scheduled_start_at']?.toString();
     return CaptureSession(
-      sessionId: payload['request_id'] as String? ?? 'unknown',
-      status: (json['published'] as bool? ?? false) ? 'published' : 'failed',
-      startedAt: DateTime.now(),
-      durationSeconds: (payload['record_seconds'] as num?)?.toInt() ?? 0,
-      delayMs: (payload['delay_ms'] as num?)?.toInt() ?? 0,
-      nodeIds: const [],
+      captureId:
+          json['capture_id']?.toString() ??
+          json['request_id']?.toString() ??
+          'unknown',
+      status: json['status']?.toString() ?? 'requested',
+      requestedAt: DateTime.tryParse(requested ?? '') ?? DateTime.now(),
+      scheduledStartAt: DateTime.tryParse(scheduled ?? '') ?? DateTime.now(),
+      durationSeconds: (json['record_seconds'] as num?)?.toInt() ?? 0,
+      completedNodes: strings('completed_nodes'),
+      missingNodes: strings('missing_nodes'),
+      processingStage: json['processing_stage']?.toString(),
+      modelStatus: json['model_status']?.toString(),
     );
   }
+
+  factory CaptureSession.fromCaptureStartResponse(Map<String, dynamic> json) =>
+      CaptureSession.fromJson(json);
+}
+
+class CaptureCombinedResult {
+  const CaptureCombinedResult(this.json);
+  final Map<String, dynamic> json;
+  String get captureId => json['capture_id']?.toString() ?? 'unknown';
+  Map<String, dynamic> get acoustic => _map('acoustic_analysis');
+  Map<String, dynamic> get edgeImpulse => _map('edge_impulse');
+  Map<String, dynamic> get fusion => _map('fusion');
+  Map<String, dynamic> get recommendation => _map('recommendation');
+  Map<String, dynamic> _map(String key) =>
+      (json[key] as Map?)?.map(
+        (key, value) => MapEntry(key.toString(), value),
+      ) ??
+      {};
 }

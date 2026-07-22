@@ -21,18 +21,17 @@ class FakeMqttClient:
 
 
 def ble_endpoint(mqtt_client):
-    router = build_router(Settings(), object(), mqtt_client, object())
+    router = build_router(Settings(), object(), mqtt_client, object(), object())
     return next(route.endpoint for route in router.routes if route.path == "/api/ble/scan")
 
 
 @pytest.mark.asyncio
 async def test_ble_route_publishes_exact_group_command(monkeypatch):
     mqtt = FakeMqttClient()
-
     async def no_delay(_duration):
         return None
 
-    monkeypatch.setattr(routes_module.asyncio, "sleep", no_delay)
+    monkeypatch.setattr(routes_module, "_sleep", no_delay)
 
     async def fake_scan(_duration):
         return []
@@ -61,7 +60,7 @@ async def test_overlapping_scan_returns_409(monkeypatch):
         await release.wait()
         return []
 
-    monkeypatch.setattr(routes_module.asyncio, "sleep", no_delay)
+    monkeypatch.setattr(routes_module, "_sleep", no_delay)
     monkeypatch.setattr(routes_module, "scan_sdacs_nodes", blocked_scan)
     endpoint = ble_endpoint(mqtt)
     first = asyncio.create_task(endpoint())

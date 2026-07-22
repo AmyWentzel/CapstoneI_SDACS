@@ -121,13 +121,13 @@ class SdacsApiService {
   Future<CaptureSession> startCapture({
     required int delayMs,
     required int recordSeconds,
-    String? label,
+    String? validationLabel,
     String? requestId,
   }) async {
     final json = await _postJson('/api/capture/start', {
       'delay_ms': delayMs,
       'record_seconds': recordSeconds,
-      'label': ?label,
+      'validation_label': ?validationLabel,
       'request_id': ?requestId,
     });
     if (json is! Map<String, dynamic>) {
@@ -135,6 +135,41 @@ class SdacsApiService {
     }
     return CaptureSession.fromCaptureStartResponse(json);
   }
+
+  Future<CaptureSession> getCapture(String captureId) async {
+    final json = await _getJson(
+      '/api/captures/${Uri.encodeComponent(captureId)}',
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const SdacsApiException('Backend returned invalid capture status.');
+    }
+    return CaptureSession.fromJson(json);
+  }
+
+  Future<CaptureCombinedResult?> getCaptureResult(String captureId) async {
+    final uri = Uri.parse(
+      '${config.baseUrl}/api/captures/${Uri.encodeComponent(captureId)}/result',
+    );
+    try {
+      final response = await http.get(uri).timeout(_timeout);
+      if (response.statusCode == 202) return null;
+      final json = _decodeResponse(response);
+      if (json is! Map<String, dynamic>) {
+        throw const SdacsApiException(
+          'Backend returned invalid capture result.',
+        );
+      }
+      return CaptureCombinedResult(json);
+    } on TimeoutException {
+      throw SdacsApiException('Backend request timed out: $uri');
+    } on http.ClientException catch (error) {
+      throw SdacsApiException('Backend is unavailable: ${error.message}');
+    }
+  }
+
+  Uri capturePlotUri(String captureId) => Uri.parse(
+    '${config.baseUrl}/api/captures/${Uri.encodeComponent(captureId)}/plot',
+  ).replace(queryParameters: {'capture_id': captureId});
 
   Future<BleScanResult> scanBleNodes() async {
     final json = await _postJson(

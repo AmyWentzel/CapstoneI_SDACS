@@ -23,6 +23,11 @@
 #include "audio_input.h"
 
 static const char *TAG = "cmd_dispatch";
+static const uint32_t COMMAND_CAPTURE_DEFAULT_SECONDS = 60U;
+static const uint32_t COMMAND_CAPTURE_MAX_SECONDS = 600U;
+static const uint32_t BLE_ADVERTISE_DEFAULT_MS = 15000U;
+static const uint32_t BLE_ADVERTISE_MIN_MS = 1000U;
+static const uint32_t BLE_ADVERTISE_MAX_MS = 30000U;
 
 static run_storage_t *s_storage = NULL;
 static char s_node_id[32];
@@ -207,6 +212,31 @@ static bool json_copy_u32(const cJSON *obj, const char *key, uint32_t *out, bool
 
     *out = (uint32_t)item->valuedouble;
     return true;
+}
+
+static uint32_t resolve_record_seconds(const cJSON *root)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "record_seconds");
+
+    if (!cJSON_IsNumber(item) || item->valuedouble != (double)item->valueint ||
+        item->valueint < 1 || item->valueint > (int)COMMAND_CAPTURE_MAX_SECONDS) {
+        return COMMAND_CAPTURE_DEFAULT_SECONDS;
+    }
+
+    return (uint32_t)item->valueint;
+}
+
+static uint32_t resolve_ble_duration_ms(const cJSON *root)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "duration_ms");
+
+    if (!cJSON_IsNumber(item) || item->valuedouble != (double)item->valueint ||
+        item->valueint < (int)BLE_ADVERTISE_MIN_MS ||
+        item->valueint > (int)BLE_ADVERTISE_MAX_MS) {
+        return BLE_ADVERTISE_DEFAULT_MS;
+    }
+
+    return (uint32_t)item->valueint;
 }
 
 #if SDACS_ENABLE_SD_STORAGE
@@ -493,7 +523,7 @@ static void handle_i2s_diag(const cJSON *root, const char *request_id)
 static void handle_start_capture(const cJSON *root, const char *request_id)
 {
     uint32_t delay_ms = 0;
-    uint32_t record_seconds = SDACS_RECORD_SECONDS;
+    uint32_t record_seconds = resolve_record_seconds(root);
     float cal_offset_db = SDACS_CAL_OFFSET_DB;
     esp_err_t cal_err = config_store_get_cal_offset_db(&cal_offset_db);
 
@@ -537,24 +567,10 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
         return;
     }
 
-    if (!json_copy_u32(root, "record_seconds", &record_seconds, true)) {
-        publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
-                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
-                               "missing or invalid record_seconds");
-        return;
-    }
-
     ESP_LOGI(TAG, "start_capture received request_id=%s delay_ms=%u record_seconds=%u",
              request_id,
              (unsigned)delay_ms,
              (unsigned)record_seconds);
-
-    if (record_seconds == 0 || record_seconds > 3600) {
-        publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
-                               ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
-                               "invalid record_seconds");
-        return;
-    }
 
     if (delay_ms > 3600000U) {
         publish_capture_status(request_id, SDACS_MODE_ERROR, delay_ms, record_seconds, cal_offset_db,
@@ -563,7 +579,7 @@ static void handle_start_capture(const cJSON *root, const char *request_id)
         return;
     }
 
-    if (!device_state_can_start_capture()) {
+    if (!device_state_can_start_capture() || sdacs_ble_locator_is_busy()) {
         ESP_LOGW(TAG, "start_capture rejected: busy");
         publish_capture_status(request_id, device_state_get(), delay_ms, record_seconds, cal_offset_db,
                                ctx.storage_mode, ctx.sd_enabled, ctx.sd_writes_enabled,
@@ -637,7 +653,7 @@ static void handle_ota_update(const cJSON *root, const char *request_id)
         (void)json_copy_string(params, "version", version, sizeof(version));
     }
 
-    if (!device_state_can_start_ota()) {
+    if (!device_state_can_start_ota() || sdacs_ble_locator_is_busy()) {
         publish_response("ota_update", request_id, "rejected", "busy");
         return;
     }
@@ -669,24 +685,27 @@ static void handle_report_status(const char *request_id)
 
 static void handle_ble_advertise(const cJSON *root, const char *request_id)
 {
-    uint32_t duration_ms = SDACS_BLE_LOCATOR_DURATION_MS;
+    uint32_t duration_ms = resolve_ble_duration_ms(root);
 
-    if (json_copy_u32(root, "duration_ms", &duration_ms, false)) {
-        if (duration_ms == 0 || duration_ms > 60000U) {
-            publish_response("ble_advertise", request_id, "rejected", "invalid_duration_ms");
-            return;
-        }
+    if (!device_state_is_idle()) {
+        publish_response("ble_advertise", request_id, "rejected", "device_busy");
+        return;
     }
 
     esp_err_t err = sdacs_ble_locator_request_advertise(duration_ms);
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "ble_advertise rejected: BLE busy");
+        publish_response("ble_advertise", request_id, "rejected", "ble_busy");
+        return;
+    }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "ble_advertise rejected: %s", esp_err_to_name(err));
-        publish_response("ble_advertise", request_id, "rejected", esp_err_to_name(err));
+        publish_response("ble_advertise", request_id, "rejected", "start_failed");
         return;
     }
 
     ESP_LOGI(TAG, "ble_advertise accepted duration_ms=%u", (unsigned)duration_ms);
-    publish_response("ble_advertise", request_id, "accepted", "advertising_started");
+    publish_response("ble_advertise", request_id, "accepted", "ble_advertising_started");
 }
 
 static void handle_reboot(const char *request_id)

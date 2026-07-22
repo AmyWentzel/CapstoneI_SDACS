@@ -25,7 +25,8 @@ static const char *TAG = "ble_locator";
 
 static volatile bool s_ble_synced = false;
 static volatile bool s_ble_host_stopped = false;
-static volatile bool s_ble_advertise_active = false;
+static bool s_ble_advertise_active = false;
+static portMUX_TYPE s_ble_advertise_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void ble_host_task(void *param)
 {
@@ -149,8 +150,20 @@ static esp_err_t sdacs_ble_start_advertising(const char *node_id)
     adv_params.conn_mode = BLE_GAP_CONN_MODE_NON;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
+    uint8_t own_addr_type = BLE_OWN_ADDR_PUBLIC;
+    rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "No usable BLE identity address: %d", rc);
+        return ESP_FAIL;
+    }
+    rc = ble_hs_id_infer_auto(0, &own_addr_type);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Unable to infer BLE own-address type: %d", rc);
+        return ESP_FAIL;
+    }
+
     rc = ble_gap_adv_start(
-        BLE_OWN_ADDR_PUBLIC,
+        own_addr_type,
         NULL,
         BLE_HS_FOREVER,
         &adv_params,
@@ -238,8 +251,19 @@ static void ble_advertise_request_task(void *arg)
         ESP_LOGI(TAG, "MQTT requested BLE advertise complete");
     }
 
+    taskENTER_CRITICAL(&s_ble_advertise_lock);
     s_ble_advertise_active = false;
+    taskEXIT_CRITICAL(&s_ble_advertise_lock);
     vTaskDelete(NULL);
+}
+
+bool sdacs_ble_locator_is_busy(void)
+{
+    bool busy;
+    taskENTER_CRITICAL(&s_ble_advertise_lock);
+    busy = s_ble_advertise_active;
+    taskEXIT_CRITICAL(&s_ble_advertise_lock);
+    return busy;
 }
 
 esp_err_t sdacs_ble_locator_request_advertise(uint32_t duration_ms)
@@ -248,14 +272,18 @@ esp_err_t sdacs_ble_locator_request_advertise(uint32_t duration_ms)
     (void)duration_ms;
     return ESP_OK;
 #else
-    if (duration_ms == 0 || duration_ms > 60000U) {
+    if (duration_ms < 1000U || duration_ms > 30000U) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    taskENTER_CRITICAL(&s_ble_advertise_lock);
     if (s_ble_advertise_active) {
+        taskEXIT_CRITICAL(&s_ble_advertise_lock);
         return ESP_ERR_INVALID_STATE;
     }
-
     s_ble_advertise_active = true;
+    taskEXIT_CRITICAL(&s_ble_advertise_lock);
+
     BaseType_t ok = xTaskCreate(
         ble_advertise_request_task,
         "ble_adv_req",
@@ -265,7 +293,9 @@ esp_err_t sdacs_ble_locator_request_advertise(uint32_t duration_ms)
         NULL
     );
     if (ok != pdPASS) {
+        taskENTER_CRITICAL(&s_ble_advertise_lock);
         s_ble_advertise_active = false;
+        taskEXIT_CRITICAL(&s_ble_advertise_lock);
         return ESP_ERR_NO_MEM;
     }
 
