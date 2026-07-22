@@ -1,10 +1,12 @@
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from .config import Settings
-from .models import CaptureStartRequest, CommandRequest, PublishResult
+from .ble_scanner import BleScanError, scan_sdacs_nodes
+from .models import BleScanResponse, CaptureStartRequest, CommandRequest, PublishResult
 from .mqtt_client import SdacsMqttClient
 from .state_store import StateStore
 from .websocket_manager import WebSocketManager
@@ -17,6 +19,7 @@ def build_router(
     websocket_manager: WebSocketManager,
 ) -> APIRouter:
     router = APIRouter()
+    ble_scan_lock = asyncio.Lock()
 
     @router.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -65,6 +68,41 @@ def build_router(
             payload["label"] = request.label
         published = mqtt_client.publish_json(settings.command_topic_all, payload)
         return PublishResult(topic=settings.command_topic_all, payload=payload, published=published)
+
+    @router.post("/api/ble/scan", response_model=BleScanResponse)
+    async def scan_ble() -> BleScanResponse:
+        if ble_scan_lock.locked():
+            raise HTTPException(status_code=409, detail="A BLE scan is already running")
+
+        async with ble_scan_lock:
+            started = datetime.now(timezone.utc)
+            request_id = f"ble_scan_{started.strftime('%Y%m%dT%H%M%S%fZ')}"
+            payload = {
+                "cmd": "ble_advertise",
+                "request_id": request_id,
+                "duration_ms": 15000,
+            }
+            if not mqtt_client.publish_json(settings.command_topic_all, payload):
+                raise HTTPException(status_code=503, detail="MQTT BLE command publish failed")
+
+            await asyncio.sleep(1.0)
+            try:
+                nodes = await asyncio.wait_for(scan_sdacs_nodes(8.0), timeout=10.0)
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(status_code=504, detail="BLE scan timed out") from exc
+            except BleScanError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+            completed = datetime.now(timezone.utc)
+            return BleScanResponse(
+                request_id=request_id,
+                status="complete",
+                started_at=started.isoformat(),
+                completed_at=completed.isoformat(),
+                scan_duration_seconds=8.0,
+                detected_count=len(nodes),
+                nodes=nodes,
+            )
 
     @router.post("/api/nodes/{node_id}/command")
     async def node_command(node_id: str, request: CommandRequest) -> PublishResult:

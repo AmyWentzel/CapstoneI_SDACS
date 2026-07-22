@@ -9,6 +9,7 @@
 #include "esp_system.h"
 
 #include "capture_task.h"
+#include "ble_locator.h"
 #include "device_state.h"
 #include "ota_manager.h"
 #include "sdacs_config.h"
@@ -17,6 +18,9 @@
 static const char *TAG = "cmd_dispatch";
 static const uint32_t COMMAND_CAPTURE_DEFAULT_SECONDS = 60;
 static const uint32_t COMMAND_CAPTURE_MAX_SECONDS = 600;
+static const uint32_t BLE_ADVERTISE_DEFAULT_MS = 15000;
+static const uint32_t BLE_ADVERTISE_MIN_MS = 1000;
+static const uint32_t BLE_ADVERTISE_MAX_MS = 30000;
 
 static run_storage_t *s_storage = NULL;
 static char s_node_id[32];
@@ -174,6 +178,33 @@ static void handle_ota_update(const cJSON *root, const char *request_id)
     publish_response("ota_update", request_id, "accepted", "ota_started");
 }
 
+static uint32_t resolve_ble_duration_ms(const cJSON *root)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "duration_ms");
+    if (!cJSON_IsNumber(item) || item->valuedouble != (double)item->valueint ||
+        item->valueint < (int)BLE_ADVERTISE_MIN_MS ||
+        item->valueint > (int)BLE_ADVERTISE_MAX_MS) {
+        return BLE_ADVERTISE_DEFAULT_MS;
+    }
+    return (uint32_t)item->valueint;
+}
+
+static void handle_ble_advertise(const cJSON *root, const char *request_id)
+{
+    if (!device_state_is_idle()) {
+        publish_response("ble_advertise", request_id, "rejected", "device_busy");
+        return;
+    }
+    esp_err_t err = sdacs_ble_locator_start_async(resolve_ble_duration_ms(root));
+    if (err == ESP_ERR_INVALID_STATE) {
+        publish_response("ble_advertise", request_id, "rejected", "ble_busy");
+    } else if (err != ESP_OK) {
+        publish_response("ble_advertise", request_id, "rejected", "start_failed");
+    } else {
+        publish_response("ble_advertise", request_id, "accepted", "ble_advertising_started");
+    }
+}
+
 static void handle_report_status(const char *request_id)
 {
     (void)wifi_mqtt_publish_heartbeat("online");
@@ -241,6 +272,8 @@ void command_dispatcher_handle(const char *topic, const char *payload, int len)
         handle_start_capture(root, request_id);
     } else if (strcmp(cmd, "ota_update") == 0) {
         handle_ota_update(root, request_id);
+    } else if (strcmp(cmd, "ble_advertise") == 0) {
+        handle_ble_advertise(root, request_id);
     } else if (strcmp(cmd, "report_status") == 0) {
         handle_report_status(request_id);
     } else if (strcmp(cmd, "reboot") == 0) {

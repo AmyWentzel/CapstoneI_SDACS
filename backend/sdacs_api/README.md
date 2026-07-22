@@ -102,3 +102,28 @@ Invoke-RestMethod -Method Post http://localhost:8000/api/capture/start `
 ```
 
 This phase intentionally keeps state in memory and does not add SQLite.
+
+## Raspberry Pi BLE scanning
+
+`POST /api/ble/scan` must run on the Raspberry Pi (or another host that
+physically owns the scanning Bluetooth adapter). Flutter never accesses
+Bluetooth hardware directly.
+
+```bash
+sudo systemctl enable --now bluetooth
+systemctl status bluetooth --no-pager
+rfkill list bluetooth
+bluetoothctl list
+python3 -m pip install -r requirements.txt
+sudo systemctl restart sdacs-api
+curl -X POST http://127.0.0.1:8000/api/ble/scan
+```
+
+If `rfkill` reports a blocked adapter, run `sudo rfkill unblock bluetooth`.
+FastAPI itself does not invoke `sudo`; its service account must be able to use
+BlueZ over the system D-Bus. Adapter, BlueZ/D-Bus, permission, timeout, and MQTT
+publish failures are returned as HTTP errors rather than empty successful scans.
+
+The endpoint publishes `ble_advertise` to `sdacs/group/all/cmd`, waits one
+second, scans for eight seconds, and returns only detected `SDACS-node01`
+through `SDACS-node04` devices with median `ble_rssi_dbm` values.

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_routes.dart';
 import '../../config/backend_config.dart';
+import '../../models/ble_scan_result.dart';
 import '../../models/calibration_result.dart';
 import '../../models/node_telemetry.dart';
 import '../../services/sdacs_api_service.dart';
@@ -33,6 +34,7 @@ class _MainScreenState extends State<MainScreen> {
   static const int _synchronizedStartDelayMs = 5000;
 
   final Map<String, NodeTelemetry> _nodesById = {};
+  final Map<String, BleNodeScanResult> _bleResultsByNodeId = {};
 
   String _selectedCaptureLabelId = 'speech';
 
@@ -43,6 +45,8 @@ class _MainScreenState extends State<MainScreen> {
   bool _isLoading = true;
   bool _backendOnline = false;
   bool _isSubmittingTest = false;
+  bool _isBleScanning = false;
+  DateTime? _lastBleScanAt;
   String? _errorMessage;
 
   List<NodeTelemetry> get _nodes {
@@ -173,6 +177,33 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  Future<void> _scanBleNodes(BuildContext context) async {
+    final apiService = _apiService;
+    if (apiService == null || _isBleScanning) return;
+    setState(() => _isBleScanning = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final result = await apiService.scanBleNodes();
+      if (!mounted || apiService != _apiService) return;
+      setState(() {
+        _bleResultsByNodeId
+          ..clear()
+          ..addEntries(result.nodes.map((node) => MapEntry(node.nodeId, node)));
+        _lastBleScanAt = result.completedAt;
+      });
+      final message = result.detectedCount == 0
+          ? 'BLE scan complete: no SDACS nodes detected.'
+          : 'BLE scan complete: ${result.detectedCount} nodes detected.';
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } on SdacsApiException catch (error) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('BLE scan failed: ${error.message}')),
+      );
+    } finally {
+      if (mounted) setState(() => _isBleScanning = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final nodes = _nodes;
@@ -231,6 +262,8 @@ class _MainScreenState extends State<MainScreen> {
                         },
                         onStartTest: () => _startTest(context),
                         isSubmittingTest: _isSubmittingTest,
+                        onScanBle: () => _scanBleNodes(context),
+                        isBleScanning: _isBleScanning,
                       ),
                       if (_errorMessage != null) ...[
                         const SizedBox(height: 16),
@@ -247,7 +280,11 @@ class _MainScreenState extends State<MainScreen> {
                               children: [
                                 Expanded(
                                   flex: 7,
-                                  child: _RoomMap(nodes: nodes),
+                                  child: _RoomMap(
+                                    nodes: nodes,
+                                    bleResultsByNodeId: _bleResultsByNodeId,
+                                    hasBleScan: _lastBleScanAt != null,
+                                  ),
                                 ),
                                 const SizedBox(width: 22),
                                 Expanded(
@@ -261,7 +298,11 @@ class _MainScreenState extends State<MainScreen> {
                             )
                           : Column(
                               children: [
-                                _RoomMap(nodes: nodes),
+                                _RoomMap(
+                                  nodes: nodes,
+                                  bleResultsByNodeId: _bleResultsByNodeId,
+                                  hasBleScan: _lastBleScanAt != null,
+                                ),
                                 const SizedBox(height: 22),
                                 _SystemPanel(
                                   nodes: nodes,
@@ -289,12 +330,16 @@ class _HeroSection extends StatelessWidget {
     required this.onLabelChanged,
     required this.onStartTest,
     required this.isSubmittingTest,
+    required this.onScanBle,
+    required this.isBleScanning,
   });
 
   final String selectedLabelId;
   final ValueChanged<String> onLabelChanged;
   final VoidCallback onStartTest;
   final bool isSubmittingTest;
+  final VoidCallback onScanBle;
+  final bool isBleScanning;
 
   @override
   Widget build(BuildContext context) {
@@ -397,6 +442,12 @@ class _HeroSection extends StatelessWidget {
                 onPressed: isSubmittingTest ? null : onStartTest,
               ),
               _ActionButton(
+                icon: Icons.bluetooth_searching,
+                label: isBleScanning ? 'Scanning...' : 'Bluetooth RSSI',
+                onPressed: isBleScanning ? null : onScanBle,
+                showProgress: isBleScanning,
+              ),
+              _ActionButton(
                 icon: Icons.insights,
                 label: 'Results',
                 onPressed: () => Navigator.pushNamed(context, AppRoutes.graphs),
@@ -415,12 +466,14 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.filled = false,
+    this.showProgress = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
   final bool filled;
+  final bool showProgress;
 
   @override
   Widget build(BuildContext context) {
@@ -433,7 +486,12 @@ class _ActionButton extends StatelessWidget {
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(horizontal: 22),
               ),
-              icon: Icon(icon),
+              icon: showProgress
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(icon),
               label: Text(label),
               onPressed: onPressed,
             )
@@ -445,7 +503,12 @@ class _ActionButton extends StatelessWidget {
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 22),
               ),
-              icon: Icon(icon),
+              icon: showProgress
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(icon),
               label: Text(label),
               onPressed: onPressed,
             ),
@@ -454,9 +517,15 @@ class _ActionButton extends StatelessWidget {
 }
 
 class _RoomMap extends StatelessWidget {
-  const _RoomMap({required this.nodes});
+  const _RoomMap({
+    required this.nodes,
+    required this.bleResultsByNodeId,
+    required this.hasBleScan,
+  });
 
   final List<NodeTelemetry> nodes;
+  final Map<String, BleNodeScanResult> bleResultsByNodeId;
+  final bool hasBleScan;
 
   @override
   Widget build(BuildContext context) {
@@ -507,13 +576,13 @@ class _RoomMap extends StatelessWidget {
           ),
           const Positioned(top: 265, child: _SpeakerSource()),
           if (nodes.isNotEmpty)
-            Positioned(top: 135, left: 85, child: _MapNode(node: nodes[0])),
+            Positioned(top: 135, left: 85, child: _mapNode(nodes[0])),
           if (nodes.length > 1)
-            Positioned(top: 135, right: 85, child: _MapNode(node: nodes[1])),
+            Positioned(top: 135, right: 85, child: _mapNode(nodes[1])),
           if (nodes.length > 2)
-            Positioned(bottom: 88, left: 85, child: _MapNode(node: nodes[2])),
+            Positioned(bottom: 88, left: 85, child: _mapNode(nodes[2])),
           if (nodes.length > 3)
-            Positioned(bottom: 88, right: 85, child: _MapNode(node: nodes[3])),
+            Positioned(bottom: 88, right: 85, child: _mapNode(nodes[3])),
           if (nodes.isEmpty)
             const Center(
               child: Text(
@@ -526,6 +595,12 @@ class _RoomMap extends StatelessWidget {
       ),
     );
   }
+
+  Widget _mapNode(NodeTelemetry node) => _MapNode(
+    node: node,
+    bleResult: bleResultsByNodeId[node.nodeId],
+    hasBleScan: hasBleScan,
+  );
 }
 
 class _SpeakerSource extends StatelessWidget {
@@ -566,9 +641,19 @@ class _SpeakerSource extends StatelessWidget {
 }
 
 class _MapNode extends StatelessWidget {
-  const _MapNode({required this.node});
+  const _MapNode({
+    required this.node,
+    required this.bleResult,
+    required this.hasBleScan,
+  });
 
   final NodeTelemetry node;
+  final BleNodeScanResult? bleResult;
+  final bool hasBleScan;
+
+  String get bleRssiText => bleResult == null
+      ? (hasBleScan ? 'BLE RSSI: Not detected' : 'BLE RSSI: Not scanned')
+      : 'BLE RSSI: ${bleResult!.bleRssiDbm} dBm';
 
   Color get splColor {
     if (node.dbSpl >= 75) return const Color(0xFFFF6B6B);
@@ -588,7 +673,7 @@ class _MapNode extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message:
-          '${node.nodeId}: ${node.dbSpl} dB SPL, ${node.peakFrequencyHz} Hz peak',
+          '${node.nodeId}: ${node.dbSpl} dB SPL, ${node.peakFrequencyHz} Hz peak; $bleRssiText',
       child: Container(
         width: 152,
         padding: const EdgeInsets.all(15),
@@ -617,6 +702,12 @@ class _MapNode extends StatelessWidget {
             Text(
               '${node.peakFrequencyHz} Hz peak',
               style: const TextStyle(color: MainScreen.textMuted, fontSize: 12),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              bleRssiText,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: MainScreen.textMuted, fontSize: 11),
             ),
             const SizedBox(height: 10),
             LinearProgressIndicator(

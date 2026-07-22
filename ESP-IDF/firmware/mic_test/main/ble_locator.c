@@ -25,6 +25,8 @@ static const char *TAG = "ble_locator";
 
 static volatile bool s_ble_synced = false;
 static volatile bool s_ble_host_stopped = false;
+static bool s_ble_busy = false;
+static portMUX_TYPE s_ble_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void ble_host_task(void *param)
 {
@@ -120,8 +122,20 @@ static esp_err_t sdacs_ble_start_advertising(void)
     adv_params.conn_mode = BLE_GAP_CONN_MODE_NON;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
+    uint8_t own_addr_type;
+    rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "No usable BLE identity address: %d", rc);
+        return ESP_FAIL;
+    }
+    rc = ble_hs_id_infer_auto(0, &own_addr_type);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Unable to select BLE own-address type: %d", rc);
+        return ESP_FAIL;
+    }
+
     rc = ble_gap_adv_start(
-        BLE_OWN_ADDR_PUBLIC,
+        own_addr_type,
         NULL,
         BLE_HS_FOREVER,
         &adv_params,
@@ -136,6 +150,53 @@ static esp_err_t sdacs_ble_start_advertising(void)
 
     ESP_LOGI(TAG, "BLE advertising as %s", device_name);
     return ESP_OK;
+}
+
+bool sdacs_ble_locator_is_busy(void)
+{
+    bool busy;
+    taskENTER_CRITICAL(&s_ble_lock);
+    busy = s_ble_busy;
+    taskEXIT_CRITICAL(&s_ble_lock);
+    return busy;
+}
+
+static void ble_locator_task(void *param)
+{
+    uint32_t duration_ms = (uint32_t)(uintptr_t)param;
+    esp_err_t err = sdacs_ble_locator_advertise_for(duration_ms);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Asynchronous BLE advertisement failed: %s", esp_err_to_name(err));
+    }
+    taskENTER_CRITICAL(&s_ble_lock);
+    s_ble_busy = false;
+    taskEXIT_CRITICAL(&s_ble_lock);
+    vTaskDelete(NULL);
+}
+
+esp_err_t sdacs_ble_locator_start_async(uint32_t duration_ms)
+{
+#if !SDACS_BLE_LOCATOR_ENABLED
+    (void)duration_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    taskENTER_CRITICAL(&s_ble_lock);
+    if (s_ble_busy) {
+        taskEXIT_CRITICAL(&s_ble_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_ble_busy = true;
+    taskEXIT_CRITICAL(&s_ble_lock);
+
+    if (xTaskCreate(ble_locator_task, "ble_locator", 6144,
+                    (void *)(uintptr_t)duration_ms, 5, NULL) != pdPASS) {
+        taskENTER_CRITICAL(&s_ble_lock);
+        s_ble_busy = false;
+        taskEXIT_CRITICAL(&s_ble_lock);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+#endif
 }
 
 esp_err_t sdacs_ble_locator_advertise_for(uint32_t duration_ms)

@@ -78,5 +78,23 @@ class PublishResult(BaseModel):
     published: bool
 
 
+class BleNodeScanResult(BaseModel):
+    node_id: str
+    ble_rssi_dbm: int
+    address: str
+    local_name: str
+    seen: bool = True
+
+
+class BleScanResponse(BaseModel):
+    request_id: str
+    status: Literal["complete"]
+    started_at: str
+    completed_at: str
+    scan_duration_seconds: float
+    detected_count: int
+    nodes: list[BleNodeScanResult]
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

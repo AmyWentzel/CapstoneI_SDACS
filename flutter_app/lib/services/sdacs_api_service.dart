@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config/backend_config.dart';
+import '../models/ble_scan_result.dart';
 import '../models/capture_session.dart';
 import '../models/node_telemetry.dart';
 
@@ -20,6 +21,7 @@ class SdacsApiService {
   const SdacsApiService({this.config = const BackendConfig()});
 
   static const Duration _timeout = Duration(seconds: 5);
+  static const Duration _bleScanTimeout = Duration(seconds: 20);
 
   final BackendConfig config;
 
@@ -134,6 +136,26 @@ class SdacsApiService {
     return CaptureSession.fromCaptureStartResponse(json);
   }
 
+  Future<BleScanResult> scanBleNodes() async {
+    final json = await _postJson(
+      '/api/ble/scan',
+      const {},
+      timeout: _bleScanTimeout,
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const SdacsApiException('Backend returned invalid BLE scan data.');
+    }
+    try {
+      return BleScanResult.fromJson(json);
+    } on FormatException catch (error) {
+      throw SdacsApiException(
+        'Backend returned invalid BLE scan data: ${error.message}',
+      );
+    } on TypeError {
+      throw const SdacsApiException('Backend returned invalid BLE scan data.');
+    }
+  }
+
   Future<Map<String, dynamic>> sendNodeCommand(
     String nodeId,
     String command,
@@ -162,7 +184,11 @@ class SdacsApiService {
     }
   }
 
-  Future<dynamic> _postJson(String path, Map<String, dynamic> body) async {
+  Future<dynamic> _postJson(
+    String path,
+    Map<String, dynamic> body, {
+    Duration timeout = _timeout,
+  }) async {
     final uri = Uri.parse('${config.baseUrl}$path');
     try {
       final response = await http
@@ -171,7 +197,7 @@ class SdacsApiService {
             headers: const {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(_timeout);
+          .timeout(timeout);
       return _decodeResponse(response);
     } on TimeoutException {
       throw SdacsApiException('Backend request timed out: $uri');
@@ -184,8 +210,17 @@ class SdacsApiService {
 
   dynamic _decodeResponse(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      var detail = response.body;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['detail'] != null) {
+          detail = decoded['detail'].toString();
+        }
+      } on FormatException {
+        // Preserve a non-JSON backend error body.
+      }
       throw SdacsApiException(
-        'Backend returned HTTP ${response.statusCode}: ${response.body}',
+        'Backend returned HTTP ${response.statusCode}: $detail',
       );
     }
     if (response.body.isEmpty) {

@@ -11,6 +11,7 @@ idf_component_register(
         "app_main.c"
        
         "audio_input.c"
+        "ble_locator.c"
         "capture_task.c"
         "command_dispatcher.c"
         "device_state.c"
@@ -33,6 +34,7 @@ idf_component_register(
         esp_https_ota
         app_update
         json
+        bt
     PRIV_REQUIRES
         driver
         esp_driver_i2s
