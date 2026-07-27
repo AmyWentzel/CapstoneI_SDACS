@@ -12,6 +12,7 @@ from .capture_store import CaptureStore
 from .config import Settings
 from .edge_impulse import ConfiguredEdgeImpulseRunner, EdgeImpulseRunner
 from .models import TelemetryUpdate
+from .room_layout import RoomLayout, RoomLayoutStore
 
 
 CAPTURE_ID_PATTERN = re.compile(r"^capture_[A-Za-z0-9_-]{1,80}$")
@@ -29,6 +30,7 @@ class CaptureService:
         self.settings = settings
         self.store = CaptureStore(settings.sqlite_path)
         self.runner = runner or ConfiguredEdgeImpulseRunner(settings)
+        self.layouts = RoomLayoutStore(settings.sqlite_path)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processing: set[str] = set()
@@ -37,6 +39,7 @@ class CaptureService:
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
         self.store.initialize()
+        self.layouts.initialize()
         for session in self.store.list_sessions():
             if session["status"] not in TERMINAL_STATUSES:
                 session["status"] = "failed"
@@ -68,6 +71,10 @@ class CaptureService:
         self._save(session)
         directory = self.directory(capture_id)
         directory.mkdir(parents=True, exist_ok=False)
+        layout_snapshot = self.layouts.snapshot(self.layouts.get(), capture_id)
+        atomic_json(directory / "room_layout.json", layout_snapshot)
+        session["artifacts"]["room_layout"] = "room_layout.json"
+        self._save(session)
         self._write_manifest(session)
         timeout = delay_ms / 1000 + record_seconds + self.settings.capture_completion_grace_seconds
         if self._loop:
@@ -132,6 +139,12 @@ class CaptureService:
     def health(self) -> dict[str, Any]:
         return self.runner.health()
 
+    def get_layout(self) -> RoomLayout:
+        return self.layouts.get()
+
+    def save_layout(self, layout: RoomLayout) -> RoomLayout:
+        return self.layouts.save(layout)
+
     async def _wait_then_process(self, capture_id: str, timeout: float) -> None:
         await asyncio.sleep(timeout)
         self._schedule_processing(capture_id)
@@ -171,7 +184,7 @@ class CaptureService:
         self._save(session)
         directory = self.directory(capture_id)
         telemetry = self.store.telemetry(capture_id)
-        acoustic = acoustic_analysis(capture_id, telemetry, directory)
+        acoustic = acoustic_analysis(capture_id, telemetry, directory, directory / "room_layout.json")
         session["artifacts"].update(acoustic_input="acoustic_input.csv", acoustic_summary="acoustic_summary.json")
         if (directory / "acoustic_map.png").is_file():
             session["artifacts"]["plot"] = "acoustic_map.png"

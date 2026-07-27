@@ -12,6 +12,7 @@ from .ble_scanner import BleScanError, scan_sdacs_nodes
 from .models import BleScanResponse, CaptureStartRequest, CaptureStartResponse, CommandRequest, PublishResult
 from .mqtt_client import SdacsMqttClient
 from .state_store import StateStore
+from .room_layout import RoomLayout
 from .websocket_manager import WebSocketManager
 
 _sleep = asyncio.sleep
@@ -64,6 +65,17 @@ def build_router(
     @router.get("/api/captures")
     async def list_captures() -> list[dict[str, Any]]:
         return capture_service.list()
+
+    @router.get("/api/layout", response_model=RoomLayout)
+    async def get_layout() -> RoomLayout:
+        return capture_service.get_layout()
+
+    @router.put("/api/layout", response_model=RoomLayout)
+    async def put_layout(layout: RoomLayout) -> RoomLayout:
+        try:
+            return capture_service.save_layout(layout)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/api/test/start", response_model=CaptureStartResponse)
     @router.post("/api/capture/start", response_model=CaptureStartResponse)

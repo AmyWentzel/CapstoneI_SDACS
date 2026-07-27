@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.capture_processing import MODEL_FEATURES, build_model_input, fuse
+from app.capture_processing import MODEL_FEATURES, acoustic_analysis, atomic_json, build_model_input, fuse
 from app.capture_service import CaptureService, validate_capture_id
 from app.config import Settings
 from app.edge_impulse import ConfiguredEdgeImpulseRunner, TestStubEdgeImpulseRunner
@@ -95,3 +95,34 @@ def test_model_unavailable_combination_is_acoustic_only():
 def test_capture_id_rejects_traversal():
     with pytest.raises(ValueError):
         validate_capture_id("capture_../../secret")
+
+
+def test_acoustic_summary_contains_capture_wide_per_node_metrics(tmp_path):
+    layout = {
+        "capture_id": "capture_metrics", "layout_revision": 2,
+        "coordinate_system": "room_upper_left_x_right_y_down", "units": "meters",
+        "source": {"x_m": 2.5, "y_m": 2.0, "z_m": 1.2},
+        "nodes": {
+            f"node0{i}": {"normalized_x": i / 10, "normalized_y": i / 8,
+                         "x_m": float(i), "y_m": float(i + 1), "z_m": 1.2}
+            for i in range(1, 5)
+        },
+    }
+    layout_path = tmp_path / "room_layout.json"
+    atomic_json(layout_path, layout)
+    rows = []
+    for i in range(1, 5):
+        for sample in range(3):
+            rows.append({
+                "record_type": "features", "node_id": f"node0{i}",
+                "rms": 0.00001 * (i + sample), "dbfs": -90 + i + sample,
+                "db_spl": 30 + i + sample, "f_peak_hz": 100 + i + sample,
+            })
+    rows[0]["rms"] = None
+    summary = acoustic_analysis("capture_metrics", rows, tmp_path, layout_path)
+    assert set(summary["node_metrics"]) == {"node01", "node02", "node03", "node04"}
+    assert summary["node_metrics"]["node01"]["sample_count"] == 3
+    assert summary["node_metrics"]["node01"]["mean_rms"] is not None
+    assert summary["node_metrics"]["node02"]["mean_dbfs"] != summary["node_metrics"]["node03"]["mean_dbfs"]
+    assert summary["node_metrics"]["node04"]["x_position_m"] == 4.0
+    assert summary["node_metrics"]["node01"]["warnings"]
