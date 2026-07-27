@@ -1,3 +1,26 @@
+import 'node_telemetry.dart';
+
+bool isCurrentBleScanRequest(int responseRequestId, int latestRequestId) =>
+    responseRequestId == latestRequestId;
+
+Map<String, NodeTelemetry> mergeBleScanIntoLiveNodes(
+  Map<String, NodeTelemetry> current,
+  BleScanResult result,
+) {
+  final merged = <String, NodeTelemetry>{...current};
+  for (final node in result.nodes) {
+    final update = NodeTelemetry.fromJson({
+      'node_id': node.nodeId,
+      'ble_rssi_dbm': node.bleRssiDbm,
+      'ble_address': node.address,
+      'ble_seen_count': node.seen ? 1 : 0,
+      'ble_scan_timestamp': result.completedAt.toIso8601String(),
+    });
+    merged[update.nodeId] = merged[update.nodeId]?.merge(update) ?? update;
+  }
+  return merged;
+}
+
 class BleNodeScanResult {
   const BleNodeScanResult({
     required this.nodeId,
@@ -9,7 +32,7 @@ class BleNodeScanResult {
 
   factory BleNodeScanResult.fromJson(Map<String, dynamic> json) {
     return BleNodeScanResult(
-      nodeId: json['node_id'] as String,
+      nodeId: NodeTelemetry.fromJson({'node_id': json['node_id']}).nodeId,
       bleRssiDbm: (json['ble_rssi_dbm'] as num).toInt(),
       address: json['address'] as String,
       localName: json['local_name'] as String,

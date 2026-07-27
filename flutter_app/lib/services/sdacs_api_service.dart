@@ -7,6 +7,7 @@ import '../config/backend_config.dart';
 import '../models/ble_scan_result.dart';
 import '../models/capture_session.dart';
 import '../models/node_telemetry.dart';
+import '../models/room_layout.dart';
 
 class SdacsApiException implements Exception {
   const SdacsApiException(this.message);
@@ -24,6 +25,18 @@ class SdacsApiService {
   static const Duration _bleScanTimeout = Duration(seconds: 20);
 
   final BackendConfig config;
+
+  static bool isValidCaptureId(String? value) =>
+      value != null &&
+      RegExp(r'^capture_[A-Za-z0-9_-]{1,80}$').hasMatch(value.trim());
+
+  static String requireCaptureId(String? value) {
+    final captureId = value?.trim();
+    if (!isValidCaptureId(captureId)) {
+      throw const SdacsApiException('A valid capture ID is required.');
+    }
+    return captureId!;
+  }
 
   Future<bool> checkBackendHealth() async {
     for (final path in const ['/health', '/api/health']) {
@@ -133,20 +146,66 @@ class SdacsApiService {
     if (json is! Map<String, dynamic>) {
       throw const SdacsApiException('Backend returned invalid capture data.');
     }
-    return CaptureSession.fromCaptureStartResponse(json);
+    final session = CaptureSession.fromCaptureStartResponse(json);
+    requireCaptureId(session.captureId);
+    return session;
+  }
+
+  Future<RoomLayout> getRoomLayout() async {
+    dynamic json;
+    try {
+      json = await _getJson('/api/layout');
+    } on SdacsApiException catch (error) {
+      if (error.message.contains('HTTP 404')) {
+        throw const SdacsApiException(
+          'Room layout API is not available on the deployed backend.',
+        );
+      }
+      rethrow;
+    }
+    if (json is! Map<String, dynamic>) {
+      throw const SdacsApiException('Backend returned an invalid room layout.');
+    }
+    return RoomLayout.fromJson(json);
+  }
+
+  Future<RoomLayout> saveRoomLayout(RoomLayout layout) async {
+    dynamic json;
+    try {
+      json = await _putJson('/api/layout', layout.toJson());
+    } on SdacsApiException catch (error) {
+      if (error.message.contains('HTTP 404')) {
+        throw const SdacsApiException(
+          'Room layout API is not available on the deployed backend.',
+        );
+      }
+      rethrow;
+    }
+    if (json is! Map<String, dynamic>) {
+      throw const SdacsApiException('Backend returned an invalid room layout.');
+    }
+    return RoomLayout.fromJson(json);
   }
 
   Future<CaptureSession> getCapture(String captureId) async {
+    captureId = requireCaptureId(captureId);
     final json = await _getJson(
       '/api/captures/${Uri.encodeComponent(captureId)}',
     );
     if (json is! Map<String, dynamic>) {
       throw const SdacsApiException('Backend returned invalid capture status.');
     }
-    return CaptureSession.fromJson(json);
+    final session = CaptureSession.fromJson(json);
+    if (session.captureId != captureId) {
+      throw const SdacsApiException(
+        'Backend returned a different capture session.',
+      );
+    }
+    return session;
   }
 
   Future<CaptureCombinedResult?> getCaptureResult(String captureId) async {
+    captureId = requireCaptureId(captureId);
     final uri = Uri.parse(
       '${config.baseUrl}/api/captures/${Uri.encodeComponent(captureId)}/result',
     );
@@ -159,7 +218,13 @@ class SdacsApiService {
           'Backend returned invalid capture result.',
         );
       }
-      return CaptureCombinedResult(json);
+      final result = CaptureCombinedResult(json);
+      if (result.captureId != captureId) {
+        throw const SdacsApiException(
+          'Backend returned a result for a different capture.',
+        );
+      }
+      return result;
     } on TimeoutException {
       throw SdacsApiException('Backend request timed out: $uri');
     } on http.ClientException catch (error) {
@@ -167,9 +232,12 @@ class SdacsApiService {
     }
   }
 
-  Uri capturePlotUri(String captureId) => Uri.parse(
-    '${config.baseUrl}/api/captures/${Uri.encodeComponent(captureId)}/plot',
-  ).replace(queryParameters: {'capture_id': captureId});
+  Uri capturePlotUri(String captureId, {int? cacheBust}) {
+    captureId = requireCaptureId(captureId);
+    return Uri.parse(
+      '${config.baseUrl}/api/captures/${Uri.encodeComponent(captureId)}/plot',
+    ).replace(queryParameters: cacheBust == null ? null : {'v': '$cacheBust'});
+  }
 
   Future<BleScanResult> scanBleNodes() async {
     final json = await _postJson(
@@ -240,6 +308,24 @@ class SdacsApiService {
       throw SdacsApiException('Backend is unavailable: ${error.message}');
     } on FormatException {
       throw SdacsApiException('Backend returned invalid JSON: $uri');
+    }
+  }
+
+  Future<dynamic> _putJson(String path, Map<String, dynamic> body) async {
+    final uri = Uri.parse('${config.baseUrl}$path');
+    try {
+      final response = await http
+          .put(
+            uri,
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+          )
+          .timeout(_timeout);
+      return _decodeResponse(response);
+    } on TimeoutException {
+      throw SdacsApiException('Backend request timed out: $uri');
+    } on http.ClientException catch (error) {
+      throw SdacsApiException('Backend is unavailable: ${error.message}');
     }
   }
 

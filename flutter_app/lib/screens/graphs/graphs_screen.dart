@@ -7,8 +7,24 @@ import '../../models/capture_session.dart';
 import '../../services/sdacs_api_service.dart';
 import '../../widgets/sdacs_app_bar.dart';
 
+class CaptureResultsArguments {
+  const CaptureResultsArguments({required this.captureId});
+  final String captureId;
+}
+
 class GraphsScreen extends StatefulWidget {
-  const GraphsScreen({super.key});
+  const GraphsScreen({
+    super.key,
+    this.arguments,
+    this.service,
+    this.plotBuilder,
+    this.pollInterval = const Duration(seconds: 3),
+  });
+
+  final CaptureResultsArguments? arguments;
+  final SdacsApiService? service;
+  final Widget Function(Uri uri)? plotBuilder;
+  final Duration pollInterval;
 
   @override
   State<GraphsScreen> createState() => _GraphsScreenState();
@@ -16,113 +32,579 @@ class GraphsScreen extends StatefulWidget {
 
 class _GraphsScreenState extends State<GraphsScreen> {
   Timer? _pollTimer;
+  SdacsApiService? _service;
   String? _captureId;
   CaptureSession? _session;
   CaptureCombinedResult? _result;
   String? _error;
+  bool _loading = false;
+  int _requestCycle = 0;
+  int _plotVersion = DateTime.now().millisecondsSinceEpoch;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final captureId = ModalRoute.of(context)?.settings.arguments as String?;
-    if (captureId == null || captureId == _captureId) return;
-    _captureId = captureId;
+    _service ??=
+        widget.service ??
+        SdacsApiService(config: BackendConfigScope.configOf(context));
+    final routeArgument = ModalRoute.of(context)?.settings.arguments;
+    final arguments =
+        widget.arguments ??
+        (routeArgument is CaptureResultsArguments ? routeArgument : null);
+    final candidate = arguments?.captureId.trim();
+    if (candidate == _captureId) return;
     _pollTimer?.cancel();
-    unawaited(_refresh());
-    _pollTimer = Timer.periodic(
-      const Duration(seconds: 3),
-      (_) => unawaited(_refresh()),
-    );
+    _captureId = SdacsApiService.isValidCaptureId(candidate) ? candidate : null;
+    _session = null;
+    _result = null;
+    _error = candidate == null || candidate.isEmpty
+        ? null
+        : 'The capture ID is invalid.';
+    if (_captureId != null) unawaited(_refresh());
   }
 
   @override
   void dispose() {
+    _requestCycle++;
     _pollTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _refresh() async {
+    final service = _service;
     final captureId = _captureId;
-    if (captureId == null) return;
-    final service = SdacsApiService(
-      config: BackendConfigScope.configOf(context),
-    );
+    if (service == null || captureId == null || _loading) return;
+    final cycle = ++_requestCycle;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final session = await service.getCapture(captureId);
-      final result = session.isTerminal
-          ? await service.getCaptureResult(captureId)
-          : null;
-      if (!mounted || captureId != _captureId) return;
+      if (session.captureId != captureId) {
+        throw const SdacsApiException(
+          'Backend returned a different capture session.',
+        );
+      }
+      if (!_isCurrent(cycle, captureId)) return;
+      setState(() => _session = session);
+      CaptureCombinedResult? result;
+      if (session.isTerminal && session.status != 'failed') {
+        result = await service.getCaptureResult(captureId);
+        if (result != null && result.captureId != captureId) {
+          throw const SdacsApiException(
+            'Backend returned a result for a different capture.',
+          );
+        }
+        if (!_isCurrent(cycle, captureId)) return;
+      }
       setState(() {
         _session = session;
         _result = result;
-        _error = null;
+        _loading = false;
+        _plotVersion = DateTime.now().millisecondsSinceEpoch;
       });
-      if (session.isTerminal) _pollTimer?.cancel();
+      if (session.isTerminal &&
+          (result != null || session.status == 'failed')) {
+        _pollTimer?.cancel();
+      } else {
+        _schedulePoll();
+      }
     } on SdacsApiException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (!_isCurrent(cycle, captureId)) return;
+      setState(() {
+        _loading = false;
+        _error = error.message;
+      });
+      if (_session?.isTerminal != true) _schedulePoll();
     }
+  }
+
+  bool _isCurrent(int cycle, String captureId) =>
+      mounted && cycle == _requestCycle && captureId == _captureId;
+
+  void _schedulePoll() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer(widget.pollInterval, () => unawaited(_refresh()));
   }
 
   @override
   Widget build(BuildContext context) {
+    final captureId = _captureId;
     final session = _session;
     final result = _result;
+    final acoustic = result?.acousticAnalysis;
+    final failed =
+        session != null &&
+        const {
+          'failed',
+          'processing_failed',
+          'collection_failed',
+        }.contains(session.status);
     return Scaffold(
       appBar: const SdacsAppBar(title: 'Capture Results'),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (_captureId == null)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('Run a Test before opening capture results.'),
-              ),
-            )
-          else ...[
-            _Section(
-              title: 'Capture',
-              children: [
-                Text('Capture ID: $_captureId'),
-                Text('Status: ${session?.status ?? 'Loading…'}'),
-                if (session != null) ...[
-                  Text('Duration: ${session.durationSeconds} seconds'),
-                  Text(
-                    'Completed nodes: ${session.completedNodes.isEmpty ? 'None yet' : session.completedNodes.join(', ')}',
-                  ),
-                  Text(
-                    'Missing nodes: ${session.missingNodes.isEmpty ? 'None' : session.missingNodes.join(', ')}',
-                  ),
-                ],
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (captureId == null)
+              _MessageCard(
+                message: _error ?? 'Run a Test to generate results.',
+                isError: _error != null,
+              )
+            else ...[
+              _CaptureSummary(captureId: captureId, session: session),
+              if (_loading) ...[
+                const SizedBox(height: 12),
+                LinearProgressIndicator(borderRadius: BorderRadius.circular(8)),
+                const SizedBox(height: 8),
+                Text(_progressMessage(session)),
               ],
-            ),
-            if (_error != null)
-              Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            if (session != null && !session.isTerminal)
-              const LinearProgressIndicator(),
-            if (result != null) ...[
-              const SizedBox(height: 12),
-              _AcousticSection(result: result, captureId: _captureId!),
-              const SizedBox(height: 12),
-              _EdgeImpulseSection(result: result),
-              const SizedBox(height: 12),
-              _FusionSection(result: result),
+              if (!_loading && session != null && !session.isTerminal) ...[
+                const SizedBox(height: 12),
+                Text(_progressMessage(session)),
+              ],
+              if (!_loading &&
+                  session?.isTerminal == true &&
+                  !failed &&
+                  result == null) ...[
+                const SizedBox(height: 12),
+                const Text('Generating the capture plot…'),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                _FailureCard(
+                  title: 'Results unavailable',
+                  reason: _error!,
+                  onRefresh: _refresh,
+                ),
+              ],
+              if (failed) ...[
+                const SizedBox(height: 12),
+                _FailureCard(
+                  title: 'Acoustic processing failed',
+                  stage: session.failureStage,
+                  reason:
+                      session.failureReason ??
+                      'The backend did not provide a failure reason.',
+                  onRefresh: _refresh,
+                ),
+              ] else if (result != null && acoustic != null) ...[
+                const SizedBox(height: 12),
+                _StatusRow(session: session!, result: result),
+                const SizedBox(height: 12),
+                if (acoustic.isSuccessful && acoustic.plotFilename != null)
+                  _CapturePlot(
+                    uri: _service!.capturePlotUri(
+                      captureId,
+                      cacheBust: _plotVersion,
+                    ),
+                    customBuilder: widget.plotBuilder,
+                    onRetry: () => setState(
+                      () =>
+                          _plotVersion = DateTime.now().millisecondsSinceEpoch,
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                _RoomSummary(acoustic: acoustic),
+                const SizedBox(height: 12),
+                _NodeResults(acoustic: acoustic),
+                if (_warnings(result).isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _Warnings(warnings: _warnings(result)),
+                ],
+                const SizedBox(height: 12),
+                _Recommendation(result: result),
+              ],
             ],
           ],
-        ],
+        ),
       ),
+    );
+  }
+
+  static String _progressMessage(CaptureSession? session) {
+    final stage = session?.processingStage ?? '';
+    if (stage.contains('acoustic')) {
+      return 'Acoustic processing is running…';
+    }
+    if (session?.status == 'processing') {
+      return 'Generating the capture plot…';
+    }
+    return 'Waiting for the four nodes to complete the capture…';
+  }
+
+  static List<String> _warnings(CaptureCombinedResult result) {
+    final values = <String>{
+      ...result.acousticAnalysis.warnings,
+      ...result.edgeImpulseResult.warnings,
+    };
+    for (final metric in result.acousticAnalysis.nodeMetrics.values) {
+      values.addAll(metric.warnings);
+    }
+    return values.where((value) => value.trim().isNotEmpty).toList();
+  }
+}
+
+class _CaptureSummary extends StatelessWidget {
+  const _CaptureSummary({required this.captureId, required this.session});
+  final String captureId;
+  final CaptureSession? session;
+
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: 'Capture summary',
+    children: [
+      _Value('Capture ID', captureId),
+      _Value('Collection', _collectionStatus(session)),
+      _Value(
+        'Completed nodes',
+        session == null
+            ? 'Loading…'
+            : '${session!.completedNodes.length} of 4'
+                  '${session!.completedNodes.isEmpty ? '' : ' (${session!.completedNodes.join(', ')})'}',
+      ),
+      _Value(
+        'Missing nodes',
+        session == null || session!.missingNodes.isEmpty
+            ? 'None'
+            : session!.missingNodes.join(', '),
+      ),
+      if (session?.updatedAt != null)
+        _Value('Updated', session!.updatedAt!.toLocal().toString()),
+    ],
+  );
+
+  static String _collectionStatus(CaptureSession? session) {
+    if (session == null) return 'Loading…';
+    if (session.completedNodes.length >= 4) return 'Complete';
+    if (session.isTerminal && session.completedNodes.isNotEmpty) {
+      return 'Partial';
+    }
+    if (session.status == 'collection_failed') return 'Failed';
+    return 'In progress';
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  const _StatusRow({required this.session, required this.result});
+  final CaptureSession session;
+  final CaptureCombinedResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final acoustic = result.acousticAnalysis;
+    final edge = result.edgeImpulseResult;
+    final processedRows = acoustic.nodeMetrics.values
+        .map((metric) => metric.sampleCount)
+        .whereType<int>()
+        .fold(0, (total, count) => total + count);
+    return _Section(
+      title: 'Status',
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _StatusChip(
+              label: 'Collection',
+              value: session.missingNodes.isEmpty ? 'Complete' : 'Partial',
+            ),
+            _StatusChip(
+              label: 'Acoustic processing',
+              value: acoustic.status == 'partial'
+                  ? 'Partial'
+                  : acoustic.isSuccessful
+                  ? 'Complete'
+                  : 'Failed',
+            ),
+            _StatusChip(
+              label: 'Edge Impulse',
+              value: edge.isUnavailable ? 'Disabled' : edge.status,
+            ),
+          ],
+        ),
+        if (edge.isUnavailable)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text('Final model not configured'),
+          ),
+        if (processedRows > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('$processedRows feature rows processed'),
+          ),
+      ],
     );
   }
 }
 
+class _CapturePlot extends StatefulWidget {
+  const _CapturePlot({
+    required this.uri,
+    required this.onRetry,
+    this.customBuilder,
+  });
+  final Uri uri;
+  final VoidCallback onRetry;
+  final Widget Function(Uri uri)? customBuilder;
+
+  @override
+  State<_CapturePlot> createState() => _CapturePlotState();
+}
+
+class _CapturePlotState extends State<_CapturePlot> {
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: 'Capture plot',
+    trailing: IconButton(
+      tooltip: 'Refresh plot',
+      onPressed: widget.onRetry,
+      icon: const Icon(Icons.refresh),
+    ),
+    children: [
+      AspectRatio(
+        aspectRatio: 7 / 5,
+        child: InteractiveViewer(
+          minScale: 0.75,
+          maxScale: 5,
+          child:
+              widget.customBuilder?.call(widget.uri) ??
+              Image.network(
+                widget.uri.toString(),
+                key: ValueKey(widget.uri),
+                fit: BoxFit.contain,
+                loadingBuilder: (context, child, progress) => progress == null
+                    ? child
+                    : const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 10),
+                            Text('Loading capture plot…'),
+                          ],
+                        ),
+                      ),
+                errorBuilder: (_, _, _) => Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Capture plot could not be loaded.'),
+                      TextButton(
+                        onPressed: widget.onRetry,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+        ),
+      ),
+    ],
+  );
+}
+
+class _RoomSummary extends StatelessWidget {
+  const _RoomSummary({required this.acoustic});
+  final AcousticAnalysis acoustic;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!acoustic.isSuccessful) {
+      return const _MessageCard(
+        message: 'No usable acoustic summary is available.',
+        isError: true,
+      );
+    }
+    return _Section(
+      title: 'Room summary',
+      children: [
+        _Value(
+          'Nodes used',
+          acoustic.nodesUsed.isEmpty
+              ? 'Unavailable'
+              : acoustic.nodesUsed.join(', '),
+        ),
+        _Value('Mean estimated SPL', _db(acoustic.meanEstimatedSplDb)),
+        _Value('Dominant band', acoustic.dominantBand ?? 'Unavailable'),
+        _Value('Dominant frequency', _hz(acoustic.dominantFrequencyHz)),
+        _Value('Loudest node', acoustic.loudestNodeId ?? 'Unavailable'),
+        if (acoustic.quietestNodeId != null)
+          _Value('Quietest node', acoustic.quietestNodeId!),
+        _Value('Spatial variation', _db(acoustic.spatialVariationDb)),
+        if (acoustic.status == 'partial' || acoustic.missingNodes.isNotEmpty)
+          Text(
+            'Partial data: missing ${acoustic.missingNodes.join(', ')}',
+            style: const TextStyle(color: Colors.amber),
+          ),
+      ],
+    );
+  }
+}
+
+class _NodeResults extends StatelessWidget {
+  const _NodeResults({required this.acoustic});
+  final AcousticAnalysis acoustic;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = acoustic.nodeMetrics.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return _Section(
+      title: 'Node results',
+      children: entries.isEmpty
+          ? const [Text('No node metrics are available.')]
+          : [
+              LayoutBuilder(
+                builder: (context, constraints) => Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final entry in entries)
+                      SizedBox(
+                        width: constraints.maxWidth >= 700
+                            ? (constraints.maxWidth - 30) / 4
+                            : constraints.maxWidth >= 420
+                            ? (constraints.maxWidth - 10) / 2
+                            : constraints.maxWidth,
+                        child: Card(
+                          color: Theme.of(context).colorScheme.surfaceContainer,
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  entry.key,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  'Estimated SPL: ${_db(entry.value.estimatedSplDb)}',
+                                ),
+                                Text(
+                                  'Peak frequency: ${_hz(entry.value.peakFrequencyHz)}',
+                                ),
+                                Text(
+                                  'Samples: ${entry.value.sampleCount ?? '—'}',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+    );
+  }
+}
+
+class _Warnings extends StatelessWidget {
+  const _Warnings({required this.warnings});
+  final List<String> warnings;
+
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: 'Warnings',
+    children: [
+      for (final warning in warnings)
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.warning_amber, color: Colors.amber),
+          title: Text(warning),
+        ),
+    ],
+  );
+}
+
+class _Recommendation extends StatelessWidget {
+  const _Recommendation({required this.result});
+  final CaptureCombinedResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final acoustic = result.acousticAnalysis;
+    if (!acoustic.isSuccessful) return const SizedBox.shrink();
+    final summary = result.recommendation['summary']?.toString();
+    return _Section(
+      title: 'Recommendation',
+      children: [
+        Text(
+          summary?.trim().isNotEmpty == true
+              ? summary!
+              : 'Acoustic analysis is complete.',
+        ),
+        if (result.edgeImpulseResult.isUnavailable) ...[
+          const SizedBox(height: 8),
+          const Text('Agreement: Unavailable'),
+          const Text('Recommendation confidence: Unavailable'),
+        ],
+      ],
+    );
+  }
+}
+
+class _FailureCard extends StatelessWidget {
+  const _FailureCard({
+    required this.title,
+    required this.reason,
+    required this.onRefresh,
+    this.stage,
+  });
+  final String title;
+  final String? stage;
+  final String reason;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: title,
+    children: [
+      const _Value('Acoustic processing', 'Failed'),
+      if (stage != null) _Value('Failure stage', stage!),
+      _Value('Reason', reason),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: onRefresh,
+        icon: const Icon(Icons.refresh),
+        label: const Text('Refresh'),
+      ),
+    ],
+  );
+}
+
+class _MessageCard extends StatelessWidget {
+  const _MessageCard({required this.message, required this.isError});
+  final String message;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Text(
+        message,
+        style: TextStyle(
+          color: isError ? Theme.of(context).colorScheme.error : null,
+        ),
+      ),
+    ),
+  );
+}
+
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
+  const _Section({required this.title, required this.children, this.trailing});
   final String title;
   final List<Widget> children;
+  final Widget? trailing;
+
   @override
   Widget build(BuildContext context) => Card(
     child: Padding(
@@ -130,8 +612,18 @@ class _Section extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              ?trailing,
+            ],
+          ),
+          const SizedBox(height: 10),
           ...children,
         ],
       ),
@@ -139,97 +631,33 @@ class _Section extends StatelessWidget {
   );
 }
 
-class _AcousticSection extends StatelessWidget {
-  const _AcousticSection({required this.result, required this.captureId});
-  final CaptureCombinedResult result;
-  final String captureId;
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.label, required this.value});
+  final String label;
+  final String value;
+
   @override
-  Widget build(BuildContext context) {
-    final data = result.acoustic;
-    final service = SdacsApiService(
-      config: BackendConfigScope.configOf(context),
-    );
-    return _Section(
-      title: 'Acoustic analysis',
-      children: [
-        Text('Processor: ${data['processor'] ?? 'Unavailable'}'),
-        Text(
-          'Nodes used: ${(data['nodes_used'] as List<dynamic>? ?? const []).join(', ')}',
-        ),
-        Text('Dominant band: ${data['dominant_band'] ?? 'Unavailable'}'),
-        Text('Loudest node: ${data['loudest_node_id'] ?? 'Unavailable'}'),
-        Text(
-          'Spatial variation: ${data['spatial_variation_db'] ?? 'Unavailable'} dB',
-        ),
-        if (data['plot_filename'] != null)
-          Image.network(
-            service.capturePlotUri(captureId).toString(),
-            key: ValueKey(captureId),
-            errorBuilder: (_, _, _) =>
-                const Text('Capture-specific plot is unavailable.'),
-          ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Chip(label: Text('$label: $value'));
 }
 
-class _EdgeImpulseSection extends StatelessWidget {
-  const _EdgeImpulseSection({required this.result});
-  final CaptureCombinedResult result;
+class _Value extends StatelessWidget {
+  const _Value(this.label, this.value);
+  final String label;
+  final String value;
+
   @override
-  Widget build(BuildContext context) {
-    final data = result.edgeImpulse;
-    final simulated = data['is_simulated'] == true;
-    return _Section(
-      title: 'Edge Impulse',
-      children: [
-        Text('Model status: ${data['status'] ?? 'Unavailable'}'),
-        if (data['predicted_label'] != null)
-          Text('Predicted class: ${data['predicted_label']}'),
-        if (data['confidence'] != null)
-          Text(
-            'Model confidence: ${((data['confidence'] as num) * 100).toStringAsFixed(1)}%',
-          ),
-        if (data['model_version'] != null)
-          Text('Model version: ${data['model_version']}'),
-        if (simulated)
-          const Text(
-            'SIMULATED TEST RESULT',
-            style: TextStyle(color: Colors.orange),
-          ),
-        if (data['status'] == 'model_not_configured' ||
-            data['status'] == 'disabled')
-          const Text(
-            'Acoustic analysis is complete. The final Edge Impulse model is not currently configured.',
-          ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 5),
+    child: Text('$label: $value'),
+  );
 }
 
-class _FusionSection extends StatelessWidget {
-  const _FusionSection({required this.result});
-  final CaptureCombinedResult result;
-  @override
-  Widget build(BuildContext context) {
-    final fusion = result.fusion;
-    final recommendation = result.recommendation;
-    return _Section(
-      title: 'Evidence-fused recommendation',
-      children: [
-        Text('Agreement: ${fusion['agreement'] ?? 'Unavailable'}'),
-        Text(
-          'Recommendation confidence: ${fusion['recommendation_confidence'] ?? 'Unavailable'}',
-        ),
-        const SizedBox(height: 8),
-        Text(
-          recommendation['summary']?.toString() ??
-              'No recommendation is available.',
-        ),
-        for (final evidence
-            in (recommendation['evidence'] as List<dynamic>? ?? const []))
-          if (evidence is Map) Text('• ${evidence['statement']}'),
-      ],
-    );
-  }
+String _db(double? value) =>
+    value == null || !value.isFinite ? '—' : '${value.toStringAsFixed(1)} dB';
+
+String _hz(double? value) {
+  if (value == null || !value.isFinite) return '—';
+  return value >= 1000
+      ? '${(value / 1000).toStringAsFixed(2)} kHz'
+      : '${value.toStringAsFixed(1)} Hz';
 }

@@ -3,196 +3,330 @@ import 'dart:convert';
 class NodeTelemetry {
   const NodeTelemetry({
     required this.nodeId,
-    required this.status,
-    required this.captureState,
-    required this.rms,
-    required this.dbfs,
-    required this.dbSpl,
-    required this.peakFrequencyHz,
-    required this.p2pRaw,
-    required this.zeros,
-    required this.fftLowRatio,
-    required this.fftMidRatio,
-    required this.fftHighRatio,
-    required this.fftTotalEnergy,
-    required this.temperatureC,
-    required this.humidityPercent,
-    required this.batterySoc,
-    required this.batteryVoltageV,
-    required this.batteryChargeRatePctPerHr,
-    required this.batteryValid,
-    required this.firmwareVersion,
-    required this.seq,
-    required this.n,
-    required this.timestamp,
+    this.status = 'online',
+    this.captureState = 'unknown',
+    this.rms,
+    this.dbfs,
+    this.dbSpl,
+    this.peakFrequencyHz,
+    this.p2pRaw,
+    this.zeros,
+    this.fftLowRatio,
+    this.fftMidRatio,
+    this.fftHighRatio,
+    this.fftTotalEnergy,
+    this.temperatureC,
+    this.humidityPercent,
+    this.batterySoc,
+    this.batteryVoltageV,
+    this.batteryChargeRatePctPerHr,
+    this.batteryValid,
+    this.firmwareVersion,
+    this.wifiRssiDbm,
+    this.bleRssiDbm,
+    this.bleProximity,
+    this.bleAddress,
+    this.bleSeenCount,
+    this.bleScanTimestamp,
+    this.seq,
+    this.n,
+    this.timestamp,
+    this.providedFields = const {},
   });
 
   final String nodeId;
   final String status;
   final String captureState;
-  final double rms;
-  final double dbfs;
-  final double dbSpl;
-  final double peakFrequencyHz;
-  final double p2pRaw;
-  final int zeros;
-  final double fftLowRatio;
-  final double fftMidRatio;
-  final double fftHighRatio;
-  final double fftTotalEnergy;
-  final double temperatureC;
-  final double humidityPercent;
-  final double batterySoc;
-  final double batteryVoltageV;
-  final double batteryChargeRatePctPerHr;
-  final bool batteryValid;
-  final String firmwareVersion;
-  final int seq;
-  final int n;
-  final DateTime timestamp;
+  final double? rms;
+  final double? dbfs;
+  final double? dbSpl;
+  final double? peakFrequencyHz;
+  final double? p2pRaw;
+  final int? zeros;
+  final double? fftLowRatio;
+  final double? fftMidRatio;
+  final double? fftHighRatio;
+  final double? fftTotalEnergy;
+  final double? temperatureC;
+  final double? humidityPercent;
+  final double? batterySoc;
+  final double? batteryVoltageV;
+  final double? batteryChargeRatePctPerHr;
+  final bool? batteryValid;
+  final String? firmwareVersion;
+  final int? wifiRssiDbm;
+  final int? bleRssiDbm;
+  final String? bleProximity;
+  final String? bleAddress;
+  final int? bleSeenCount;
+  final DateTime? bleScanTimestamp;
+  final int? seq;
+  final int? n;
+  final DateTime? timestamp;
+
+  /// Canonical fields explicitly present in the source record. This lets merge
+  /// distinguish an omitted value from an explicitly supplied null.
+  final Set<String> providedFields;
 
   factory NodeTelemetry.fromJson(Map<String, dynamic> json) {
     final source = _telemetrySource(json);
+    final provided = <String>{};
+    T? read<T>(
+      String canonical,
+      List<String> aliases,
+      T? Function(dynamic value) parse,
+    ) {
+      for (final key in aliases) {
+        if (source.containsKey(key)) {
+          final parsed = parse(source[key]);
+          if (parsed != null) provided.add(canonical);
+          return parsed;
+        }
+      }
+      return null;
+    }
 
+    final nodeId =
+        read('nodeId', const ['nodeId', 'node_id'], _parseString) ?? 'unknown';
     return NodeTelemetry(
-      nodeId: _stringValue(source, const ['nodeId', 'node_id']) ?? 'unknown',
-      status: _stringValue(source, const ['status']) ?? 'online',
+      nodeId: _normalizeNodeId(nodeId),
+      status: read('status', const ['status'], _parseString) ?? 'online',
       captureState:
-          _stringValue(source, const ['captureState', 'capture_state']) ??
+          read('captureState', const [
+            'captureState',
+            'capture_state',
+          ], _parseString) ??
           'unknown',
-      rms: _doubleValue(source, const ['rms']),
-      dbfs: _doubleValue(source, const ['dbfs']),
-      dbSpl: _doubleValue(source, const ['dbSpl', 'db_spl']),
-      peakFrequencyHz: _doubleValue(source, const [
+      rms: read('rms', const ['rms'], _parseDouble),
+      dbfs: read('dbfs', const ['dbfs'], _parseDouble),
+      dbSpl: read('dbSpl', const ['dbSpl', 'db_spl'], _parseDouble),
+      peakFrequencyHz: read('peakFrequencyHz', const [
         'peakFrequencyHz',
         'f_peak_hz',
         'peak_hz',
-      ]),
-      p2pRaw: _doubleValue(source, const ['p2pRaw', 'p2p_raw']),
-      zeros: _intValue(source, const ['zeros']),
-      fftLowRatio: _doubleValue(source, const ['fftLowRatio', 'fft_low_ratio']),
-      fftMidRatio: _doubleValue(source, const ['fftMidRatio', 'fft_mid_ratio']),
-      fftHighRatio: _doubleValue(source, const [
+      ], _parseDouble),
+      p2pRaw: read('p2pRaw', const ['p2pRaw', 'p2p_raw'], _parseDouble),
+      zeros: read('zeros', const ['zeros'], _parseInt),
+      fftLowRatio: read('fftLowRatio', const [
+        'fftLowRatio',
+        'fft_low_ratio',
+      ], _parseDouble),
+      fftMidRatio: read('fftMidRatio', const [
+        'fftMidRatio',
+        'fft_mid_ratio',
+      ], _parseDouble),
+      fftHighRatio: read('fftHighRatio', const [
         'fftHighRatio',
         'fft_high_ratio',
-      ]),
-      fftTotalEnergy: _doubleValue(source, const [
+      ], _parseDouble),
+      fftTotalEnergy: read('fftTotalEnergy', const [
         'fftTotalEnergy',
         'fft_total_energy',
-      ]),
-      temperatureC: _doubleValue(source, const ['temperatureC', 'temp_c']),
-      humidityPercent: _doubleValue(source, const [
+      ], _parseDouble),
+      temperatureC: read('temperatureC', const [
+        'temperatureC',
+        'temperature_c',
+        'temp_c',
+      ], _parseDouble),
+      humidityPercent: read('humidityPercent', const [
         'humidityPercent',
+        'humidity_percent',
         'rh_percent',
-      ]),
-      batterySoc: _doubleValue(source, const [
+      ], _parseDouble),
+      batterySoc: read('batterySoc', const [
         'batterySoc',
+        'battery_soc_percent',
+        'soc_percent',
         'batt_soc_percent',
-      ]),
-      batteryVoltageV: _doubleValue(source, const [
+      ], _parseDouble),
+      batteryVoltageV: read('batteryVoltageV', const [
         'batteryVoltageV',
+        'battery_voltage_v',
         'batt_voltage_v',
-      ]),
-      batteryChargeRatePctPerHr: _doubleValue(source, const [
+      ], _parseDouble),
+      batteryChargeRatePctPerHr: read('batteryChargeRatePctPerHr', const [
         'batteryChargeRatePctPerHr',
         'batt_charge_rate_pct_per_hr',
-      ]),
-      batteryValid:
-          _boolValue(source, const ['batteryValid', 'batt_valid']) ?? false,
-      firmwareVersion:
-          _stringValue(source, const ['firmwareVersion', 'fw_version']) ??
-          'unknown',
-      seq: _intValue(source, const ['seq']),
-      n: _intValue(source, const ['n']),
-      timestamp: _dateTimeValue(source, const [
+      ], _parseDouble),
+      batteryValid: read('batteryValid', const [
+        'batteryValid',
+        'batt_valid',
+      ], _parseBool),
+      firmwareVersion: read('firmwareVersion', const [
+        'firmwareVersion',
+        'firmware_version',
+        'firmware',
+        'fw',
+        'fw_version',
+      ], _parseString),
+      wifiRssiDbm: read('wifiRssiDbm', const [
+        'wifiRssiDbm',
+        'rssi_dbm',
+      ], _parseInt),
+      bleRssiDbm: read('bleRssiDbm', const [
+        'bleRssiDbm',
+        'ble_rssi_dbm',
+      ], _parseInt),
+      bleProximity: read('bleProximity', const [
+        'bleProximity',
+        'ble_proximity',
+      ], _parseString),
+      bleAddress: read('bleAddress', const [
+        'bleAddress',
+        'ble_address',
+        'address',
+      ], _parseString),
+      bleSeenCount: read('bleSeenCount', const [
+        'bleSeenCount',
+        'ble_seen_count',
+        'seen_count',
+      ], _parseInt),
+      bleScanTimestamp: read('bleScanTimestamp', const [
+        'bleScanTimestamp',
+        'ble_scan_timestamp',
+      ], _parseDateTime),
+      seq: read('seq', const ['seq'], _parseInt),
+      n: read('n', const ['n'], _parseInt),
+      timestamp: read('timestamp', const [
         'timestamp_iso',
         'timestamp',
         'last_seen_iso',
         'last_seen',
-      ]),
+      ], _parseDateTime),
+      providedFields: provided,
+    );
+  }
+
+  NodeTelemetry merge(NodeTelemetry update) {
+    T? choose<T>(String field, T? current, T? incoming) =>
+        update.providedFields.contains(field) ? incoming : current;
+    return NodeTelemetry(
+      nodeId: update.nodeId == 'unknown' ? nodeId : update.nodeId,
+      status: update.providedFields.contains('status') ? update.status : status,
+      captureState: update.providedFields.contains('captureState')
+          ? update.captureState
+          : captureState,
+      rms: choose('rms', rms, update.rms),
+      dbfs: choose('dbfs', dbfs, update.dbfs),
+      dbSpl: choose('dbSpl', dbSpl, update.dbSpl),
+      peakFrequencyHz: choose(
+        'peakFrequencyHz',
+        peakFrequencyHz,
+        update.peakFrequencyHz,
+      ),
+      p2pRaw: choose('p2pRaw', p2pRaw, update.p2pRaw),
+      zeros: choose('zeros', zeros, update.zeros),
+      fftLowRatio: choose('fftLowRatio', fftLowRatio, update.fftLowRatio),
+      fftMidRatio: choose('fftMidRatio', fftMidRatio, update.fftMidRatio),
+      fftHighRatio: choose('fftHighRatio', fftHighRatio, update.fftHighRatio),
+      fftTotalEnergy: choose(
+        'fftTotalEnergy',
+        fftTotalEnergy,
+        update.fftTotalEnergy,
+      ),
+      temperatureC: choose('temperatureC', temperatureC, update.temperatureC),
+      humidityPercent: choose(
+        'humidityPercent',
+        humidityPercent,
+        update.humidityPercent,
+      ),
+      batterySoc: choose('batterySoc', batterySoc, update.batterySoc),
+      batteryVoltageV: choose(
+        'batteryVoltageV',
+        batteryVoltageV,
+        update.batteryVoltageV,
+      ),
+      batteryChargeRatePctPerHr: choose(
+        'batteryChargeRatePctPerHr',
+        batteryChargeRatePctPerHr,
+        update.batteryChargeRatePctPerHr,
+      ),
+      batteryValid: choose('batteryValid', batteryValid, update.batteryValid),
+      firmwareVersion: choose(
+        'firmwareVersion',
+        firmwareVersion,
+        update.firmwareVersion,
+      ),
+      wifiRssiDbm: choose('wifiRssiDbm', wifiRssiDbm, update.wifiRssiDbm),
+      bleRssiDbm: choose('bleRssiDbm', bleRssiDbm, update.bleRssiDbm),
+      bleProximity: choose('bleProximity', bleProximity, update.bleProximity),
+      bleAddress: choose('bleAddress', bleAddress, update.bleAddress),
+      bleSeenCount: choose('bleSeenCount', bleSeenCount, update.bleSeenCount),
+      bleScanTimestamp: choose(
+        'bleScanTimestamp',
+        bleScanTimestamp,
+        update.bleScanTimestamp,
+      ),
+      seq: choose('seq', seq, update.seq),
+      n: choose('n', n, update.n),
+      timestamp: choose('timestamp', timestamp, update.timestamp),
+      providedFields: {...providedFields, ...update.providedFields},
     );
   }
 
   factory NodeTelemetry.mock(String nodeId, {String status = 'online'}) {
-    final nodeNumber =
-        int.tryParse(nodeId.replaceAll(RegExp('[^0-9]'), '')) ?? 1;
+    final number = int.tryParse(nodeId.replaceAll(RegExp('[^0-9]'), '')) ?? 1;
     return NodeTelemetry(
       nodeId: nodeId,
       status: status,
       captureState: 'idle',
-      rms: 0.12 + (nodeNumber * 0.01),
-      dbfs: -24.5 + nodeNumber,
-      dbSpl: 62.0 + nodeNumber,
-      peakFrequencyHz: 1000 + (nodeNumber * 50),
-      p2pRaw: 0,
-      zeros: 0,
+      rms: 0.12 + number * 0.01,
+      dbfs: -24.5 + number,
+      dbSpl: (62 + number).toDouble(),
+      peakFrequencyHz: (1000 + number * 50).toDouble(),
       fftLowRatio: 0.25,
       fftMidRatio: 0.5,
       fftHighRatio: 0.25,
-      fftTotalEnergy: 1.0,
-      temperatureC: 22.0 + (nodeNumber * 0.2),
-      humidityPercent: 45.0 + nodeNumber,
-      batterySoc: 92.0 - nodeNumber,
-      batteryVoltageV: 4.0,
-      batteryChargeRatePctPerHr: 0,
+      fftTotalEnergy: 1,
+      temperatureC: 22 + number * 0.2,
+      humidityPercent: (45 + number).toDouble(),
+      batterySoc: 92 - number.toDouble(),
+      batteryVoltageV: 4,
       batteryValid: true,
       firmwareVersion: '0.1.0',
-      seq: 0,
-      n: 0,
       timestamp: DateTime.now(),
     );
   }
 
-  static List<NodeTelemetry> mockList() {
-    return const [
-      'node01',
-      'node02',
-      'node03',
-      'node04',
-    ].map(NodeTelemetry.mock).toList();
-  }
+  static List<NodeTelemetry> mockList() => const [
+    'node01',
+    'node02',
+    'node03',
+    'node04',
+  ].map(NodeTelemetry.mock).toList();
 
   static Map<String, dynamic> _telemetrySource(Map<String, dynamic> json) {
     final root = _stringKeyMap(json);
     final source = <String, dynamic>{...root};
-
-    final rawJson = root['raw_json'];
-    final rawMap = _decodeRawJson(rawJson);
-    if (rawMap != null) {
-      source.addAll(rawMap);
-    }
-
+    final rawMap = _decodeMap(root['raw_json']);
+    if (rawMap != null) source.addAll(rawMap);
     for (final nestedKey in const [
       'latest',
       'latest_features',
       'latest_status',
     ]) {
-      final nested = source[nestedKey] ?? root[nestedKey];
-      final nestedMap = _decodeRawJson(nested);
-      if (nestedMap != null) {
-        source.addAll(nestedMap);
+      final nested = _decodeMap(source[nestedKey] ?? root[nestedKey]);
+      if (nested != null) {
+        // Aggregate REST records are full Pydantic objects, so fields absent
+        // from that MQTT record type arrive as null. They must not erase a
+        // value supplied by another nested record type.
+        source.addAll(
+          Map.fromEntries(nested.entries.where((e) => e.value != null)),
+        );
       }
     }
     return source;
   }
 
-  static Map<String, dynamic> _stringKeyMap(Map<dynamic, dynamic> map) {
-    return map.map((key, value) => MapEntry(key.toString(), value));
-  }
+  static Map<String, dynamic> _stringKeyMap(Map<dynamic, dynamic> map) =>
+      map.map((key, value) => MapEntry(key.toString(), value));
 
-  static Map<String, dynamic>? _decodeRawJson(dynamic value) {
-    if (value is Map<String, dynamic>) {
-      return _stringKeyMap(value);
-    }
-    if (value is Map) {
-      return _stringKeyMap(value);
-    }
+  static Map<String, dynamic>? _decodeMap(dynamic value) {
+    if (value is Map) return _stringKeyMap(value);
     if (value is String && value.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(value);
-        if (decoded is Map) {
-          return _stringKeyMap(decoded);
-        }
+        if (decoded is Map) return _stringKeyMap(decoded);
       } on FormatException {
         return null;
       }
@@ -200,77 +334,50 @@ class NodeTelemetry {
     return null;
   }
 
-  static String? _stringValue(Map<String, dynamic> json, List<String> keys) {
-    for (final key in keys) {
-      final value = json[key];
-      if (value != null) {
-        return value.toString();
-      }
+  static String _normalizeNodeId(String value) {
+    final compact = value.trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '',
+    );
+    final match = RegExp(r'^(?:sdacs)?node0*([1-4])$').firstMatch(compact);
+    return match == null
+        ? value.trim().toLowerCase()
+        : 'node0${match.group(1)}';
+  }
+
+  static String? _parseString(dynamic value) =>
+      value == null || value.toString().trim().isEmpty
+      ? null
+      : value.toString();
+  static double? _parseDouble(dynamic value) {
+    final parsed = value is num
+        ? value.toDouble()
+        : double.tryParse(value?.toString() ?? '');
+    return parsed?.isFinite == true ? parsed : null;
+  }
+
+  static int? _parseInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num && value.isFinite) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  static bool? _parseBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      if (value.toLowerCase() == 'true') return true;
+      if (value.toLowerCase() == 'false') return false;
     }
     return null;
   }
 
-  static double _doubleValue(Map<String, dynamic> json, List<String> keys) {
-    for (final key in keys) {
-      final value = json[key];
-      if (value is num) {
-        return value.toDouble();
-      }
-      if (value is String) {
-        return double.tryParse(value) ?? 0;
-      }
-    }
-    return 0;
-  }
-
-  static int _intValue(Map<String, dynamic> json, List<String> keys) {
-    for (final key in keys) {
-      final value = json[key];
-      if (value is int) {
-        return value;
-      }
-      if (value is num) {
-        return value.toInt();
-      }
-      if (value is String) {
-        return int.tryParse(value) ?? double.tryParse(value)?.toInt() ?? 0;
-      }
-    }
-    return 0;
-  }
-
-  static bool? _boolValue(Map<String, dynamic> json, List<String> keys) {
-    for (final key in keys) {
-      final value = json[key];
-      if (value is bool) {
-        return value;
-      }
-      if (value is String) {
-        return value.toLowerCase() == 'true';
-      }
-      if (value is num) {
-        return value != 0;
-      }
+  static DateTime? _parseDateTime(dynamic value) {
+    if (value is String) return DateTime.tryParse(value);
+    if (value is num && value.isFinite) {
+      final milliseconds = value > 100000000000 ? value.toInt() : value * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(milliseconds.toInt());
     }
     return null;
-  }
-
-  static DateTime _dateTimeValue(Map<String, dynamic> json, List<String> keys) {
-    for (final key in keys) {
-      final value = json[key];
-      if (value is String) {
-        final parsed = DateTime.tryParse(value);
-        if (parsed != null) {
-          return parsed;
-        }
-      }
-      if (value is num) {
-        final milliseconds = value > 100000000000
-            ? value.toInt()
-            : value * 1000;
-        return DateTime.fromMillisecondsSinceEpoch(milliseconds.toInt());
-      }
-    }
-    return DateTime.now();
   }
 }

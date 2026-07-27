@@ -7,12 +7,15 @@ import '../../config/backend_config.dart';
 import '../../models/ble_scan_result.dart';
 import '../../models/calibration_result.dart';
 import '../../models/capture_session.dart';
+import '../../models/capture_node_metric.dart';
 import '../../models/node_telemetry.dart';
 import '../../services/sdacs_api_service.dart';
 import '../../services/websocket_telemetry_service.dart';
 import '../../widgets/sdacs_error_banner.dart';
 import 'widgets/latest_calibration_card.dart';
 import 'widgets/node_status_card.dart';
+import 'widgets/editable_room_layout.dart';
+import '../graphs/graphs_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -34,8 +37,6 @@ class _MainScreenState extends State<MainScreen> {
   static const int _synchronizedStartDelayMs = 5000;
 
   final Map<String, NodeTelemetry> _nodesById = {};
-  final Map<String, BleNodeScanResult> _bleResultsByNodeId = {};
-
   BackendConfig? _activeConfig;
   SdacsApiService? _apiService;
   WebSocketTelemetryService? _telemetryService;
@@ -44,10 +45,15 @@ class _MainScreenState extends State<MainScreen> {
   bool _backendOnline = false;
   bool _isSubmittingTest = false;
   bool _isBleScanning = false;
+  int _latestBleScanRequestId = 0;
+  DateTime? _latestBleScanTimestamp;
   Timer? _capturePollTimer;
   CaptureSession? _activeCapture;
-  DateTime? _lastBleScanAt;
+  Map<String, CaptureNodeMetric> _latestCaptureMetricsByNode = const {};
+  String? _latestCaptureId;
+  DateTime? _latestCaptureGeneratedAt;
   String? _errorMessage;
+  bool _layoutDirty = false;
 
   List<NodeTelemetry> get _nodes {
     final nodes = _nodesById.values.toList()
@@ -102,9 +108,13 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
       setState(() {
+        final refreshed = <String, NodeTelemetry>{..._nodesById};
+        for (final node in nodes) {
+          refreshed[node.nodeId] = refreshed[node.nodeId]?.merge(node) ?? node;
+        }
         _nodesById
           ..clear()
-          ..addEntries(nodes.map((node) => MapEntry(node.nodeId, node)));
+          ..addAll(refreshed);
         _backendOnline = true;
         _isLoading = false;
         _errorMessage = null;
@@ -126,7 +136,8 @@ class _MainScreenState extends State<MainScreen> {
       return;
     }
     setState(() {
-      _nodesById[telemetry.nodeId] = telemetry;
+      _nodesById[telemetry.nodeId] =
+          _nodesById[telemetry.nodeId]?.merge(telemetry) ?? telemetry;
       _backendOnline = true;
       _errorMessage = null;
     });
@@ -187,37 +198,87 @@ class _MainScreenState extends State<MainScreen> {
         final session = await apiService.getCapture(captureId);
         if (!mounted || _activeCapture?.captureId != captureId) return;
         setState(() => _activeCapture = session);
-        if (session.isTerminal) _capturePollTimer?.cancel();
+        if (session.isTerminal) {
+          _capturePollTimer?.cancel();
+          if (session.status != 'failed') {
+            unawaited(_loadCaptureResult(captureId));
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'The latest Test could not be processed; previous readings were retained.',
+                ),
+              ),
+            );
+          }
+        }
       } on SdacsApiException {
         // Keep the current capture visible and retry transient failures.
       }
     });
   }
 
+  Future<void> _loadCaptureResult(String captureId) async {
+    final apiService = _apiService;
+    if (apiService == null || _activeCapture?.captureId != captureId) return;
+    try {
+      final result = await apiService.getCaptureResult(captureId);
+      if (!mounted ||
+          result == null ||
+          _activeCapture?.captureId != captureId ||
+          result.captureId != captureId) {
+        return;
+      }
+      setState(() {
+        _latestCaptureMetricsByNode = Map.unmodifiable(result.nodeMetrics);
+        _latestCaptureId = captureId;
+        _latestCaptureGeneratedAt = result.generatedAt;
+      });
+    } on SdacsApiException catch (error) {
+      if (!mounted || _activeCapture?.captureId != captureId) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Capture result unavailable: ${error.message}')),
+      );
+    }
+  }
+
   Future<void> _scanBleNodes(BuildContext context) async {
     final apiService = _apiService;
     if (apiService == null || _isBleScanning) return;
+    final requestId = ++_latestBleScanRequestId;
     setState(() => _isBleScanning = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
       final result = await apiService.scanBleNodes();
-      if (!mounted || apiService != _apiService) return;
+      if (!mounted ||
+          apiService != _apiService ||
+          !isCurrentBleScanRequest(requestId, _latestBleScanRequestId)) {
+        return;
+      }
       setState(() {
-        _bleResultsByNodeId
+        _latestBleScanTimestamp = result.completedAt;
+        final merged = mergeBleScanIntoLiveNodes(_nodesById, result);
+        _nodesById
           ..clear()
-          ..addEntries(result.nodes.map((node) => MapEntry(node.nodeId, node)));
-        _lastBleScanAt = result.completedAt;
+          ..addAll(merged);
       });
       final message = result.detectedCount == 0
           ? 'BLE scan complete: no SDACS nodes detected.'
-          : 'BLE scan complete: ${result.detectedCount} nodes detected.';
+          : 'BLE scan complete: ${result.detectedCount} nodes detected at '
+                '${_latestBleScanTimestamp!.toLocal().toIso8601String()}.';
       messenger.showSnackBar(SnackBar(content: Text(message)));
     } on SdacsApiException catch (error) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('BLE scan failed: ${error.message}')),
-      );
+      if (mounted &&
+          isCurrentBleScanRequest(requestId, _latestBleScanRequestId)) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('BLE scan failed: ${error.message}')),
+        );
+      }
     } finally {
-      if (mounted) setState(() => _isBleScanning = false);
+      if (mounted &&
+          isCurrentBleScanRequest(requestId, _latestBleScanRequestId)) {
+        setState(() => _isBleScanning = false);
+      }
     }
   }
 
@@ -276,6 +337,7 @@ class _MainScreenState extends State<MainScreen> {
                         onScanBle: () => _scanBleNodes(context),
                         isBleScanning: _isBleScanning,
                         capture: _activeCapture,
+                        layoutDirty: _layoutDirty,
                       ),
                       if (_errorMessage != null) ...[
                         const SizedBox(height: 16),
@@ -292,10 +354,16 @@ class _MainScreenState extends State<MainScreen> {
                               children: [
                                 Expanded(
                                   flex: 7,
-                                  child: _RoomMap(
+                                  child: EditableRoomLayout(
                                     nodes: nodes,
-                                    bleResultsByNodeId: _bleResultsByNodeId,
-                                    hasBleScan: _lastBleScanAt != null,
+                                    api: _apiService!,
+                                    captureMetrics: _latestCaptureMetricsByNode,
+                                    latestCaptureId: _latestCaptureId,
+                                    onDirtyChanged: (dirty) {
+                                      if (mounted && dirty != _layoutDirty) {
+                                        setState(() => _layoutDirty = dirty);
+                                      }
+                                    },
                                   ),
                                 ),
                                 const SizedBox(width: 22),
@@ -304,26 +372,39 @@ class _MainScreenState extends State<MainScreen> {
                                   child: _SystemPanel(
                                     nodes: nodes,
                                     backendOnline: _backendOnline,
+                                    captureMetrics: _latestCaptureMetricsByNode,
                                   ),
                                 ),
                               ],
                             )
                           : Column(
                               children: [
-                                _RoomMap(
+                                EditableRoomLayout(
                                   nodes: nodes,
-                                  bleResultsByNodeId: _bleResultsByNodeId,
-                                  hasBleScan: _lastBleScanAt != null,
+                                  api: _apiService!,
+                                  captureMetrics: _latestCaptureMetricsByNode,
+                                  latestCaptureId: _latestCaptureId,
+                                  onDirtyChanged: (dirty) {
+                                    if (mounted && dirty != _layoutDirty) {
+                                      setState(() => _layoutDirty = dirty);
+                                    }
+                                  },
                                 ),
                                 const SizedBox(height: 22),
                                 _SystemPanel(
                                   nodes: nodes,
                                   backendOnline: _backendOnline,
+                                  captureMetrics: _latestCaptureMetricsByNode,
                                 ),
                               ],
                             ),
                       const SizedBox(height: 28),
-                      _LowerSection(nodes: nodes),
+                      _LowerSection(
+                        nodes: nodes,
+                        captureMetrics: _latestCaptureMetricsByNode,
+                        latestCaptureId: _latestCaptureId,
+                        latestCaptureGeneratedAt: _latestCaptureGeneratedAt,
+                      ),
                     ],
                   ),
                 ),
@@ -343,6 +424,7 @@ class _HeroSection extends StatelessWidget {
     required this.onScanBle,
     required this.isBleScanning,
     required this.capture,
+    required this.layoutDirty,
   });
 
   final VoidCallback onStartTest;
@@ -350,6 +432,7 @@ class _HeroSection extends StatelessWidget {
   final VoidCallback onScanBle;
   final bool isBleScanning;
   final CaptureSession? capture;
+  final bool layoutDirty;
 
   @override
   Widget build(BuildContext context) {
@@ -428,7 +511,7 @@ class _HeroSection extends StatelessWidget {
               _ActionButton(
                 icon: Icons.play_arrow_rounded,
                 label: 'Test',
-                onPressed: isSubmittingTest ? null : onStartTest,
+                onPressed: isSubmittingTest || layoutDirty ? null : onStartTest,
               ),
               _ActionButton(
                 icon: Icons.bluetooth_searching,
@@ -439,13 +522,13 @@ class _HeroSection extends StatelessWidget {
               _ActionButton(
                 icon: Icons.insights,
                 label: 'Results',
-                onPressed: capture == null
-                    ? null
-                    : () => Navigator.pushNamed(
-                        context,
-                        AppRoutes.graphs,
-                        arguments: capture!.captureId,
-                      ),
+                onPressed: () => Navigator.pushNamed(
+                  context,
+                  AppRoutes.captureResults,
+                  arguments: capture == null
+                      ? null
+                      : CaptureResultsArguments(captureId: capture!.captureId),
+                ),
               ),
             ],
           ),
@@ -527,8 +610,9 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-class _RoomMap extends StatelessWidget {
-  const _RoomMap({
+class LegacyRoomMap extends StatelessWidget {
+  const LegacyRoomMap({
+    super.key,
     required this.nodes,
     required this.bleResultsByNodeId,
     required this.hasBleScan,
@@ -667,16 +751,20 @@ class _MapNode extends StatelessWidget {
       : 'BLE RSSI: ${bleResult!.bleRssiDbm} dBm';
 
   Color get splColor {
-    if (node.dbSpl >= 75) return const Color(0xFFFF6B6B);
-    if (node.dbSpl >= 68) return const Color(0xFFFFB86B);
-    if (node.dbSpl <= 55) return const Color(0xFFA1A1AA);
+    final spl = node.dbSpl;
+    if (spl == null) return const Color(0xFFA1A1AA);
+    if (spl >= 75) return const Color(0xFFFF6B6B);
+    if (spl >= 68) return const Color(0xFFFFB86B);
+    if (spl <= 55) return const Color(0xFFA1A1AA);
     return MainScreen.accentLight;
   }
 
   String get splStatus {
-    if (node.dbSpl >= 75) return 'Very High';
-    if (node.dbSpl >= 68) return 'High';
-    if (node.dbSpl <= 55) return 'Low';
+    final spl = node.dbSpl;
+    if (spl == null) return 'No SPL data';
+    if (spl >= 75) return 'Very High';
+    if (spl >= 68) return 'High';
+    if (spl <= 55) return 'Low';
     return 'Normal';
   }
 
@@ -684,7 +772,8 @@ class _MapNode extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message:
-          '${node.nodeId}: ${node.dbSpl} dB SPL, ${node.peakFrequencyHz} Hz peak; $bleRssiText',
+          '${node.nodeId}: ${node.dbSpl?.toStringAsFixed(1) ?? 'no SPL data'}, '
+          '${node.peakFrequencyHz?.toStringAsFixed(1) ?? 'no peak data'}; $bleRssiText',
       child: Container(
         width: 152,
         padding: const EdgeInsets.all(15),
@@ -706,12 +795,16 @@ class _MapNode extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '${node.dbSpl} dB SPL',
+              node.dbSpl == null
+                  ? 'Est. SPL: —'
+                  : '${node.dbSpl!.toStringAsFixed(1)} dB est. SPL',
               style: TextStyle(color: splColor, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 2),
             Text(
-              '${node.peakFrequencyHz} Hz peak',
+              node.peakFrequencyHz == null
+                  ? 'Peak: No data'
+                  : '${node.peakFrequencyHz!.toStringAsFixed(1)} Hz peak',
               style: const TextStyle(color: MainScreen.textMuted, fontSize: 12),
             ),
             const SizedBox(height: 3),
@@ -722,7 +815,9 @@ class _MapNode extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             LinearProgressIndicator(
-              value: node.batterySoc / 100,
+              value: node.batterySoc == null
+                  ? 0
+                  : (node.batterySoc! / 100).clamp(0, 1).toDouble(),
               color: MainScreen.accent,
               backgroundColor: MainScreen.panelLight,
               minHeight: 5,
@@ -730,7 +825,7 @@ class _MapNode extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '$splStatus - ${node.batterySoc.toStringAsFixed(0)}% battery',
+              '$splStatus - ${node.batterySoc?.toStringAsFixed(0) ?? '—'}% battery',
               textAlign: TextAlign.center,
               style: const TextStyle(color: MainScreen.textMuted, fontSize: 11),
             ),
@@ -773,20 +868,34 @@ class _SuggestionCard extends StatelessWidget {
 }
 
 class _SystemPanel extends StatelessWidget {
-  const _SystemPanel({required this.nodes, required this.backendOnline});
+  const _SystemPanel({
+    required this.nodes,
+    required this.backendOnline,
+    required this.captureMetrics,
+  });
 
   final List<NodeTelemetry> nodes;
   final bool backendOnline;
+  final Map<String, CaptureNodeMetric> captureMetrics;
 
   @override
   Widget build(BuildContext context) {
-    final avgBattery = nodes.isEmpty
-        ? 0
-        : nodes.map((n) => n.batterySoc).reduce((a, b) => a + b) / nodes.length;
+    final batteries = nodes
+        .map((node) => node.batterySoc)
+        .whereType<double>()
+        .toList();
+    final avgBattery = batteries.isEmpty
+        ? null
+        : batteries.reduce((a, b) => a + b) / batteries.length;
 
-    final avgSpl = nodes.isEmpty
-        ? 0
-        : nodes.map((n) => n.dbSpl).reduce((a, b) => a + b) / nodes.length;
+    final captureSpl = captureMetrics.values
+        .map((metric) => metric.estimatedSplDb)
+        .whereType<double>()
+        .where((value) => value.isFinite)
+        .toList();
+    final avgSpl = captureSpl.isEmpty
+        ? null
+        : captureSpl.reduce((a, b) => a + b) / captureSpl.length;
 
     return Container(
       width: double.infinity,
@@ -813,13 +922,15 @@ class _SystemPanel extends StatelessWidget {
             icon: Icons.hub_outlined,
           ),
           _MetricTile(
-            label: 'Average SPL',
-            value: '${avgSpl.round()} dB',
+            label: captureSpl.isEmpty
+                ? 'Average est. SPL'
+                : 'Average est. SPL (${captureSpl.length} nodes)',
+            value: avgSpl == null ? '—' : '${avgSpl.toStringAsFixed(1)} dB',
             icon: Icons.graphic_eq,
           ),
           _MetricTile(
             label: 'Average Battery',
-            value: '${avgBattery.round()}%',
+            value: avgBattery == null ? '—' : '${avgBattery.round()}%',
             icon: Icons.battery_5_bar,
           ),
           _MetricTile(
@@ -877,9 +988,17 @@ class _MetricTile extends StatelessWidget {
 }
 
 class _LowerSection extends StatelessWidget {
-  const _LowerSection({required this.nodes});
+  const _LowerSection({
+    required this.nodes,
+    required this.captureMetrics,
+    required this.latestCaptureId,
+    required this.latestCaptureGeneratedAt,
+  });
 
   final List<NodeTelemetry> nodes;
+  final Map<String, CaptureNodeMetric> captureMetrics;
+  final String? latestCaptureId;
+  final DateTime? latestCaptureGeneratedAt;
 
   @override
   Widget build(BuildContext context) {
@@ -898,7 +1017,13 @@ class _LowerSection extends StatelessWidget {
             childAspectRatio: 1.45,
           ),
           itemBuilder: (context, index) {
-            return NodeStatusCard(telemetry: nodes[index]);
+            final node = nodes[index];
+            return NodeStatusCard(
+              telemetry: node,
+              captureMetric: captureMetrics[node.nodeId],
+              latestCaptureId: latestCaptureId,
+              capturedAt: latestCaptureGeneratedAt,
+            );
           },
         ),
       ],

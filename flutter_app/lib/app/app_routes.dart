@@ -14,6 +14,7 @@ class AppRoutes {
   static const String setup = '/setup';
   static const String calibration = '/calibration';
   static const String graphs = '/graphs';
+  static const String captureResults = '/capture-results';
 
   static Map<String, WidgetBuilder> get routes {
     return {
@@ -22,6 +23,7 @@ class AppRoutes {
       setup: (context) => const SetupScreen(),
       calibration: (context) => const CalibrationScreen(),
       graphs: (context) => const GraphsScreen(),
+      captureResults: (context) => const GraphsScreen(),
     };
   }
 }
