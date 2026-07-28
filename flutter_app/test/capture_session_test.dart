@@ -44,7 +44,11 @@ void main() {
               'mean_rms': 0.00004 * i,
               'mean_dbfs': -90.0 + i,
               'mean_estimated_spl_db': 30.0 + i,
-              'peak_frequency_hz': 100.0 + i,
+              'peak_frequency_hz': 999.0,
+              'representative_peak_frequency_hz': 100.0 + i,
+              'mean_fft_low_ratio': 0.5,
+              'mean_fft_mid_ratio': 0.3,
+              'mean_fft_high_ratio': 0.2,
             },
         },
       },
@@ -52,6 +56,10 @@ void main() {
     expect(result.nodeMetrics.length, 4);
     expect(result.nodeMetrics['node01']!.sampleCount, 59);
     expect(result.nodeMetrics['node04']!.estimatedSplDb, 34);
+    expect(result.nodeMetrics['node04']!.peakFrequencyHz, 104);
+    expect(result.nodeMetrics['node01']!.lowRatio, 0.5);
+    expect(result.nodeMetrics['node01']!.midRatio, 0.3);
+    expect(result.nodeMetrics['node01']!.highRatio, 0.2);
   });
 
   test('typed result keeps absent numeric values null', () {

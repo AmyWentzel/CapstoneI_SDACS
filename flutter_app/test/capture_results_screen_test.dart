@@ -58,6 +58,7 @@ CaptureCombinedResult _result({
   String id = 'capture_20260727T213846246Z',
   String acousticStatus = 'complete',
   int nodes = 4,
+  bool includeRatios = true,
 }) {
   final nodeIds = ['node01', 'node02', 'node03', 'node04'].take(nodes).toList();
   final missing = [
@@ -91,7 +92,12 @@ CaptureCombinedResult _result({
             'node_id': nodeIds[index],
             'sample_count': 59 - index,
             'mean_estimated_spl_db': 33.1 + index / 10,
-            'peak_frequency_hz': 119 - index * 10,
+            'representative_peak_frequency_hz': 119 - index * 10,
+            if (includeRatios) ...{
+              'mean_fft_low_ratio': 0.5 - index * 0.05,
+              'mean_fft_mid_ratio': 0.3 + index * 0.02,
+              'mean_fft_high_ratio': 0.2 + index * 0.03,
+            },
           },
       },
     },
@@ -122,7 +128,7 @@ Widget _screen(
     arguments: CaptureResultsArguments(captureId: id),
     service: api,
     pollInterval: const Duration(milliseconds: 20),
-    plotBuilder: mockPlot ? (uri) => Text('PLOT ${uri.path}') : null,
+    plotBuilder: mockPlot ? (uri) => Text('PLOT $uri') : null,
   ),
 );
 
@@ -159,14 +165,21 @@ void main() {
       );
       expect(
         find.text(
-          'Peak frequency: ${(119 - index * 10).toStringAsFixed(1)} Hz',
+          'Representative frequency: ${(119 - index * 10).toStringAsFixed(1)} Hz',
         ),
         findsOneWidget,
       );
     }
+    expect(find.text('L 50%'), findsOneWidget);
+    expect(find.text('M 30%'), findsOneWidget);
+    expect(find.text('H 20%'), findsOneWidget);
     expect(find.textContaining('Low-frequency estimates'), findsOneWidget);
-    expect(find.textContaining('PLOT /api/captures/'), findsOneWidget);
-    expect(find.textContaining('0%'), findsNothing);
+    expect(
+      find.textContaining('PLOT http://test/api/captures/'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Model confidence:'), findsNothing);
+    expect(find.text('Recommendation confidence: 0%'), findsNothing);
   });
 
   testWidgets('polls a processing capture without false completion', (
@@ -240,7 +253,10 @@ void main() {
     expect(find.text('Partial data: missing node04'), findsOneWidget);
     expect(find.text('node04'), findsNothing);
     expect(find.textContaining('0.0 dB'), findsNothing);
-    expect(find.textContaining('PLOT /api/captures/'), findsOneWidget);
+    expect(
+      find.textContaining('PLOT http://test/api/captures/'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('invalid capture ID performs no backend request', (tester) async {
@@ -294,5 +310,82 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 100));
     expect(api.captureRequests.length, requestsBeforeDispose);
+  });
+
+  testWidgets('inline plot is bounded and has no interactive transform', (
+    tester,
+  ) async {
+    _useLargeViewport(tester);
+    final api = _FakeApi(sessions: [_session()], result: _result());
+    await tester.pumpWidget(_screen(api));
+    await tester.pumpAndSettle();
+
+    final inline = find.byKey(const ValueKey('inline-capture-plot'));
+    expect(inline, findsOneWidget);
+    expect(tester.getSize(inline).height, inInclusiveRange(280, 460));
+    expect(find.byType(InteractiveViewer), findsNothing);
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pump();
+    expect(find.byType(InteractiveViewer), findsNothing);
+  });
+
+  testWidgets('expand uses a fresh non-trackpad-scaling viewer each time', (
+    tester,
+  ) async {
+    _useLargeViewport(tester);
+    final api = _FakeApi(sessions: [_session()], result: _result());
+    await tester.pumpWidget(_screen(api));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Expand plot'));
+    await tester.pumpAndSettle();
+    var viewer = tester.widget<InteractiveViewer>(
+      find.byKey(const ValueKey('fullscreen-capture-viewer')),
+    );
+    expect(viewer.trackpadScrollCausesScale, isFalse);
+    final firstController = viewer.transformationController!;
+    firstController.value = Matrix4.diagonal3Values(2, 2, 1);
+
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Expand plot'));
+    await tester.pumpAndSettle();
+    viewer = tester.widget<InteractiveViewer>(
+      find.byKey(const ValueKey('fullscreen-capture-viewer')),
+    );
+    expect(viewer.transformationController, isNot(same(firstController)));
+    expect(viewer.transformationController!.value, Matrix4.identity());
+  });
+
+  testWidgets('refresh changes the plot cache-busting URL', (tester) async {
+    _useLargeViewport(tester);
+    final api = _FakeApi(sessions: [_session()], result: _result());
+    await tester.pumpWidget(_screen(api));
+    await tester.pumpAndSettle();
+    final before = tester.widget<Text>(find.textContaining('PLOT http')).data!;
+
+    await tester.tap(find.byTooltip('Refresh plot'));
+    await tester.pump();
+    final after = tester.widget<Text>(find.textContaining('PLOT http')).data!;
+    expect(after, isNot(before));
+  });
+
+  testWidgets('missing band ratios remain unavailable rather than zero', (
+    tester,
+  ) async {
+    _useLargeViewport(tester);
+    final api = _FakeApi(
+      sessions: [_session()],
+      result: _result(includeRatios: false),
+    );
+    await tester.pumpWidget(_screen(api));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Band ratios: Unavailable'), findsNWidgets(4));
+    expect(find.text('L 0%'), findsNothing);
+    expect(find.text('M 0%'), findsNothing);
+    expect(find.text('H 0%'), findsNothing);
+    expect(find.text('Estimated SPL: 33.1 dB'), findsOneWidget);
+    expect(find.text('Samples: 59'), findsOneWidget);
   });
 }

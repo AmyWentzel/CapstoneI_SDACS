@@ -202,10 +202,7 @@ class _GraphsScreenState extends State<GraphsScreen> {
                       cacheBust: _plotVersion,
                     ),
                     customBuilder: widget.plotBuilder,
-                    onRetry: () => setState(
-                      () =>
-                          _plotVersion = DateTime.now().millisecondsSinceEpoch,
-                    ),
+                    onRetry: () => setState(() => _plotVersion++),
                   ),
                 const SizedBox(height: 12),
                 _RoomSummary(acoustic: acoustic),
@@ -356,54 +353,164 @@ class _CapturePlot extends StatefulWidget {
 }
 
 class _CapturePlotState extends State<_CapturePlot> {
+  void _openFullScreen() {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (_) => _FullScreenPlot(
+        key: ValueKey('fullscreen-${widget.uri}'),
+        uri: widget.uri,
+        customBuilder: widget.customBuilder,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => _Section(
-    title: 'Capture plot',
-    trailing: IconButton(
-      tooltip: 'Refresh plot',
-      onPressed: widget.onRetry,
-      icon: const Icon(Icons.refresh),
+    title: 'Spatial Acoustic Profile',
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'Refresh plot',
+          onPressed: widget.onRetry,
+          icon: const Icon(Icons.refresh),
+        ),
+        IconButton(
+          tooltip: 'Expand plot',
+          onPressed: _openFullScreen,
+          icon: const Icon(Icons.fullscreen),
+        ),
+      ],
     ),
     children: [
-      AspectRatio(
-        aspectRatio: 7 / 5,
-        child: InteractiveViewer(
-          minScale: 0.75,
-          maxScale: 5,
-          child:
-              widget.customBuilder?.call(widget.uri) ??
-              Image.network(
-                widget.uri.toString(),
-                key: ValueKey(widget.uri),
-                fit: BoxFit.contain,
-                loadingBuilder: (context, child, progress) => progress == null
-                    ? child
-                    : const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            CircularProgressIndicator(),
-                            SizedBox(height: 10),
-                            Text('Loading capture plot…'),
-                          ],
+      const Text(
+        'Node position from saved room layout. Band wedges show low/mid/high '
+        'energy ratios. Halo represents Estimated SPL.',
+      ),
+      const SizedBox(height: 10),
+      LayoutBuilder(
+        builder: (context, constraints) => ClipRect(
+          child: SizedBox(
+            key: const ValueKey('inline-capture-plot'),
+            width: double.infinity,
+            height: (constraints.maxWidth * 0.55).clamp(280.0, 460.0),
+            child:
+                widget.customBuilder?.call(widget.uri) ??
+                Image.network(
+                  widget.uri.toString(),
+                  key: ValueKey(widget.uri),
+                  fit: BoxFit.contain,
+                  loadingBuilder: (context, child, progress) => progress == null
+                      ? child
+                      : const Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircularProgressIndicator(),
+                              SizedBox(height: 10),
+                              Text('Loading capture plot…'),
+                            ],
+                          ),
                         ),
-                      ),
-                errorBuilder: (_, _, _) => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('Capture plot could not be loaded.'),
-                      TextButton(
-                        onPressed: widget.onRetry,
-                        child: const Text('Retry'),
-                      ),
-                    ],
+                  errorBuilder: (_, _, _) => Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('Capture plot could not be loaded.'),
+                        TextButton(
+                          onPressed: widget.onRetry,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+          ),
         ),
       ),
     ],
+  );
+}
+
+class _FullScreenPlot extends StatefulWidget {
+  const _FullScreenPlot({
+    super.key,
+    required this.uri,
+    required this.customBuilder,
+  });
+  final Uri uri;
+  final Widget Function(Uri uri)? customBuilder;
+
+  @override
+  State<_FullScreenPlot> createState() => _FullScreenPlotState();
+}
+
+class _FullScreenPlotState extends State<_FullScreenPlot> {
+  late final TransformationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TransformationController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Widget _image() =>
+      widget.customBuilder?.call(widget.uri) ??
+      Image.network(
+        widget.uri.toString(),
+        key: ValueKey('fullscreen-image-${widget.uri}'),
+        fit: BoxFit.contain,
+        loadingBuilder: (context, child, progress) => progress == null
+            ? child
+            : const Center(child: CircularProgressIndicator()),
+        errorBuilder: (_, _, _) =>
+            const Center(child: Text('Capture plot could not be loaded.')),
+      );
+
+  @override
+  Widget build(BuildContext context) => Dialog.fullscreen(
+    backgroundColor: const Color(0xFF08080C),
+    child: SafeArea(
+      child: Column(
+        children: [
+          AppBar(
+            title: const Text('Spatial Acoustic Profile'),
+            automaticallyImplyLeading: false,
+            actions: [
+              IconButton(
+                tooltip: 'Reset view',
+                onPressed: () => _controller.value = Matrix4.identity(),
+                icon: const Icon(Icons.center_focus_strong),
+              ),
+              IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          Expanded(
+            child: ClipRect(
+              child: InteractiveViewer(
+                key: const ValueKey('fullscreen-capture-viewer'),
+                transformationController: _controller,
+                minScale: 0.8,
+                maxScale: 5,
+                trackpadScrollCausesScale: false,
+                child: SizedBox.expand(child: Center(child: _image())),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
   );
 }
 
@@ -487,8 +594,38 @@ class _NodeResults extends StatelessWidget {
                                   'Estimated SPL: ${_db(entry.value.estimatedSplDb)}',
                                 ),
                                 Text(
-                                  'Peak frequency: ${_hz(entry.value.peakFrequencyHz)}',
+                                  'Representative frequency: ${_hz(entry.value.peakFrequencyHz)}',
                                 ),
+                                if ([
+                                  entry.value.lowRatio,
+                                  entry.value.midRatio,
+                                  entry.value.highRatio,
+                                ].every(
+                                  (value) => value != null && value.isFinite,
+                                ))
+                                  Wrap(
+                                    spacing: 12,
+                                    runSpacing: 2,
+                                    children: [
+                                      _BandRatio(
+                                        label: 'L',
+                                        value: entry.value.lowRatio!,
+                                        color: const Color(0xFF3B82F6),
+                                      ),
+                                      _BandRatio(
+                                        label: 'M',
+                                        value: entry.value.midRatio!,
+                                        color: const Color(0xFF22C55E),
+                                      ),
+                                      _BandRatio(
+                                        label: 'H',
+                                        value: entry.value.highRatio!,
+                                        color: const Color(0xFFEF4444),
+                                      ),
+                                    ],
+                                  )
+                                else
+                                  const Text('Band ratios: Unavailable'),
                                 Text(
                                   'Samples: ${entry.value.sampleCount ?? '—'}',
                                 ),
@@ -503,6 +640,23 @@ class _NodeResults extends StatelessWidget {
             ],
     );
   }
+}
+
+class _BandRatio extends StatelessWidget {
+  const _BandRatio({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+  final String label;
+  final double value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    '$label ${_ratio(value)}',
+    style: TextStyle(color: color, fontWeight: FontWeight.w600),
+  );
 }
 
 class _Warnings extends StatelessWidget {
@@ -661,3 +815,7 @@ String _hz(double? value) {
       ? '${(value / 1000).toStringAsFixed(2)} kHz'
       : '${value.toStringAsFixed(1)} Hz';
 }
+
+String _ratio(double? value) => value == null || !value.isFinite
+    ? 'â€”'
+    : '${(value * 100).toStringAsFixed(0)}%';

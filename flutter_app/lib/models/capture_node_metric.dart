@@ -7,6 +7,9 @@ class CaptureNodeMetric {
     this.dbfs,
     this.estimatedSplDb,
     this.peakFrequencyHz,
+    this.lowRatio,
+    this.midRatio,
+    this.highRatio,
     this.normalizedX,
     this.normalizedY,
     this.xPositionM,
@@ -22,6 +25,9 @@ class CaptureNodeMetric {
   final double? dbfs;
   final double? estimatedSplDb;
   final double? peakFrequencyHz;
+  final double? lowRatio;
+  final double? midRatio;
+  final double? highRatio;
   final double? normalizedX;
   final double? normalizedY;
   final double? xPositionM;
@@ -38,7 +44,12 @@ class CaptureNodeMetric {
       rms: number('mean_rms'),
       dbfs: number('mean_dbfs'),
       estimatedSplDb: number('mean_estimated_spl_db'),
-      peakFrequencyHz: number('peak_frequency_hz'),
+      peakFrequencyHz:
+          number('representative_peak_frequency_hz') ??
+          number('peak_frequency_hz'),
+      lowRatio: number('mean_fft_low_ratio'),
+      midRatio: number('mean_fft_mid_ratio'),
+      highRatio: number('mean_fft_high_ratio'),
       normalizedX: number('normalized_x'),
       normalizedY: number('normalized_y'),
       xPositionM: number('x_position_m'),
