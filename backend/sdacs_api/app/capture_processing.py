@@ -6,9 +6,15 @@ import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, Patch, Rectangle, Wedge
+from matplotlib.lines import Line2D
 
 from .edge_impulse import APPROVED_CLASSES, EdgeImpulseRunner
 
@@ -97,13 +103,19 @@ def acoustic_analysis(
     for row in feature_rows:
         rows_by_node.setdefault(str(row.get("node_id")), []).append(row)
         level = row.get("db_spl")
-        if isinstance(level, (int, float)):
+        if (
+            isinstance(level, (int, float))
+            and not isinstance(level, bool)
+            and math.isfinite(float(level))
+        ):
             node_levels.setdefault(str(row["node_id"]), []).append(float(level))
-        if isinstance(row.get("f_peak_hz"), (int, float)):
+        if (
+            isinstance(row.get("f_peak_hz"), (int, float))
+            and not isinstance(row.get("f_peak_hz"), bool)
+            and math.isfinite(float(row["f_peak_hz"]))
+            and float(row["f_peak_hz"]) > 0
+        ):
             frequencies.append(float(row["f_peak_hz"]))
-        for band, key in (("low", "fft_low_ratio"), ("mid", "fft_mid_ratio"), ("high", "fft_high_ratio")):
-            if isinstance(row.get(key), (int, float)):
-                bands[band] += float(row[key])
     means = {node: sum(values) / len(values) for node, values in node_levels.items() if values}
     node_metrics: dict[str, dict[str, Any]] = {}
     for node_id, rows in rows_by_node.items():
@@ -118,7 +130,45 @@ def acoustic_analysis(
         rms_values = finite_values("rms")
         dbfs_values = finite_values("dbfs")
         spl_values = finite_values("db_spl")
-        peak_values = finite_values("f_peak_hz")
+        peak_values = [value for value in finite_values("f_peak_hz") if value > 0]
+        band_energies = {"low": 0.0, "mid": 0.0, "high": 0.0}
+        usable_band_rows = 0
+        for row in rows:
+            energy = row.get("fft_total_energy")
+            ratios = {
+                "low": row.get("fft_low_ratio"),
+                "mid": row.get("fft_mid_ratio"),
+                "high": row.get("fft_high_ratio"),
+            }
+            if (
+                not isinstance(energy, (int, float))
+                or isinstance(energy, bool)
+                or not math.isfinite(float(energy))
+                or float(energy) <= 0
+                or not all(
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    and float(value) >= 0
+                    for value in ratios.values()
+                )
+            ):
+                continue
+            for band, ratio in ratios.items():
+                band_energies[band] += float(energy) * float(ratio)
+            usable_band_rows += 1
+        total_band_energy = sum(band_energies.values())
+        band_ratios = (
+            {
+                band: energy / total_band_energy
+                for band, energy in band_energies.items()
+            }
+            if usable_band_rows and total_band_energy > 0
+            else {"low": None, "mid": None, "high": None}
+        )
+        if band_ratios["low"] is not None:
+            for band in bands:
+                bands[band] += band_energies[band]
         valid_rows = sum(
             1 for row in rows
             if any(
@@ -140,6 +190,8 @@ def acoustic_analysis(
         ]
         if missing:
             warnings.append(f"No valid values for: {', '.join(missing)}.")
+        if band_ratios["low"] is None:
+            warnings.append("Band ratios unavailable for this node.")
         if any(value < 2000 for value in peak_values):
             warnings.append(
                 "Low-frequency FFT peak estimates below approximately 2 kHz "
@@ -153,7 +205,11 @@ def acoustic_analysis(
             "mean_rms": mean(rms_values),
             "mean_dbfs": mean(dbfs_values),
             "mean_estimated_spl_db": mean(spl_values),
-            "peak_frequency_hz": mean(peak_values),
+            "peak_frequency_hz": median(peak_values) if peak_values else None,
+            "representative_peak_frequency_hz": median(peak_values) if peak_values else None,
+            "mean_fft_low_ratio": band_ratios["low"],
+            "mean_fft_mid_ratio": band_ratios["mid"],
+            "mean_fft_high_ratio": band_ratios["high"],
             "normalized_x": position.get("normalized_x"),
             "normalized_y": position.get("normalized_y"),
             "x_position_m": position.get("x_m"),
@@ -183,34 +239,167 @@ def acoustic_analysis(
         "quietest_node_id": quietest,
         "spatial_variation_db": max(means.values()) - min(means.values()) if means else None,
         "plot_filename": "acoustic_map.png" if means else None,
+        "plot_title": f"Spatial Acoustic Profile\n{capture_id}",
         "warnings": (
-            ([] if len(means) == 4 else ["Reduced spatial reliability: fewer than four nodes supplied acoustic data."])
+            (
+                [] if len(means) == 4
+                else ["Single-node summary only; this is not a reliable room field."] if len(means) == 1
+                else ["Limited two-node comparison; no room field interpolation was performed."] if len(means) == 2
+                else ["Partial three-node profile; no missing node values were invented."]
+            )
             + (["Low-frequency FFT peak estimates below approximately 2 kHz should be interpreted cautiously."]
                if any(frequency < 2000 for frequency in frequencies) else [])
         ),
+        "plot_coordinates": {
+            "source": {
+                "normalized_x": layout["source"].get("normalized_x"),
+                "normalized_y": layout["source"].get("normalized_y"),
+                "x_position_m": layout["source"].get("x_m"),
+                "y_position_m": layout["source"].get("y_m"),
+            },
+            "nodes": {
+                node_id: {
+                    "normalized_x": metric["normalized_x"],
+                    "normalized_y": metric["normalized_y"],
+                    "x_position_m": metric["x_position_m"],
+                    "y_position_m": metric["y_position_m"],
+                }
+                for node_id, metric in node_metrics.items()
+            },
+        },
     }
     if means:
-        fig, axis = plt.subplots(figsize=(7, 5))
-        for node_id, position in layout["nodes"].items():
-            x_key, y_key = ("x_m", "y_m") if layout["units"] == "meters" else ("normalized_x", "normalized_y")
-            value = means.get(node_id)
-            axis.scatter(
-                position[x_key], position[y_key],
-                s=360 if value is not None else 180,
-                c=[value] if value is not None else ["#888888"],
-                cmap="viridis", vmin=min(means.values()), vmax=max(means.values()) + 0.001,
-                marker="o" if value is not None else "x",
+        plt.style.use("dark_background")
+        fig, axis = plt.subplots(figsize=(12, 7))
+        fig.subplots_adjust(top=0.84, bottom=0.22, left=0.08, right=0.97)
+        fig.patch.set_facecolor("#101018")
+        axis.set_facecolor("#171722")
+        physical = layout["units"] == "meters"
+        x_key, y_key = ("x_m", "y_m") if physical else ("normalized_x", "normalized_y")
+        room_width = layout.get("room_width_m") if physical else 1.0
+        room_depth = layout.get("room_depth_m") if physical else 1.0
+        room_width = float(room_width or 1.0)
+        room_depth = float(room_depth or 1.0)
+        axis.add_patch(
+            Rectangle(
+                (0, 0), room_width, room_depth,
+                fill=False, edgecolor="#A78BFA", linewidth=2.0,
             )
-            axis.annotate(f"{node_id}\n{value:.1f} dB" if value is not None else f"{node_id}\nno data",
-                          (position[x_key], position[y_key]), textcoords="offset points", xytext=(6, 6))
+        )
+        glyph_radius = max(min(room_width, room_depth) * 0.055, 0.035)
+        colors = {"low": "#3B82F6", "mid": "#22C55E", "high": "#EF4444"}
+        for node_id, metric in sorted(node_metrics.items()):
+            x = metric["x_position_m"] if physical else metric["normalized_x"]
+            y = metric["y_position_m"] if physical else metric["normalized_y"]
+            if x is None or y is None:
+                continue
+            ratios = {
+                "low": metric["mean_fft_low_ratio"],
+                "mid": metric["mean_fft_mid_ratio"],
+                "high": metric["mean_fft_high_ratio"],
+            }
+            if all(value is not None for value in ratios.values()):
+                start = 90.0
+                for band in ("low", "mid", "high"):
+                    sweep = 360.0 * float(ratios[band])
+                    axis.add_patch(
+                        Wedge(
+                            (x, y), glyph_radius, start, start + sweep,
+                            facecolor=colors[band], edgecolor="#E5E7EB", linewidth=0.7,
+                            zorder=4,
+                        )
+                    )
+                    start += sweep
+                axis.add_patch(
+                    Circle(
+                        (x, y), glyph_radius * 0.36,
+                        facecolor="#18181B", edgecolor="#D4D4D8",
+                        linewidth=0.6, zorder=5,
+                    )
+                )
+            else:
+                axis.add_patch(
+                    Circle(
+                        (x, y), glyph_radius,
+                        facecolor="#52525B", edgecolor="#E5E7EB", zorder=4,
+                    )
+                )
+            spl = metric["mean_estimated_spl_db"]
+            if spl is not None:
+                # Fixed 20-80 dB display scale; never normalized per capture.
+                spl_fraction = min(max((float(spl) - 20.0) / 60.0, 0.0), 1.0)
+                axis.add_patch(
+                    Circle(
+                        (x, y), glyph_radius * (1.18 + 0.22 * spl_fraction),
+                        fill=False, edgecolor="#FBBF24",
+                        linewidth=1.5 + 3.0 * spl_fraction, alpha=0.9,
+                        zorder=3,
+                    )
+                )
+            frequency = metric["representative_peak_frequency_hz"]
+            frequency_text = f"{frequency:.0f} Hz" if frequency is not None else "frequency unavailable"
+            spl_text = f"{spl:.1f} dB est." if spl is not None else "Estimated SPL unavailable"
+            normalized_x = float(metric["normalized_x"] or 0.5)
+            normalized_y = float(metric["normalized_y"] or 0.5)
+            horizontal_offset = 14 if normalized_x < 0.5 else -14
+            vertical_offset = 18 if normalized_y < 0.5 else -18
+            axis.annotate(
+                f"{node_id}\n{spl_text}\n{frequency_text}",
+                (x, y), textcoords="offset points",
+                xytext=(horizontal_offset, vertical_offset),
+                ha="left" if normalized_x < 0.5 else "right",
+                va="bottom" if normalized_y < 0.5 else "top",
+                fontsize=9, color="#F4F4F5",
+                bbox={"boxstyle": "round,pad=0.25", "facecolor": "#09090B", "alpha": 0.78, "edgecolor": "none"},
+                zorder=7,
+            )
         source = layout["source"]
-        axis.scatter(source[x_key], source[y_key], marker="*", s=300, color="#8B5CF6")
+        axis.scatter(
+            source[x_key], source[y_key], marker="*", s=360,
+            color="#C084FC", edgecolors="#FFFFFF", linewidths=1.0, zorder=6,
+        )
+        axis.annotate(
+            "Test Source\nBroker", (source[x_key], source[y_key]),
+            textcoords="offset points", xytext=(12, -24), color="#E9D5FF",
+            fontweight="bold",
+        )
         axis.invert_yaxis()
+        axis.set_xlim(-0.04 * room_width, 1.04 * room_width)
+        axis.set_ylim(1.04 * room_depth, -0.04 * room_depth)
+        axis.set_aspect("equal", adjustable="box")
         axis.set_xlabel("X (m)" if layout["units"] == "meters" else "Normalized X")
         axis.set_ylabel("Y (m)" if layout["units"] == "meters" else "Normalized Y")
-        axis.set_title(f"SDACS capture {capture_id}")
-        fig.tight_layout()
-        fig.savefig(directory / "acoustic_map.png", dpi=150)
+        dimensions = (
+            f"{room_width:.2f} m × {room_depth:.2f} m"
+            if physical else "Normalized room coordinates"
+        )
+        axis.set_title(
+            f"{summary['plot_title']} · {dimensions}",
+            fontsize=15, pad=16,
+        )
+        axis.text(
+            0.01, 0.01, "Origin: upper-left; +Y points downward",
+            transform=axis.transAxes, fontsize=8, color="#A1A1AA",
+            ha="left", va="bottom",
+        )
+        axis.legend(
+            handles=[
+                Patch(color=colors["low"], label="Blue wedge — Low-frequency energy"),
+                Patch(color=colors["mid"], label="Green wedge — Mid-frequency energy"),
+                Patch(color=colors["high"], label="Red wedge — High-frequency energy"),
+                Patch(facecolor="none", edgecolor="#FBBF24", label="Outer halo — Estimated SPL (fixed 20–80 dB scale)"),
+                Line2D(
+                    [0], [0], marker="*", color="none",
+                    markerfacecolor="#C084FC", markeredgecolor="#FFFFFF",
+                    markersize=12, label="Purple star — Test Source / Broker",
+                ),
+            ],
+            loc="upper center", bbox_to_anchor=(0.5, -0.11), ncol=3, frameon=False,
+        )
+        fig.savefig(
+            directory / "acoustic_map.png", dpi=150,
+            bbox_inches="tight", pad_inches=0.15, facecolor=fig.get_facecolor(),
+        )
         plt.close(fig)
     atomic_json(directory / "acoustic_summary.json", summary)
     return summary

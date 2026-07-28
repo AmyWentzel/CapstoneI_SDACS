@@ -101,6 +101,7 @@ def test_acoustic_summary_contains_capture_wide_per_node_metrics(tmp_path):
     layout = {
         "capture_id": "capture_metrics", "layout_revision": 2,
         "coordinate_system": "room_upper_left_x_right_y_down", "units": "meters",
+        "room_width_m": 5.0, "room_depth_m": 6.0,
         "source": {"x_m": 2.5, "y_m": 2.0, "z_m": 1.2},
         "nodes": {
             f"node0{i}": {"normalized_x": i / 10, "normalized_y": i / 8,
@@ -126,3 +127,107 @@ def test_acoustic_summary_contains_capture_wide_per_node_metrics(tmp_path):
     assert summary["node_metrics"]["node02"]["mean_dbfs"] != summary["node_metrics"]["node03"]["mean_dbfs"]
     assert summary["node_metrics"]["node04"]["x_position_m"] == 4.0
     assert summary["node_metrics"]["node01"]["warnings"]
+
+
+def test_spatial_profile_uses_weighted_bands_median_frequency_and_snapshot_coordinates(tmp_path):
+    layout = {
+        "capture_id": "capture_profile", "layout_revision": 7,
+        "coordinate_system": "room_upper_left_x_right_y_down", "units": "meters",
+        "room_width_m": 6.0, "room_depth_m": 4.0,
+        "source": {
+            "normalized_x": 0.62, "normalized_y": 0.41,
+            "x_m": 3.72, "y_m": 1.64, "z_m": 1.2,
+        },
+        "nodes": {
+            "node01": {
+                "normalized_x": 0.2, "normalized_y": 0.3,
+                "x_m": 1.2, "y_m": 1.2, "z_m": 1.2,
+            },
+            "node02": {
+                "normalized_x": 0.8, "normalized_y": 0.7,
+                "x_m": 4.8, "y_m": 2.8, "z_m": 1.2,
+            },
+            "node03": {
+                "normalized_x": 0.2, "normalized_y": 0.7,
+                "x_m": 1.2, "y_m": 2.8, "z_m": 1.2,
+            },
+            "node04": {
+                "normalized_x": 0.8, "normalized_y": 0.3,
+                "x_m": 4.8, "y_m": 1.2, "z_m": 1.2,
+            },
+        },
+    }
+    layout_path = tmp_path / "room_layout.json"
+    atomic_json(layout_path, layout)
+    rows = [
+        {
+            "record_type": "features", "node_id": "node01",
+            "db_spl": 33.0, "f_peak_hz": 80.0,
+            "fft_total_energy": 2.0,
+            "fft_low_ratio": 0.5, "fft_mid_ratio": 0.3, "fft_high_ratio": 0.2,
+        },
+        {
+            "record_type": "features", "node_id": "node01",
+            "db_spl": 35.0, "f_peak_hz": 120.0,
+            "fft_total_energy": 1.0,
+            "fft_low_ratio": 0.2, "fft_mid_ratio": 0.3, "fft_high_ratio": 0.5,
+        },
+        {
+            "record_type": "features", "node_id": "node01",
+            "db_spl": 34.0, "f_peak_hz": 100.0,
+            "fft_total_energy": 1.0,
+            "fft_low_ratio": 0.2, "fft_mid_ratio": 0.2, "fft_high_ratio": 0.6,
+        },
+        {
+            "record_type": "features", "node_id": "node02",
+            "db_spl": 32.0, "f_peak_hz": 100.0,
+            "fft_total_energy": None,
+            "fft_low_ratio": None, "fft_mid_ratio": None, "fft_high_ratio": None,
+        },
+        {
+            "record_type": "features", "node_id": "node02",
+            "db_spl": 32.5, "f_peak_hz": 200.0,
+        },
+        *[
+            {
+                "record_type": "features", "node_id": "node02",
+                "db_spl": 32.0, "f_peak_hz": invalid_peak,
+            }
+            for invalid_peak in (None, 0.0, -1.0, float("nan"), float("inf"))
+        ],
+        *[
+            {
+                "record_type": "features", "node_id": "node03",
+                "db_spl": 31.0, "f_peak_hz": invalid_peak,
+            }
+            for invalid_peak in (None, 0.0, -2.0, float("nan"), float("inf"))
+        ],
+    ]
+
+    summary = acoustic_analysis("capture_profile", rows, tmp_path, layout_path)
+    node01 = summary["node_metrics"]["node01"]
+    assert node01["representative_peak_frequency_hz"] == pytest.approx(100.0)
+    assert node01["peak_frequency_hz"] == pytest.approx(100.0)
+    assert node01["mean_fft_low_ratio"] == pytest.approx(1.4 / 4.0)
+    assert node01["mean_fft_mid_ratio"] == pytest.approx(1.1 / 4.0)
+    assert node01["mean_fft_high_ratio"] == pytest.approx(1.5 / 4.0)
+    assert sum(node01[key] for key in (
+        "mean_fft_low_ratio", "mean_fft_mid_ratio", "mean_fft_high_ratio"
+    )) == pytest.approx(1.0)
+    assert summary["node_metrics"]["node02"]["mean_fft_low_ratio"] is None
+    assert summary["node_metrics"]["node02"]["mean_fft_mid_ratio"] is None
+    assert summary["node_metrics"]["node02"]["mean_fft_high_ratio"] is None
+    assert summary["node_metrics"]["node02"]["representative_peak_frequency_hz"] == pytest.approx(150.0)
+    assert summary["node_metrics"]["node03"]["representative_peak_frequency_hz"] is None
+    assert "Band ratios unavailable for this node." in summary["node_metrics"]["node02"]["warnings"]
+    assert node01["x_position_m"] == pytest.approx(1.2)
+    assert node01["y_position_m"] == pytest.approx(1.2)
+    assert summary["plot_coordinates"]["source"]["x_position_m"] == pytest.approx(3.72)
+    assert summary["plot_coordinates"]["source"]["y_position_m"] == pytest.approx(1.64)
+    assert set(summary["plot_coordinates"]["nodes"]) == {"node01", "node02", "node03"}
+    assert set(summary["node_metrics"]) == {"node01", "node02", "node03"}
+    assert "node04" not in summary["node_metrics"]
+    assert summary["plot_title"] == "Spatial Acoustic Profile\ncapture_profile"
+    assert "capture capture_" not in summary["plot_title"]
+    assert (tmp_path / "acoustic_map.png").is_file()
+    assert (tmp_path / "acoustic_map.png").stat().st_size > 0
