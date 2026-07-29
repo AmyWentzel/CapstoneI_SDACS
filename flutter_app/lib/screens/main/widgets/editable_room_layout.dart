@@ -703,7 +703,7 @@ class _Recommendation extends StatelessWidget {
       style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
     ),
     subtitle: Text(
-      'Run Test to generate capture-specific acoustic guidance.',
+      'Run a Capture to generate capture-specific acoustic guidance.',
       style: TextStyle(color: Color(0xFFA1A1AA)),
     ),
   );

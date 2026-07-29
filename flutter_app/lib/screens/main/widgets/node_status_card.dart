@@ -77,7 +77,7 @@ class _NodeStatusCardState extends State<NodeStatusCard> {
               ),
               const SizedBox(height: 4),
               Text(
-                capture == null ? 'No capture data' : 'Latest Test',
+                capture == null ? 'No capture data' : 'Latest Capture',
                 style: textTheme.labelMedium,
               ),
               Wrap(

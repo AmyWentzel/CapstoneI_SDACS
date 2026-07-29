@@ -6,6 +6,7 @@ class CaptureNodeMetric {
     this.rms,
     this.dbfs,
     this.estimatedSplDb,
+    this.currentOffsetDb,
     this.peakFrequencyHz,
     this.lowRatio,
     this.midRatio,
@@ -24,6 +25,7 @@ class CaptureNodeMetric {
   final double? rms;
   final double? dbfs;
   final double? estimatedSplDb;
+  final double? currentOffsetDb;
   final double? peakFrequencyHz;
   final double? lowRatio;
   final double? midRatio;
@@ -44,6 +46,7 @@ class CaptureNodeMetric {
       rms: number('mean_rms'),
       dbfs: number('mean_dbfs'),
       estimatedSplDb: number('mean_estimated_spl_db'),
+      currentOffsetDb: number('cal_offset_db') ?? number('current_offset_db'),
       peakFrequencyHz:
           number('representative_peak_frequency_hz') ??
           number('peak_frequency_hz'),

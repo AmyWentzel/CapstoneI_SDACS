@@ -6,6 +6,7 @@ class CaptureSession {
     required this.status,
     required this.requestedAt,
     required this.scheduledStartAt,
+    this.scheduledStartProvided = true,
     required this.durationSeconds,
     required this.completedNodes,
     required this.missingNodes,
@@ -20,6 +21,7 @@ class CaptureSession {
   final String status;
   final DateTime requestedAt;
   final DateTime scheduledStartAt;
+  final bool scheduledStartProvided;
   final int durationSeconds;
   final List<String> completedNodes;
   final List<String> missingNodes;
@@ -54,6 +56,7 @@ class CaptureSession {
       status: json['status']?.toString() ?? 'requested',
       requestedAt: DateTime.tryParse(requested ?? '') ?? DateTime.now(),
       scheduledStartAt: DateTime.tryParse(scheduled ?? '') ?? DateTime.now(),
+      scheduledStartProvided: scheduled != null && scheduled.isNotEmpty,
       durationSeconds: (json['record_seconds'] as num?)?.toInt() ?? 0,
       completedNodes: strings('completed_nodes'),
       missingNodes: strings('missing_nodes'),

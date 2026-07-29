@@ -151,7 +151,7 @@ class _GraphsScreenState extends State<GraphsScreen> {
           children: [
             if (captureId == null)
               _MessageCard(
-                message: _error ?? 'Run a Test to generate results.',
+                message: _error ?? 'Run a Capture to generate results.',
                 isError: _error != null,
               )
             else ...[
