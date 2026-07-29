@@ -428,6 +428,14 @@ static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_f
         "\"converted_peak_abs\":%" PRId32 ","
         "\"converted_p2p_raw\":%" PRId32 ","
         "\"converted_zeros\":%u,"
+        "\"mic_software_gain\":%.3f,"
+        "\"pre_gain_peak_abs\":%" PRId32 ","
+        "\"post_gain_peak_abs\":%" PRId32 ","
+        "\"clipped_sample_count\":%u,"
+        "\"pre_gain_min\":%" PRId32 ","
+        "\"pre_gain_max\":%" PRId32 ","
+        "\"pre_gain_rms\":%.2f,"
+        "\"pre_gain_dbfs\":%.2f,"
         "\"current_min\":%" PRId32 ","
         "\"current_max\":%" PRId32 ","
         "\"current_peak_abs\":%" PRId32 ","
@@ -468,6 +476,14 @@ static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_f
         d->converted_peak_abs,
         d->converted_p2p_raw,
         (unsigned)d->converted_zeros,
+        (double)d->software_gain,
+        d->pre_gain_peak_abs,
+        d->post_gain_peak_abs,
+        (unsigned)d->clipped_sample_count,
+        d->pre_gain.min,
+        d->pre_gain.max,
+        (double)d->pre_gain.rms,
+        (double)d->pre_gain.dbfs,
         d->current.min,
         d->current.max,
         d->current.peak_abs,

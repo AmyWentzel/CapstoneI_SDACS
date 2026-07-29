@@ -927,9 +927,11 @@ static void capture_task_run(void *arg)
 
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
                 ESP_LOGI(TAG,
-                         "RAW DIAG seq=%u conversion=%s n=%u f_peak_full=%.1f f_peak_acoustic=%.1f tone_1khz_peak=%.1f tone_1khz_ratio=%.4f tone_1khz_detected=%s low_rumble_ratio=%.4f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
+                         "RAW DIAG seq=%u conversion=%s gain=%.3f clipped=%u n=%u f_peak_full=%.1f f_peak_acoustic=%.1f tone_1khz_peak=%.1f tone_1khz_ratio=%.4f tone_1khz_detected=%s low_rumble_ratio=%.4f pre_gain_p2p=%" PRId32 " pre_gain_dbfs=%.2f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
                          (unsigned)seq,
                          SDACS_I2S_SAMPLE_CONVERSION_LABEL,
+                         (double)raw_diag.software_gain,
+                         (unsigned)raw_diag.clipped_sample_count,
                          (unsigned)metrics.sample_count,
                          (double)metrics.f_peak_full_hz,
                          (double)metrics.f_peak_acoustic_hz,
@@ -937,6 +939,8 @@ static void capture_task_run(void *arg)
                          (double)metrics.tone_1khz_ratio,
                          metrics.tone_1khz_detected ? "true" : "false",
                          (double)metrics.low_rumble_ratio,
+                         raw_diag.pre_gain.p2p,
+                         (double)raw_diag.pre_gain.dbfs,
                          raw_diag.current.p2p,
                          (double)raw_diag.current.dbfs,
                          raw_diag.shift8.p2p,

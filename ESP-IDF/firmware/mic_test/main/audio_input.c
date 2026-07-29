@@ -47,7 +47,9 @@ typedef struct {
     uint32_t raw_word_repeated_count;
     uint32_t converted_zeros;
     uint32_t sample_count;
+    uint32_t clipped_sample_count;
     int32_t converted_sample0;
+    conversion_accum_t pre_gain;
     conversion_accum_t current;
     conversion_accum_t shift8;
     conversion_accum_t low24;
@@ -161,6 +163,37 @@ static inline int32_t i2s_word_to_production_sample(uint32_t raw_word)
 #endif
 }
 
+static inline float configured_software_gain(void)
+{
+    const float gain = SDACS_MIC_SOFTWARE_GAIN;
+    return (isfinite(gain) && gain > 0.0f) ? gain : 1.0f;
+}
+
+static inline int32_t apply_software_gain_s24(int32_t sample, float gain, bool *clipped)
+{
+    const double scaled = (double)sample * (double)gain;
+
+    if (clipped) {
+        *clipped = false;
+    }
+
+    if (scaled > (double)SDACS_MIC_S24_MAX) {
+        if (clipped) {
+            *clipped = true;
+        }
+        return SDACS_MIC_S24_MAX;
+    }
+
+    if (scaled < (double)SDACS_MIC_S24_MIN) {
+        if (clipped) {
+            *clipped = true;
+        }
+        return SDACS_MIC_S24_MIN;
+    }
+
+    return (int32_t)lrint(scaled);
+}
+
 static void conversion_accum_reset(conversion_accum_t *acc)
 {
     if (!acc) {
@@ -219,7 +252,7 @@ static void conversion_diag_from_accum(audio_input_conversion_diag_t *out,
     };
 }
 
-static void raw_diag_accumulate(uint32_t raw_word, int32_t current_sample)
+static void raw_diag_accumulate(uint32_t raw_word, int32_t pre_gain_sample, int32_t current_sample, bool clipped)
 {
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
     if (!s_raw_diagnostics_enabled) {
@@ -260,7 +293,11 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t current_sample)
     if (current_sample == 0) {
         s_raw_diag.converted_zeros++;
     }
+    if (clipped) {
+        s_raw_diag.clipped_sample_count++;
+    }
 
+    conversion_accum_push(&s_raw_diag.pre_gain, pre_gain_sample);
     conversion_accum_push(&s_raw_diag.current, current_sample);
     conversion_accum_push(&s_raw_diag.shift8, shift8_sample);
     conversion_accum_push(&s_raw_diag.low24, low24_sample);
@@ -268,7 +305,9 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t current_sample)
     s_raw_diag.sample_count++;
 #else
     (void)raw_word;
+    (void)pre_gain_sample;
     (void)current_sample;
+    (void)clipped;
 #endif
 }
 
@@ -276,6 +315,7 @@ static void raw_diag_reset_internal(void)
 {
     memset(&s_raw_diag, 0, sizeof(s_raw_diag));
     s_raw_diag.raw_word_min = UINT32_MAX;
+    conversion_accum_reset(&s_raw_diag.pre_gain);
     conversion_accum_reset(&s_raw_diag.current);
     conversion_accum_reset(&s_raw_diag.shift8);
     conversion_accum_reset(&s_raw_diag.low24);
@@ -574,6 +614,7 @@ esp_err_t audio_input_read_s24(int32_t *dst,
     uint32_t raw_min = UINT32_MAX;
     uint32_t raw_max = 0;
     bool have_prev_raw = false;
+    const float software_gain = configured_software_gain();
 
     for (size_t i = 0; i < selected_samples_read; ++i) {
 #if SDACS_I2S_RX_MODE == SDACS_I2S_RX_MODE_STEREO_RAW
@@ -585,10 +626,12 @@ esp_err_t audio_input_read_s24(int32_t *dst,
             break;
         }
         uint32_t raw_word = (uint32_t)s_audio.raw[raw_index];
-        int32_t sample = i2s_word_to_production_sample(raw_word);
+        int32_t pre_gain_sample = i2s_word_to_production_sample(raw_word);
+        bool clipped = false;
+        int32_t sample = apply_software_gain_s24(pre_gain_sample, software_gain, &clipped);
         int32_t abs_sample = (sample < 0) ? -sample : sample;
         dst[i] = sample;
-        raw_diag_accumulate(raw_word, sample);
+        raw_diag_accumulate(raw_word, pre_gain_sample, sample, clipped);
 
         if (sample < min_sample) {
             min_sample = sample;
@@ -684,6 +727,7 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     }
 
     memset(out, 0, sizeof(*out));
+    out->software_gain = configured_software_gain();
     out->dbfs_normalization_bits = SDACS_MIC_VALID_BITS;
 
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
@@ -695,8 +739,10 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     out->raw_word_repeated_count = s_raw_diag.raw_word_repeated_count;
     out->converted_zeros = s_raw_diag.converted_zeros;
     out->sample_count = s_raw_diag.sample_count;
+    out->clipped_sample_count = s_raw_diag.clipped_sample_count;
     out->converted_sample0 = s_raw_diag.converted_sample0;
 
+    conversion_diag_from_accum(&out->pre_gain, &s_raw_diag.pre_gain, 8388607.0f);
     conversion_diag_from_accum(&out->current, &s_raw_diag.current, 8388607.0f);
     conversion_diag_from_accum(&out->shift8, &s_raw_diag.shift8, 8388607.0f);
     conversion_diag_from_accum(&out->low24, &s_raw_diag.low24, 8388607.0f);
@@ -706,6 +752,8 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     out->converted_sample_max = out->current.max;
     out->converted_peak_abs = out->current.peak_abs;
     out->converted_p2p_raw = out->current.p2p;
+    out->pre_gain_peak_abs = out->pre_gain.peak_abs;
+    out->post_gain_peak_abs = out->current.peak_abs;
     if (s_raw_diag.current.count > 0U) {
         float rms = sqrtf((float)(s_raw_diag.current.sum_sq / (double)s_raw_diag.current.count));
         out->dbfs_norm_24bit = 20.0f * log10f((rms / 8388607.0f) + 1e-12f);
@@ -715,6 +763,7 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
         out->dbfs_norm_32bit = -120.0f;
     }
 #else
+    out->pre_gain.dbfs = -120.0f;
     out->current.dbfs = -120.0f;
     out->shift8.dbfs = -120.0f;
     out->low24.dbfs = -120.0f;

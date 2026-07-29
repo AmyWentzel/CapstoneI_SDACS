@@ -46,6 +46,11 @@ typedef struct {
     int32_t converted_sample_max;
     int32_t converted_peak_abs;
     int32_t converted_p2p_raw;
+    float software_gain;
+    int32_t pre_gain_peak_abs;
+    int32_t post_gain_peak_abs;
+    uint32_t clipped_sample_count;
+    audio_input_conversion_diag_t pre_gain;
     audio_input_conversion_diag_t current;
     audio_input_conversion_diag_t shift8;
     audio_input_conversion_diag_t low24;

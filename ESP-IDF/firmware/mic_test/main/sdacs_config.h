@@ -32,7 +32,7 @@
 #endif
 
 #define SDACS_NODE_ID                    SDACS_SECRET_NODE_ID
-#define SDACS_FW_VERSION                 "ota-enable-v2"
+#define SDACS_FW_VERSION                 "mic-gain-v1"
 #define SDACS_SD_SPI_HOST                SPI2_HOST
 #define SDACS_SD_SPI_MAX_FREQ_KHZ        5000
 #define SDACS_SD_MOUNT_RETRY_COUNT       5
@@ -69,6 +69,17 @@
 #define SDACS_MIC_VALID_BITS             24
 #define SDACS_MIC_I2S_SLOT_BITS          32
 #define SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL (-26.0f)
+/*
+ * Production PCM software gain. This is applied after SHIFT8/LOW24 conversion
+ * and before every RMS, dBFS, FFT, band-energy, and AI feature calculation.
+ *
+ * Start with 8.0x (+18.06 dB) for the mic-gain validation build. Clipping is
+ * protected with signed 24-bit saturation and reported in MQTT diagnostics.
+ * Set to 1.0f to disable gain without changing the processing pipeline.
+ */
+#define SDACS_MIC_SOFTWARE_GAIN          8.0f
+#define SDACS_MIC_S24_MIN                (-8388608)
+#define SDACS_MIC_S24_MAX                8388607
 #define SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS 1
 #define SDACS_I2S_CONVERSION_SHIFT8      0
 #define SDACS_I2S_CONVERSION_LOW24       1
