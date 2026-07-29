@@ -84,6 +84,9 @@ class CalibrationCaptureCoordinator {
       final session = await api.startCapture(
         delayMs: startDelayMs,
         recordSeconds: captureDuration.inSeconds,
+        validationLabel: signal == CalibrationSignal.oneKhzTone
+            ? 'calibration_1khz'
+            : 'calibration_sweep',
         requestId:
             'capture_${now().toUtc().toIso8601String().replaceAll(RegExp(r'[-:.]'), '')}',
       );

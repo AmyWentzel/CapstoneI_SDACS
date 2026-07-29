@@ -81,7 +81,11 @@ class CaptureCombinedResult {
   final Map<String, dynamic> json;
   String get captureId => json['capture_id']?.toString() ?? 'unknown';
   Map<String, dynamic> get acoustic => _map('acoustic_analysis');
-  Map<String, dynamic> get edgeImpulse => _map('edge_impulse');
+  Map<String, dynamic> get edgeImpulse {
+    final ai = _map('ai');
+    return ai.isNotEmpty ? ai : _map('edge_impulse');
+  }
+
   Map<String, dynamic> get fusion => _map('fusion');
   Map<String, dynamic> get recommendation => _map('recommendation');
   DateTime? get generatedAt =>
@@ -198,27 +202,44 @@ class EdgeImpulseResult {
     required this.scores,
     required this.warnings,
     this.predictedLabel,
+    this.displayLabel,
     this.confidence,
+    this.accepted,
+    this.threshold,
+    this.modelName,
     this.modelVersion,
+    this.inferenceTimeMs,
+    this.error,
   });
 
   final String status;
   final String? predictedLabel;
+  final String? displayLabel;
   final double? confidence;
+  final bool? accepted;
+  final double? threshold;
   final Map<String, double> scores;
+  final String? modelName;
   final String? modelVersion;
+  final double? inferenceTimeMs;
   final List<String> warnings;
+  final String? error;
 
   bool get isUnavailable => const {
     'disabled',
     'model_not_configured',
     'model_unavailable',
+    'runner_unavailable',
+    'feature_provenance_unverified',
+    'fusion_not_configured',
+    'failed',
+    'not_applicable',
     'unavailable',
   }.contains(status);
 
   factory EdgeImpulseResult.fromJson(Map<String, dynamic> json) {
     final scores = <String, double>{};
-    final rawScores = json['scores'];
+    final rawScores = json['probabilities'] ?? json['scores'];
     if (rawScores is Map) {
       for (final entry in rawScores.entries) {
         if (entry.value is num) {
@@ -226,15 +247,35 @@ class EdgeImpulseResult {
         }
       }
     }
+    final model = json['model'] is Map
+        ? (json['model'] as Map).map((key, value) => MapEntry('$key', value))
+        : const <String, dynamic>{};
+    final timing = json['timing_ms'] is Map
+        ? (json['timing_ms'] as Map).map(
+            (key, value) => MapEntry('$key', value),
+          )
+        : const <String, dynamic>{};
     return EdgeImpulseResult(
       status: json['status']?.toString() ?? 'unavailable',
-      predictedLabel: json['predicted_label']?.toString(),
+      predictedLabel:
+          json['top_label']?.toString() ?? json['predicted_label']?.toString(),
+      displayLabel: json['display_label']?.toString(),
       confidence: (json['confidence'] as num?)?.toDouble(),
+      accepted: json['accepted'] as bool?,
+      threshold: (json['threshold'] as num?)?.toDouble(),
       scores: Map.unmodifiable(scores),
-      modelVersion: json['model_version']?.toString(),
+      modelName:
+          model['project_name']?.toString() ?? json['model_name']?.toString(),
+      modelVersion:
+          model['deploy_version']?.toString() ??
+          json['model_version']?.toString(),
+      inferenceTimeMs:
+          (timing['total'] as num?)?.toDouble() ??
+          (timing['classification'] as num?)?.toDouble(),
       warnings: (json['warnings'] as List? ?? const [])
           .map((value) => '$value')
           .toList(),
+      error: json['error']?.toString(),
     );
   }
 }

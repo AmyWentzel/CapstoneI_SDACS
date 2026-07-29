@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Patch, Rectangle, Wedge
 from matplotlib.lines import Line2D
 
-from .edge_impulse import APPROVED_CLASSES, EdgeImpulseRunner
+from .ai_features import SDACS_V3_FEATURE_NAMES, SDACS_V3_FEATURE_SCHEMA, build_capture_windows
+from .edge_impulse import APPROVED_CLASSES
 
 
 MODEL_FEATURES = (
@@ -42,20 +43,19 @@ def write_csv_atomic(path: Path, rows: list[dict[str, Any]], fields: list[str]) 
 
 
 def build_model_input(capture_id: str, telemetry: list[dict[str, Any]], output: Path) -> dict[str, Any]:
-    rows: list[dict[str, float]] = []
-    for item in telemetry:
-        if item.get("record_type") != "features":
-            continue
-        row: dict[str, float] = {}
-        for name in MODEL_FEATURES:
-            value = item.get(name)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
-                row[name] = float(value)
-            else:
-                row[name] = 0.0
-        rows.append(row)
-    write_csv_atomic(output, rows, list(MODEL_FEATURES))
-    return {"capture_id": capture_id, "schema_version": "preliminary-v1", "features": list(MODEL_FEATURES), "rows": len(rows)}
+    windows, excluded = build_capture_windows(capture_id, telemetry)
+    rows = [
+        dict(zip(SDACS_V3_FEATURE_NAMES, window["feature_values"], strict=True))
+        for window in windows
+    ]
+    write_csv_atomic(output, rows, list(SDACS_V3_FEATURE_NAMES))
+    return {
+        "capture_id": capture_id,
+        "schema_version": SDACS_V3_FEATURE_SCHEMA,
+        "features": list(SDACS_V3_FEATURE_NAMES),
+        "rows": len(rows),
+        "excluded_sample_indexes": excluded,
+    }
 
 
 def acoustic_analysis(
@@ -407,11 +407,12 @@ def acoustic_analysis(
 
 def fuse(capture: dict[str, Any], acoustic: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
     model_complete = edge.get("status") == "complete"
-    if model_complete and edge.get("predicted_label") not in APPROVED_CLASSES:
-        raise ValueError(f"Unexpected model output class: {edge.get('predicted_label')}")
+    top_label = edge.get("top_label", edge.get("predicted_label"))
+    if model_complete and top_label not in APPROVED_CLASSES:
+        raise ValueError(f"Unexpected model output class: {top_label}")
     evidence: list[dict[str, str]] = []
     if model_complete:
-        evidence.append({"source": "edge_impulse", "statement": f"The model predicted {edge['predicted_label']} with {edge['confidence']:.0%} confidence."})
+        evidence.append({"source": "edge_impulse", "statement": f"The model predicted {top_label} with {edge['confidence']:.0%} confidence."})
     if acoustic.get("loudest_node_id"):
         evidence.append({"source": "acoustic_analysis", "statement": f"The strongest measured level occurred at {acoustic['loudest_node_id']}."})
     if acoustic.get("status") != "complete":
@@ -420,8 +421,13 @@ def fuse(capture: dict[str, Any], acoustic: dict[str, Any], edge: dict[str, Any]
         status = "complete" if model_complete else "acoustic_only"
     return {
         "capture_id": capture["capture_id"], "status": status,
+        "collection_status": "complete" if not capture.get("missing_nodes") else "partial",
+        "acoustic_status": acoustic.get("status", "failed"),
+        "ai_status": edge.get("status", "failed"),
+        "overall_status": status,
         "completed_nodes": capture["completed_nodes"], "missing_nodes": capture["missing_nodes"],
-        "acoustic_analysis": acoustic, "edge_impulse": edge,
+        "acoustic_analysis": acoustic, "acoustic": acoustic,
+        "edge_impulse": edge, "ai": edge,
         "fusion": {"agreement": "neutral" if model_complete else "unavailable", "recommendation_confidence": "uncertain" if model_complete else "unavailable", "supporting_evidence": evidence, "conflicting_evidence": [], "method_version": "rules-v1-provisional"},
-        "recommendation": {"summary": "Acoustic analysis is complete. The final Edge Impulse model is not currently configured." if not model_complete else f"The model classified this capture as {edge['predicted_label']}; review the attributed acoustic evidence below.", "evidence": evidence, "warnings": acoustic.get("warnings", []) + edge.get("warnings", [])},
+        "recommendation": {"summary": "Acoustic analysis is complete. AI classification is unavailable." if not model_complete else f"The model classified this capture as {top_label}; review the attributed acoustic evidence below.", "evidence": evidence, "warnings": acoustic.get("warnings", []) + edge.get("warnings", [])},
     }

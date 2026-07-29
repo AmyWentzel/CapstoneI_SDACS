@@ -150,7 +150,7 @@ void main() {
       expect(audio.preloadedSignal, CalibrationSignal.oneKhzTone);
       expect(api.requestedSeconds, 60);
       expect(api.requestedDelay, 5000);
-      expect(api.requestedValidationLabel, isNull);
+      expect(api.requestedValidationLabel, 'calibration_1khz');
       expect(operations.activeCaptureId, 'capture_calibration_01');
 
       await tester.pump(const Duration(seconds: 5));

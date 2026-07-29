@@ -7,10 +7,15 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from .capture_processing import acoustic_analysis, atomic_json, build_model_input, fuse
+from .capture_processing import acoustic_analysis, atomic_json, fuse
 from .capture_store import CaptureStore
 from .config import Settings
-from .edge_impulse import ConfiguredEdgeImpulseRunner, EdgeImpulseRunner
+from .ai_features import (
+    SDACS_V3_FEATURE_NAMES,
+    SDACS_V3_FEATURE_SCHEMA,
+    build_capture_windows,
+)
+from .edge_impulse import ConfiguredEdgeImpulseRunner, EdgeImpulseRunner, unavailable_result
 from .models import TelemetryUpdate
 from .room_layout import RoomLayout, RoomLayoutStore
 
@@ -131,7 +136,7 @@ class CaptureService:
         return directory
 
     def artifact(self, capture_id: str, filename: str) -> Path:
-        allowed = {"acoustic_summary.json", "acoustic_map.png", "edge_impulse_result.json", "combined_result.json"}
+        allowed = {"acoustic_summary.json", "acoustic_map.png", "ai_input.json", "ai_summary.json", "ai_window_predictions.json", "edge_impulse_result.json", "combined_result.json"}
         if filename not in allowed:
             raise ValueError("Invalid artifact")
         return self.directory(capture_id) / filename
@@ -190,15 +195,99 @@ class CaptureService:
             session["artifacts"]["plot"] = "acoustic_map.png"
         session.update(processing_stage="processing_edge_impulse", updated_at=self._now())
         self._save(session)
-        input_meta = build_model_input(capture_id, telemetry, directory / "edge_impulse_input.csv")
-        atomic_json(directory / "edge_impulse_schema.json", input_meta)
-        edge = self.runner.infer(capture_id, directory / "edge_impulse_input.csv")
+        is_calibration = session.get("validation_label") in {
+            "calibration_1khz",
+            "calibration_sweep",
+            "spl_calibration_verification",
+        }
+        if is_calibration:
+            edge = unavailable_result(capture_id, "not_applicable", "Calibration capture")
+        elif not self.settings.ei_enabled:
+            edge = unavailable_result(capture_id, "disabled", "Edge Impulse is disabled on the backend.")
+        else:
+            windows, excluded = build_capture_windows(capture_id, telemetry)
+            ai_input = {
+                "capture_id": capture_id,
+                "feature_schema": SDACS_V3_FEATURE_SCHEMA,
+                "feature_names": list(SDACS_V3_FEATURE_NAMES),
+                "grouping_scope": "four-node synchronized room window",
+                "source_csv": "acoustic_input.csv",
+                "window_count": len(windows),
+                "excluded_window_count": len(excluded),
+                "excluded_sample_indexes": excluded,
+                "participating_node_ids": list(self.settings.expected_nodes),
+                "aggregation_window": "one sample_index across node01-node04",
+                "standard_deviation_convention": "population (ddof=0)",
+                "missing_data_rule": "reject window; never replace with zero",
+                "windows": [
+                    {
+                        "sample_index": window["sample_index"],
+                        "feature_values": window["feature_values"],
+                    }
+                    for window in windows
+                ],
+            }
+            atomic_json(directory / "ai_input.json", ai_input)
+            predictions = []
+            for window in windows:
+                prediction = self.runner.infer(capture_id, window["features"])
+                predictions.append({
+                    "sample_index": window["sample_index"],
+                    "feature_names": window["feature_names"],
+                    "feature_values": window["feature_values"],
+                    "status": prediction.get("status"),
+                    "probabilities": prediction.get("probabilities", {}),
+                    "top_label": prediction.get("top_label"),
+                    "confidence": prediction.get("confidence"),
+                    "accepted": prediction.get("accepted"),
+                    "timing_ms": prediction.get("timing_ms", {}),
+                    "warnings": prediction.get("warnings", []),
+                    "error": prediction.get("error"),
+                })
+            successful = [item for item in predictions if item["status"] == "complete"]
+            atomic_json(directory / "ai_window_predictions.json", {
+                "capture_id": capture_id,
+                "status": "complete" if len(successful) == len(windows) and windows else "partial",
+                "feature_schema": SDACS_V3_FEATURE_SCHEMA,
+                "window_count": len(windows),
+                "successful_window_count": len(successful),
+                "excluded_sample_indexes": excluded,
+                "windows": predictions,
+            })
+            if windows and len(successful) == len(windows):
+                edge = unavailable_result(
+                    capture_id,
+                    "fusion_not_configured",
+                    "Per-window inference succeeded, but capture-level temporal fusion has not been validated.",
+                )
+                edge.update(
+                    window_count=len(windows),
+                    successful_window_count=len(successful),
+                    excluded_sample_indexes=excluded,
+                )
+            else:
+                reason = (
+                    "No complete synchronized four-node windows were available."
+                    if not windows
+                    else f"Per-window inference completed for {len(successful)} of {len(windows)} windows."
+                )
+                edge = unavailable_result(capture_id, "failed", reason)
+                edge.update(
+                    window_count=len(windows),
+                    successful_window_count=len(successful),
+                    excluded_sample_indexes=excluded,
+                )
+        atomic_json(directory / "ai_summary.json", edge)
         atomic_json(directory / "edge_impulse_result.json", edge)
         combined = fuse(session, acoustic, edge)
         atomic_json(directory / "combined_result.json", combined)
         (directory / "processor_stdout.log").touch(exist_ok=True)
         (directory / "processor_stderr.log").touch(exist_ok=True)
-        session["artifacts"].update(edge_impulse_input="edge_impulse_input.csv", edge_impulse_result="edge_impulse_result.json", combined_result="combined_result.json")
+        session["artifacts"].update(ai_summary="ai_summary.json", edge_impulse_result="edge_impulse_result.json", combined_result="combined_result.json")
+        if (directory / "ai_input.json").is_file():
+            session["artifacts"]["ai_input"] = "ai_input.json"
+        if (directory / "ai_window_predictions.json").is_file():
+            session["artifacts"]["ai_window_predictions"] = "ai_window_predictions.json"
         session["model_status"] = edge["status"]
         session["model_version"] = edge.get("model_version")
         session["processing_stage"] = "complete"

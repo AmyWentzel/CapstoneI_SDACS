@@ -195,6 +195,8 @@ class _GraphsScreenState extends State<GraphsScreen> {
                 const SizedBox(height: 12),
                 _StatusRow(session: session!, result: result),
                 const SizedBox(height: 12),
+                _AiClassificationCard(result: result.edgeImpulseResult),
+                const SizedBox(height: 12),
                 if (acoustic.isSuccessful && acoustic.plotFilename != null)
                   _CapturePlot(
                     uri: _service!.capturePlotUri(
@@ -242,6 +244,98 @@ class _GraphsScreenState extends State<GraphsScreen> {
       values.addAll(metric.warnings);
     }
     return values.where((value) => value.trim().isNotEmpty).toList();
+  }
+}
+
+class _AiClassificationCard extends StatelessWidget {
+  const _AiClassificationCard({required this.result});
+  final EdgeImpulseResult result;
+
+  static const labels = {
+    'speech': 'Speech',
+    'quiet_room_white_noise': 'Quiet Room / White Noise',
+    'noisy': 'Noisy',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    if (result.status == 'processing' || result.status == 'pending') {
+      return const _Section(
+        title: 'AI Room Classification',
+        children: [Text('Processing...')],
+      );
+    }
+    if (result.status != 'complete') {
+      final disabled = result.status == 'disabled';
+      final windowsComplete = result.status == 'fusion_not_configured';
+      return _Section(
+        title: windowsComplete
+            ? 'AI Window Analysis Complete'
+            : 'AI Room Classification Unavailable',
+        children: [
+          Text(
+            windowsComplete
+                ? 'Capture-level classification requires a validated fusion rule.'
+                : disabled
+                ? 'Edge Impulse is disabled on the backend.'
+                : result.status == 'not_applicable'
+                ? 'Calibration captures are not classified.'
+                : 'Acoustic results are still available.',
+          ),
+          if (result.error?.trim().isNotEmpty == true)
+            Tooltip(
+              message: result.error!,
+              child: const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.info_outline, size: 18),
+                    SizedBox(width: 6),
+                    Text('AI details'),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    final accepted = result.accepted == true;
+    final confidence = result.confidence;
+    return _Section(
+      title: 'AI Room Classification',
+      children: [
+        Text(
+          accepted ? (result.displayLabel ?? 'Classification') : 'Uncertain',
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
+        if (confidence != null)
+          Text(
+            accepted
+                ? '${(confidence * 100).round()}% confidence'
+                : 'Highest candidate: ${labels[result.predictedLabel] ?? result.predictedLabel ?? 'Unknown'} — ${(confidence * 100).round()}%',
+          ),
+        const SizedBox(height: 12),
+        for (final key in const ['speech', 'quiet_room_white_noise', 'noisy'])
+          if (result.scores[key] case final probability?)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  SizedBox(width: 190, child: Text(labels[key]!)),
+                  Expanded(child: LinearProgressIndicator(value: probability)),
+                  const SizedBox(width: 8),
+                  Text('${(probability * 100).round()}%'),
+                ],
+              ),
+            ),
+        if (result.modelName != null)
+          Text(
+            'Model: ${result.modelName}'
+            '${result.modelVersion == null ? '' : ' v${result.modelVersion}'}',
+          ),
+      ],
+    );
   }
 }
 

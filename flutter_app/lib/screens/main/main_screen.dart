@@ -88,6 +88,7 @@ class _MainScreenState extends State<MainScreen> {
   Map<String, CaptureNodeMetric> _latestCaptureMetricsByNode = const {};
   String? _latestCaptureId;
   DateTime? _latestCaptureGeneratedAt;
+  EdgeImpulseResult? _latestAiResult;
   String? _errorMessage;
   bool _layoutDirty = false;
 
@@ -457,6 +458,7 @@ class _MainScreenState extends State<MainScreen> {
         _latestCaptureMetricsByNode = Map.unmodifiable(result.nodeMetrics);
         _latestCaptureId = captureId;
         _latestCaptureGeneratedAt = result.generatedAt;
+        _latestAiResult = result.edgeImpulseResult;
       });
     } on SdacsApiException catch (error) {
       if (!mounted || _activeCapture?.captureId != captureId) return;
@@ -620,6 +622,9 @@ class _MainScreenState extends State<MainScreen> {
                                         backendOnline: _backendOnline,
                                         captureMetrics:
                                             _latestCaptureMetricsByNode,
+                                        latestAiResult: _isCaptureActive
+                                            ? null
+                                            : _latestAiResult,
                                       ),
                                     ),
                                   ],
@@ -644,6 +649,9 @@ class _MainScreenState extends State<MainScreen> {
                                       backendOnline: _backendOnline,
                                       captureMetrics:
                                           _latestCaptureMetricsByNode,
+                                      latestAiResult: _isCaptureActive
+                                          ? null
+                                          : _latestAiResult,
                                     ),
                                   ],
                                 ),
@@ -1343,11 +1351,13 @@ class _SystemPanel extends StatelessWidget {
     required this.nodes,
     required this.backendOnline,
     required this.captureMetrics,
+    required this.latestAiResult,
   });
 
   final List<NodeTelemetry> nodes;
   final bool backendOnline;
   final Map<String, CaptureNodeMetric> captureMetrics;
+  final EdgeImpulseResult? latestAiResult;
 
   @override
   Widget build(BuildContext context) {
@@ -1409,6 +1419,16 @@ class _SystemPanel extends StatelessWidget {
             value: backendOnline ? 'Live' : 'Offline',
             icon: Icons.check_circle_outline,
           ),
+          if (latestAiResult?.status == 'complete' &&
+              latestAiResult?.confidence != null &&
+              latestAiResult?.status != 'not_applicable')
+            _MetricTile(
+              label: 'Latest AI Classification',
+              value:
+                  '${latestAiResult!.displayLabel ?? latestAiResult!.predictedLabel} — '
+                  '${(latestAiResult!.confidence! * 100).round()}%',
+              icon: Icons.psychology_outlined,
+            ),
         ],
       ),
     );

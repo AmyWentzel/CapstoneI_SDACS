@@ -90,6 +90,36 @@ void main() {
     expect(result.edgeImpulseResult.isUnavailable, isTrue);
   });
 
+  test('typed AI result parses the new capture-specific contract', () {
+    final result = CaptureCombinedResult({
+      'capture_id': 'capture_ai',
+      'ai': {
+        'status': 'complete',
+        'top_label': 'quiet_room_white_noise',
+        'display_label': 'Quiet Room / White Noise',
+        'confidence': 0.73,
+        'accepted': true,
+        'threshold': 0.6,
+        'probabilities': {
+          'noisy': 0.09,
+          'quiet_room_white_noise': 0.73,
+          'speech': 0.18,
+        },
+        'model': {'project_name': 'SDACS_V3', 'deploy_version': 1},
+        'timing_ms': {'classification': 2},
+      },
+    }).edgeImpulseResult;
+
+    expect(result.predictedLabel, 'quiet_room_white_noise');
+    expect(result.displayLabel, 'Quiet Room / White Noise');
+    expect(result.confidence, 0.73);
+    expect(result.accepted, isTrue);
+    expect(result.scores['speech'], 0.18);
+    expect(result.modelName, 'SDACS_V3');
+    expect(result.modelVersion, '1');
+    expect(result.inferenceTimeMs, 2);
+  });
+
   test('capture failure aliases prefer failure_reason then error_message', () {
     final session = CaptureSession.fromJson({
       'capture_id': 'capture_failed',

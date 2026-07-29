@@ -29,13 +29,22 @@ def test_model_absence_has_no_fabricated_prediction(tmp_path):
 
 def test_feature_builder_excludes_labels_ids_and_rssi(tmp_path):
     output = tmp_path / "edge_impulse_input.csv"
-    metadata = build_model_input("capture_one", [{
-        "record_type": "features", "node_id": "node01", "validation_label": "speech",
-        "capture_id": "capture_one", "ble_rssi_dbm": -50, "rssi_dbm": -40,
-        **{name: 1.0 for name in MODEL_FEATURES},
-    }], output)
+    rows = []
+    from app.ai_features import SDACS_V3_SOURCE_FIELDS
+    for index in range(1, 5):
+        rows.append({
+            "record_type": "features",
+            "request_id": "capture_one",
+            "seq": 1,
+            "node_id": f"node0{index}",
+            "validation_label": "speech",
+            "rssi_dbm": -40,
+            **{field: float(index) for field in SDACS_V3_SOURCE_FIELDS},
+        })
+    metadata = build_model_input("capture_one", rows, output)
     header = output.read_text(encoding="utf-8").splitlines()[0]
-    assert metadata["capture_id"] == "capture_one"
+    assert metadata["rows"] == 1
+    assert len(header.split(",")) == 57
     assert "label" not in header
     assert "capture_id" not in header
     assert "rssi" not in header
@@ -80,6 +89,49 @@ def test_unknown_model_class_is_rejected(tmp_path):
     runner = TestStubEdgeImpulseRunner({"status": "complete", "predicted_label": "tone", "confidence": 1.0})
     with pytest.raises(ValueError, match="Unexpected model output class"):
         runner.infer("capture_stub", tmp_path / "input.csv")
+
+
+def test_per_window_inference_artifact_preserves_acoustic_only_status(tmp_path):
+    from app.ai_features import SDACS_V3_SOURCE_FIELDS
+    configured = settings(tmp_path).model_copy(update={"ei_enabled": True})
+    runner = TestStubEdgeImpulseRunner({
+        "status": "complete",
+        "top_label": "quiet_room_white_noise",
+        "confidence": 0.9,
+        "accepted": True,
+        "probabilities": {
+            "noisy": 0.03,
+            "quiet_room_white_noise": 0.90,
+            "speech": 0.07,
+        },
+        "timing_ms": {"classification": 2},
+    })
+    service = CaptureService(configured, runner=runner)
+    service.store.initialize()
+    service.create("capture_windows", 60, 0, None)
+    for index in range(1, 5):
+        service.store.add_telemetry("capture_windows", {
+            "record_type": "features",
+            "request_id": "capture_windows",
+            "node_id": f"node0{index}",
+            "seq": 1,
+            "db_spl": 30.0 + index,
+            "f_peak_hz": 100.0 + index,
+            **{field: float(index) for field in SDACS_V3_SOURCE_FIELDS},
+        })
+    service._process_sync("capture_windows")
+    directory = service.directory("capture_windows")
+    windows = json.loads(
+        (directory / "ai_window_predictions.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads((directory / "ai_summary.json").read_text(encoding="utf-8"))
+    combined = json.loads((directory / "combined_result.json").read_text(encoding="utf-8"))
+    assert windows["window_count"] == 1
+    assert len(windows["windows"][0]["feature_values"]) == 57
+    assert summary["status"] == "fusion_not_configured"
+    assert summary["successful_window_count"] == 1
+    assert combined["overall_status"] == "acoustic_only"
+    assert combined["acoustic_status"] == "complete"
 
 
 def test_model_unavailable_combination_is_acoustic_only():

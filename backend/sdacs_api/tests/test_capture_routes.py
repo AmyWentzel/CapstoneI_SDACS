@@ -60,6 +60,18 @@ def test_invalid_capture_id_cannot_traverse(tmp_path):
     assert response.status_code == 400
 
 
+def test_calibration_capture_metadata_is_preserved_for_ai_skip(tmp_path):
+    api, _ = client(tmp_path)
+    response = api.post("/api/capture/start", json={
+        "request_id": "capture_calibration",
+        "record_seconds": 60,
+        "validation_label": "calibration_1khz",
+    })
+    assert response.status_code == 200
+    session = api.get("/api/captures/capture_calibration").json()
+    assert session["validation_label"] == "calibration_1khz"
+
+
 def test_layout_routes_round_trip_all_nodes_and_source(tmp_path):
     api, _ = client(tmp_path)
     initial = api.get("/api/layout")

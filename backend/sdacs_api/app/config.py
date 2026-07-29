@@ -30,11 +30,16 @@ class Settings(BaseModel):
     ei_enabled: bool = Field(
         default_factory=lambda: os.getenv("SDACS_EI_ENABLED", "false").lower() in {"1", "true", "yes"}
     )
-    eim_path: Path | None = Field(
-        default_factory=lambda: Path(value) if (value := os.getenv("SDACS_EIM_PATH")) else None
+    ei_runner_path: Path | None = Field(
+        default_factory=lambda: Path(value) if (value := os.getenv("SDACS_EI_RUNNER_PATH")) else None
     )
     ei_timeout_seconds: int = Field(default_factory=lambda: int(os.getenv("SDACS_EI_TIMEOUT_SECONDS", "30")))
-    ei_schema_version: str = Field(default_factory=lambda: os.getenv("SDACS_EI_SCHEMA_VERSION", "preliminary-v1"))
+    ei_expected_project_id: int = Field(
+        default_factory=lambda: int(os.getenv("SDACS_EI_EXPECTED_PROJECT_ID", "1071949"))
+    )
+    ei_expected_deploy_version: int = Field(
+        default_factory=lambda: int(os.getenv("SDACS_EI_EXPECTED_DEPLOY_VERSION", "1"))
+    )
 
 
 @lru_cache

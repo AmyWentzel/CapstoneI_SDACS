@@ -59,6 +59,7 @@ CaptureCombinedResult _result({
   String acousticStatus = 'complete',
   int nodes = 4,
   bool includeRatios = true,
+  Map<String, dynamic>? ai,
 }) {
   final nodeIds = ['node01', 'node02', 'node03', 'node04'].take(nodes).toList();
   final missing = [
@@ -101,13 +102,15 @@ CaptureCombinedResult _result({
           },
       },
     },
-    'edge_impulse': {
-      'status': 'disabled',
-      'predicted_label': null,
-      'confidence': null,
-      'scores': <String, dynamic>{},
-      'warnings': ['Edge Impulse inference is disabled.'],
-    },
+    'ai':
+        ai ??
+        {
+          'status': 'disabled',
+          'top_label': null,
+          'confidence': null,
+          'probabilities': <String, dynamic>{},
+          'warnings': ['Edge Impulse inference is disabled.'],
+        },
     'fusion': {
       'agreement': 'unavailable',
       'recommendation_confidence': 'unavailable',
@@ -140,6 +143,102 @@ void _useLargeViewport(WidgetTester tester) {
 }
 
 void main() {
+  testWidgets(
+    'shows one accepted room-level classification and all probabilities',
+    (tester) async {
+      _useLargeViewport(tester);
+      final result = _result(
+        ai: {
+          'status': 'complete',
+          'top_label': 'speech',
+          'display_label': 'Speech',
+          'confidence': 0.81,
+          'accepted': true,
+          'threshold': 0.6,
+          'probabilities': {
+            'speech': 0.81,
+            'quiet_room_white_noise': 0.11,
+            'noisy': 0.08,
+          },
+          'model': {'project_name': 'SDACS_V3', 'deploy_version': 1},
+          'warnings': <String>[],
+        },
+      );
+      await tester.pumpWidget(
+        _screen(_FakeApi(sessions: [_session()], result: result)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('AI Room Classification'), findsOneWidget);
+      expect(find.text('Speech'), findsWidgets);
+      expect(find.text('81% confidence'), findsOneWidget);
+      expect(find.text('Quiet Room / White Noise'), findsOneWidget);
+      expect(find.text('Noisy'), findsOneWidget);
+      expect(find.text('Model: SDACS_V3 v1'), findsOneWidget);
+    },
+  );
+
+  testWidgets('shows uncertain while preserving the highest candidate', (
+    tester,
+  ) async {
+    _useLargeViewport(tester);
+    final result = _result(
+      ai: {
+        'status': 'complete',
+        'top_label': 'speech',
+        'display_label': 'Uncertain',
+        'confidence': 0.48,
+        'accepted': false,
+        'threshold': 0.6,
+        'probabilities': {
+          'speech': 0.48,
+          'quiet_room_white_noise': 0.32,
+          'noisy': 0.20,
+        },
+      },
+    );
+    await tester.pumpWidget(
+      _screen(_FakeApi(sessions: [_session()], result: result)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Uncertain'), findsOneWidget);
+    expect(find.text('Highest candidate: Speech — 48%'), findsOneWidget);
+  });
+
+  testWidgets('window analysis does not fabricate a capture classification', (
+    tester,
+  ) async {
+    _useLargeViewport(tester);
+    final result = _result(
+      ai: {
+        'status': 'fusion_not_configured',
+        'top_label': null,
+        'confidence': null,
+        'probabilities': <String, dynamic>{},
+        'window_count': 59,
+        'warnings': [
+          'Per-window inference succeeded, but capture-level temporal fusion has not been validated.',
+        ],
+      },
+    );
+    await tester.pumpWidget(
+      _screen(_FakeApi(sessions: [_session()], result: result)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('AI Window Analysis Complete'), findsOneWidget);
+    expect(
+      find.text(
+        'Capture-level classification requires a validated fusion rule.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Speech'), findsNothing);
+    expect(find.text('Noisy'), findsNothing);
+    expect(find.text('Quiet Room / White Noise'), findsNothing);
+  });
+
   testWidgets('renders a successful four-node acoustic-only capture', (
     tester,
   ) async {

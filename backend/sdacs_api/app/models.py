@@ -20,6 +20,20 @@ class TelemetryUpdate(BaseModel):
     dbfs: float | None = None
     db_spl: float | None = None
     f_peak_hz: float | None = None
+    f_peak_acoustic_hz: float | None = None
+    low_rumble_ratio: float | None = None
+    band_bass_ratio: float | None = None
+    band_low_mid_ratio: float | None = None
+    band_mid_ratio: float | None = None
+    band_presence_ratio: float | None = None
+    band_high_ratio: float | None = None
+    band_bass_peak_hz: float | None = None
+    band_low_mid_peak_hz: float | None = None
+    band_mid_peak_hz: float | None = None
+    band_presence_peak_hz: float | None = None
+    band_high_peak_hz: float | None = None
+    dominant_band_ratio: float | None = None
+    dominant_band_peak_hz: float | None = None
     fft_low_ratio: float | None = None
     fft_mid_ratio: float | None = None
     fft_high_ratio: float | None = None
@@ -59,7 +73,14 @@ CaptureLabel = Literal[
     "quiet_room_white_noise",
 ]
 
-RuntimeClass = Literal["quiet_room", "noisy", "speech"]
+RuntimeClass = Literal[
+    "quiet_room",
+    "noisy",
+    "speech",
+    "calibration_1khz",
+    "calibration_sweep",
+    "spl_calibration_verification",
+]
 
 
 class CaptureStartRequest(BaseModel):
