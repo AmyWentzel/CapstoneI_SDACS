@@ -19,7 +19,7 @@ typedef struct {
     float hann_window[SDACS_FFT_SIZE];
     int32_t fft_buffer[SDACS_FFT_SIZE];
     int fft_index;
-    double sum_sq;
+    uint64_t sum_sq;
     int32_t peak_abs;
     int32_t min_sample;
     int32_t max_sample;
@@ -30,6 +30,12 @@ typedef struct {
 
 static fft_metrics_ctx_t s_fft_paths[FFT_METRICS_PATH_COUNT] = {0};
 static bool s_fft_library_initialized = false;
+
+_Static_assert(
+    ((uint64_t)8388608U * (uint64_t)8388608U) *
+        ((uint64_t)SDACS_SAMPLE_RATE_HZ + SDACS_I2S_FRAMES_PER_READ) <
+        UINT64_MAX,
+    "RMS sum of squares must fit the one-second feature window");
 
 typedef struct {
     float peak_hz;
@@ -363,7 +369,7 @@ void fft_metrics_reset_path(fft_metrics_path_t path)
     ctx->fft_index = 0;
     memset(ctx->fft_buffer, 0, sizeof(ctx->fft_buffer));
     memset(ctx->fft_in, 0, sizeof(ctx->fft_in));
-    ctx->sum_sq = 0.0;
+    ctx->sum_sq = 0U;
     ctx->peak_abs = 0;
     ctx->min_sample = INT32_MAX;
     ctx->max_sample = INT32_MIN;
@@ -423,7 +429,42 @@ void fft_metrics_accumulate_block_for_path(fft_metrics_path_t path,
         if (sample == 0) {
             ctx->zeros++;
         }
-        ctx->sum_sq += (double)sample * (double)sample;
+        const int64_t wide_sample = sample;
+        ctx->sum_sq += (uint64_t)(wide_sample * wide_sample);
+        ctx->count++;
+    }
+}
+
+void fft_metrics_ingest_block_for_path(fft_metrics_path_t path,
+                                       const int32_t *samples,
+                                       size_t n)
+{
+    fft_metrics_ctx_t *ctx = fft_metrics_get_ctx(path);
+    if (!ctx || !samples) {
+        return;
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+        const int32_t sample = samples[i];
+        const int32_t abs_sample = (sample < 0) ? -sample : sample;
+        ctx->fft_buffer[ctx->fft_index++] = sample;
+        if (ctx->fft_index >= SDACS_FFT_SIZE) {
+            ctx->fft_index = 0;
+        }
+        if (abs_sample > ctx->peak_abs) {
+            ctx->peak_abs = abs_sample;
+        }
+        if (sample < ctx->min_sample) {
+            ctx->min_sample = sample;
+        }
+        if (sample > ctx->max_sample) {
+            ctx->max_sample = sample;
+        }
+        if (sample == 0) {
+            ctx->zeros++;
+        }
+        const int64_t wide_sample = sample;
+        ctx->sum_sq += (uint64_t)(wide_sample * wide_sample);
         ctx->count++;
     }
 }
@@ -442,7 +483,7 @@ bool fft_metrics_compute_and_reset_for_path(fft_metrics_path_t path,
         return false;
     }
 
-    float rms = sqrtf((float)(ctx->sum_sq / (double)ctx->count));
+    float rms = sqrtf((float)ctx->sum_sq / (float)ctx->count);
     float rms_norm = rms / 8388608.0f;
     float dbfs = 20.0f * log10f(rms_norm + 1e-12f);
     float peak_norm = (float)ctx->peak_abs / 8388608.0f;
@@ -517,7 +558,7 @@ bool fft_metrics_compute_and_reset_for_path(fft_metrics_path_t path,
     snprintf(out->dominant_band_name, sizeof(out->dominant_band_name), "%s",
              fft_metrics.dominant_band_name);
 
-    ctx->sum_sq = 0.0;
+    ctx->sum_sq = 0U;
     ctx->peak_abs = 0;
     ctx->min_sample = INT32_MAX;
     ctx->max_sample = INT32_MIN;

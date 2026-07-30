@@ -16,6 +16,7 @@
 
 #include "sdacs_config.h"
 #include "hpf_filter.h"
+#include "audio_sample_math.h"
 
 typedef struct {
     i2s_chan_handle_t rx_chan;
@@ -36,7 +37,7 @@ typedef struct {
     int32_t min;
     int32_t max;
     int32_t peak_abs;
-    double sum_sq;
+    uint64_t sum_sq;
     uint32_t count;
 } conversion_accum_t;
 
@@ -134,6 +135,7 @@ static int32_t sign_extend_24(uint32_t x)
     return (int32_t)x;
 }
 
+#if SDACS_ENABLE_DETAILED_CONVERSION_DIAGNOSTICS
 static int32_t sign_extend_16(uint32_t x)
 {
     x &= 0x0000FFFFU;
@@ -142,16 +144,20 @@ static int32_t sign_extend_16(uint32_t x)
     }
     return (int32_t)x;
 }
+#endif
 
 static int32_t convert_shift8(uint32_t raw_word)
 {
     return sign_extend_24(raw_word >> 8);
 }
 
+#if SDACS_I2S_SAMPLE_CONVERSION_MODE == SDACS_I2S_CONVERSION_LOW24 || \
+    SDACS_ENABLE_DETAILED_CONVERSION_DIAGNOSTICS
 static int32_t convert_low24(uint32_t raw_word)
 {
     return sign_extend_24(raw_word & 0x00FFFFFFU);
 }
+#endif
 
 static inline int32_t i2s_word_to_production_sample(uint32_t raw_word)
 {
@@ -170,65 +176,12 @@ static inline int32_t i2s_word_to_production_sample(uint32_t raw_word)
 
 static inline float configured_software_gain(void)
 {
-    const float gain = SDACS_MIC_SOFTWARE_GAIN;
-    return (isfinite(gain) && gain > 0.0f) ? gain : 1.0f;
+    return (float)SDACS_MIC_SOFTWARE_GAIN;
 }
 
 static inline float configured_scene_software_gain(void)
 {
-    const float gain = SDACS_SCENE_SOFTWARE_GAIN;
-    return (isfinite(gain) && gain > 0.0f) ? gain : 1.0f;
-}
-
-static inline int32_t round_and_saturate_s24(double sample, bool *clipped)
-{
-    if (clipped) {
-        *clipped = false;
-    }
-    if (!isfinite(sample)) {
-        if (clipped) {
-            *clipped = true;
-        }
-        return 0;
-    }
-    if (sample > (double)SDACS_MIC_S24_MAX) {
-        if (clipped) {
-            *clipped = true;
-        }
-        return SDACS_MIC_S24_MAX;
-    }
-    if (sample < (double)SDACS_MIC_S24_MIN) {
-        if (clipped) {
-            *clipped = true;
-        }
-        return SDACS_MIC_S24_MIN;
-    }
-    return (int32_t)lrint(sample);
-}
-
-static inline int32_t apply_software_gain_s24(int32_t sample, float gain, bool *clipped)
-{
-    const double scaled = (double)sample * (double)gain;
-
-    if (clipped) {
-        *clipped = false;
-    }
-
-    if (scaled > (double)SDACS_MIC_S24_MAX) {
-        if (clipped) {
-            *clipped = true;
-        }
-        return SDACS_MIC_S24_MAX;
-    }
-
-    if (scaled < (double)SDACS_MIC_S24_MIN) {
-        if (clipped) {
-            *clipped = true;
-        }
-        return SDACS_MIC_S24_MIN;
-    }
-
-    return (int32_t)lrint(scaled);
+    return (float)SDACS_SCENE_SOFTWARE_GAIN;
 }
 
 static void conversion_accum_reset(conversion_accum_t *acc)
@@ -240,7 +193,7 @@ static void conversion_accum_reset(conversion_accum_t *acc)
     acc->min = INT32_MAX;
     acc->max = INT32_MIN;
     acc->peak_abs = 0;
-    acc->sum_sq = 0.0;
+    acc->sum_sq = 0U;
     acc->count = 0;
 }
 
@@ -261,7 +214,8 @@ static void conversion_accum_push(conversion_accum_t *acc, int32_t sample)
     if (abs_sample > acc->peak_abs) {
         acc->peak_abs = abs_sample;
     }
-    acc->sum_sq += (double)sample * (double)sample;
+    const int64_t wide_sample = sample;
+    acc->sum_sq += (uint64_t)(wide_sample * wide_sample);
     acc->count++;
 }
 
@@ -277,7 +231,7 @@ static void conversion_diag_from_accum(audio_input_conversion_diag_t *out,
         return;
     }
 
-    float rms = sqrtf((float)(acc->sum_sq / (double)acc->count));
+    float rms = sqrtf((float)acc->sum_sq / (float)acc->count);
     float rms_norm = rms / full_scale;
     *out = (audio_input_conversion_diag_t){
         .min = acc->min,
@@ -301,10 +255,6 @@ static void raw_diag_accumulate(uint32_t raw_word,
     if (!s_raw_diagnostics_enabled) {
         return;
     }
-
-    int32_t shift8_sample = convert_shift8(raw_word);
-    int32_t low24_sample = convert_low24(raw_word);
-    int32_t shift16_sample = sign_extend_16(raw_word >> 16);
 
     if (!s_raw_diag.have_sample) {
         s_raw_diag.raw_word0 = raw_word;
@@ -347,9 +297,13 @@ static void raw_diag_accumulate(uint32_t raw_word,
     conversion_accum_push(&s_raw_diag.post_hpf, post_hpf_sample);
     conversion_accum_push(&s_raw_diag.current, spectral_sample);
     conversion_accum_push(&s_raw_diag.scene, scene_sample);
-    conversion_accum_push(&s_raw_diag.shift8, shift8_sample);
-    conversion_accum_push(&s_raw_diag.low24, low24_sample);
-    conversion_accum_push(&s_raw_diag.shift16, shift16_sample);
+#if SDACS_ENABLE_DETAILED_CONVERSION_DIAGNOSTICS
+    if ((s_raw_diag.sample_count % SDACS_CONVERSION_DIAGNOSTIC_DECIMATION) == 0U) {
+        conversion_accum_push(&s_raw_diag.shift8, convert_shift8(raw_word));
+        conversion_accum_push(&s_raw_diag.low24, convert_low24(raw_word));
+        conversion_accum_push(&s_raw_diag.shift16, sign_extend_16(raw_word >> 16));
+    }
+#endif
     s_raw_diag.sample_count++;
 #else
     (void)raw_word;
@@ -679,9 +633,6 @@ esp_err_t audio_input_read_dual_s24(int32_t *spectral_dst,
     uint32_t raw_min = UINT32_MAX;
     uint32_t raw_max = 0;
     bool have_prev_raw = false;
-    const float spectral_gain = configured_software_gain();
-    const float scene_gain = configured_scene_software_gain();
-
     for (size_t i = 0; i < selected_samples_read; ++i) {
 #if SDACS_I2S_RX_MODE == SDACS_I2S_RX_MODE_STEREO_RAW
         size_t raw_index = (i * 2U) + (SDACS_I2S_USE_RIGHT_SLOT ? 1U : 0U);
@@ -698,18 +649,18 @@ esp_err_t audio_input_read_dual_s24(int32_t *spectral_dst,
         int32_t pre_gain_sample = i2s_word_to_production_sample(raw_word);
 
         bool spectral_clipped = false;
-        int32_t spectral_sample = apply_software_gain_s24(
-            pre_gain_sample, spectral_gain, &spectral_clipped);
+        int32_t spectral_sample = audio_apply_gain_shift_s24(
+            pre_gain_sample, SDACS_MIC_SOFTWARE_GAIN_SHIFT, &spectral_clipped);
 
         float hpf_output = (float)pre_gain_sample;
 #if SDACS_SCENE_HPF_ENABLED
         hpf_output = hpf_filter_process(&s_audio.scene_hpf, hpf_output);
 #endif
         bool hpf_clipped = false;
-        int32_t post_hpf_sample = round_and_saturate_s24(hpf_output, &hpf_clipped);
+        int32_t post_hpf_sample = audio_round_float_to_s24(hpf_output, &hpf_clipped);
         bool scene_gain_clipped = false;
-        int32_t scene_sample = apply_software_gain_s24(
-            post_hpf_sample, scene_gain, &scene_gain_clipped);
+        int32_t scene_sample = audio_apply_gain_shift_s24(
+            post_hpf_sample, SDACS_SCENE_SOFTWARE_GAIN_SHIFT, &scene_gain_clipped);
         bool scene_clipped = hpf_clipped || scene_gain_clipped;
 
         spectral_dst[i] = spectral_sample;
@@ -873,7 +824,8 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     out->post_gain_peak_abs = out->current.peak_abs;
     out->scene_post_gain_peak_abs = out->scene.peak_abs;
     if (s_raw_diag.current.count > 0U) {
-        float rms = sqrtf((float)(s_raw_diag.current.sum_sq / (double)s_raw_diag.current.count));
+        float rms = sqrtf((float)s_raw_diag.current.sum_sq /
+                          (float)s_raw_diag.current.count);
         out->dbfs_norm_24bit = 20.0f * log10f((rms / 8388607.0f) + 1e-12f);
         out->dbfs_norm_32bit = 20.0f * log10f((rms / 2147483647.0f) + 1e-12f);
     } else {

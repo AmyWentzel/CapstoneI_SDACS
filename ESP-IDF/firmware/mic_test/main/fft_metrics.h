@@ -92,6 +92,9 @@ void fft_metrics_push_samples_for_path(fft_metrics_path_t path,
 void fft_metrics_accumulate_block_for_path(fft_metrics_path_t path,
                                            const int32_t *samples,
                                            size_t n);
+void fft_metrics_ingest_block_for_path(fft_metrics_path_t path,
+                                       const int32_t *samples,
+                                       size_t n);
 bool fft_metrics_compute_and_reset_for_path(fft_metrics_path_t path,
                                             audio_metrics_t *out,
                                             float cal_offset_db);

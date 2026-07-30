@@ -445,6 +445,7 @@ static void capture_task_run(void *arg)
     uint32_t samples_written = 0;
     uint32_t total_samples = 0;
     uint32_t feature_seq = 0;
+    uint32_t processed_block_count = 0;
     uint32_t window_audio_read_timeouts = 0;
     uint32_t window_audio_read_errors = 0;
     capture_io_stats_t io_stats = {0};
@@ -619,13 +620,9 @@ static void capture_task_run(void *arg)
         }
 
         if (samples_read > 0) {
-            fft_metrics_push_samples_for_path(
+            fft_metrics_ingest_block_for_path(
                 FFT_METRICS_PATH_SPECTRAL, read_buf, samples_read);
-            fft_metrics_accumulate_block_for_path(
-                FFT_METRICS_PATH_SPECTRAL, read_buf, samples_read);
-            fft_metrics_push_samples_for_path(
-                FFT_METRICS_PATH_SCENE, scene_buf, samples_read);
-            fft_metrics_accumulate_block_for_path(
+            fft_metrics_ingest_block_for_path(
                 FFT_METRICS_PATH_SCENE, scene_buf, samples_read);
             total_samples += (uint32_t)samples_read;
 
@@ -642,6 +639,13 @@ static void capture_task_run(void *arg)
                     }
                     chunk_fill = 0;
                 }
+            }
+            taskYIELD();
+            if ((++processed_block_count % 128U) == 0U) {
+                /* One tick about twice per second guarantees idle-task time
+                 * even while DMA buffering lets this task process backlog.
+                 */
+                vTaskDelay(1);
             }
         }
         if (fatal_error) {

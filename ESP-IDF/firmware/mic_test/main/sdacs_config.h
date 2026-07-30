@@ -32,7 +32,7 @@
 #endif
 
 #define SDACS_NODE_ID                    SDACS_SECRET_NODE_ID
-#define SDACS_FW_VERSION                 "mic-gain-hpf-v1"
+#define SDACS_FW_VERSION                 "mic-gain-hpf-v2"
 #define SDACS_SD_SPI_HOST                SPI2_HOST
 #define SDACS_SD_SPI_MAX_FREQ_KHZ        5000
 #define SDACS_SD_MOUNT_RETRY_COUNT       5
@@ -83,14 +83,19 @@
  * Both paths use signed 24-bit saturation and publish independent clipping
  * diagnostics. Automatic gain control is intentionally not used.
  */
-#define SDACS_MIC_SOFTWARE_GAIN          8.0f
+#define SDACS_MIC_SOFTWARE_GAIN          8
+#define SDACS_MIC_SOFTWARE_GAIN_SHIFT    3U
 #define SDACS_SCENE_HPF_ENABLED          1
 #define SDACS_SCENE_HPF_CUTOFF_HZ        150.0f
 #define SDACS_SCENE_HPF_ORDER            4
-#define SDACS_SCENE_SOFTWARE_GAIN        16.0f
+#define SDACS_SCENE_SOFTWARE_GAIN        16
+#define SDACS_SCENE_SOFTWARE_GAIN_SHIFT  4U
 #define SDACS_MIC_S24_MIN                (-8388608)
 #define SDACS_MIC_S24_MAX                8388607
 #define SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS 1
+/* Alternate conversion comparisons are validation-only and decimated. */
+#define SDACS_ENABLE_DETAILED_CONVERSION_DIAGNOSTICS 0
+#define SDACS_CONVERSION_DIAGNOSTIC_DECIMATION 64U
 #define SDACS_I2S_CONVERSION_SHIFT8      0
 #define SDACS_I2S_CONVERSION_LOW24       1
 /*

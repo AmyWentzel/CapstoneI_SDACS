@@ -11,28 +11,25 @@
 static bool configure_high_pass_biquad(hpf_biquad_t *section,
                                        float sample_rate_hz,
                                        float cutoff_hz,
-                                       double q)
+                                       float q)
 {
     if (!section || !isfinite(sample_rate_hz) || !isfinite(cutoff_hz) ||
         !isfinite(q) || sample_rate_hz <= 0.0f || cutoff_hz <= 0.0f ||
-        cutoff_hz >= (sample_rate_hz * 0.5f) || q <= 0.0) {
+        cutoff_hz >= (sample_rate_hz * 0.5f) || q <= 0.0f) {
         return false;
     }
 
-    /* Calculate coefficients in double precision once, then process samples
-     * in float using the ESP32-S3 single-precision FPU.
-     */
-    const double omega = 2.0 * M_PI * (double)cutoff_hz / (double)sample_rate_hz;
-    const double cosine = cos(omega);
-    const double sine = sin(omega);
-    const double alpha = sine / (2.0 * q);
-    const double a0 = 1.0 + alpha;
+    const float omega = 2.0f * (float)M_PI * cutoff_hz / sample_rate_hz;
+    const float cosine = cosf(omega);
+    const float sine = sinf(omega);
+    const float alpha = sine / (2.0f * q);
+    const float a0 = 1.0f + alpha;
 
-    section->b0 = (float)(((1.0 + cosine) * 0.5) / a0);
-    section->b1 = (float)((-(1.0 + cosine)) / a0);
+    section->b0 = ((1.0f + cosine) * 0.5f) / a0;
+    section->b1 = (-(1.0f + cosine)) / a0;
     section->b2 = section->b0;
-    section->a1 = (float)((-2.0 * cosine) / a0);
-    section->a2 = (float)((1.0 - alpha) / a0);
+    section->a1 = (-2.0f * cosine) / a0;
+    section->a2 = (1.0f - alpha) / a0;
     section->s1 = 0.0f;
     section->s2 = 0.0f;
     return true;
@@ -47,9 +44,9 @@ bool hpf_filter_init(hpf_filter_t *filter, float sample_rate_hz, float cutoff_hz
     memset(filter, 0, sizeof(*filter));
 
     /* Fourth-order Butterworth pole-pair Q values. */
-    static const double q_values[2] = {
-        0.5411961001461970,
-        1.3065629648763766,
+    static const float q_values[2] = {
+        0.5411961001461970f,
+        1.3065629648763766f,
     };
 
     for (size_t i = 0; i < 2U; ++i) {
