@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "audio_input.h"
+#include "fft_metrics.h"
 #include "esp_err.h"
 #include "run_storage.h"
 
@@ -98,6 +99,8 @@ typedef struct {
     uint32_t i2s_valid_bits;
     char i2s_sample_conversion[16];
     uint32_t i2s_sample_conversion_mode;
+    bool scene_metrics_valid;
+    audio_metrics_t scene_metrics;
     audio_input_raw_diagnostics_t raw_diag;
     char storage_error[32];
     char storage_error_detail[128];

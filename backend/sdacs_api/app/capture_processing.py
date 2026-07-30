@@ -20,10 +20,25 @@ from .ai_features import SDACS_V3_FEATURE_NAMES, SDACS_V3_FEATURE_SCHEMA, build_
 from .edge_impulse import APPROVED_CLASSES
 
 
-MODEL_FEATURES = (
-    "rms", "dbfs", "db_spl", "f_peak_hz", "fft_low_ratio",
-    "fft_mid_ratio", "fft_high_ratio", "fft_total_energy",
+SPECTRAL_MODEL_FEATURES = (
+    "rms", "dbfs", "db_spl", "f_peak_hz", "f_peak_acoustic_hz",
+    "low_rumble_ratio", "band_bass_ratio", "band_low_mid_ratio",
+    "band_mid_ratio", "band_presence_ratio", "band_high_ratio",
+    "band_bass_peak_hz", "band_low_mid_peak_hz", "band_mid_peak_hz",
+    "band_presence_peak_hz", "band_high_peak_hz", "dominant_band_ratio",
+    "dominant_band_peak_hz", "fft_low_ratio", "fft_mid_ratio",
+    "fft_high_ratio", "fft_total_energy",
 )
+SCENE_MODEL_FEATURES = tuple(f"scene_{field}" for field in SPECTRAL_MODEL_FEATURES)
+SCENE_DIAGNOSTIC_FIELDS = (
+    "scene_metrics_valid", "scene_hpf_enabled", "scene_hpf_cutoff_hz",
+    "scene_hpf_order", "scene_software_gain", "scene_peak_db_spl",
+    "scene_p2p_raw", "scene_zeros", "scene_n", "clipped_sample_count",
+    "spectral_clipped_sample_count", "scene_clipped_sample_count",
+    "pre_gain_dbfs", "post_hpf_dbfs", "current_dbfs", "scene_current_dbfs",
+    "pre_gain_peak_abs", "post_gain_peak_abs", "scene_post_gain_peak_abs",
+)
+MODEL_FEATURES = (*SPECTRAL_MODEL_FEATURES, *SCENE_MODEL_FEATURES, *SCENE_DIAGNOSTIC_FIELDS)
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -52,6 +67,10 @@ def build_model_input(capture_id: str, telemetry: list[dict[str, Any]], output: 
     return {
         "capture_id": capture_id,
         "schema_version": SDACS_V3_FEATURE_SCHEMA,
+        "processing_path": {
+            "scene_classifier": "150 Hz fourth-order HPF -> fixed 16x gain -> Edge Impulse quiet/speech/noisy",
+            "spectral_analysis": "unfiltered fixed 8x gain -> low/mid/high room-band analysis",
+        },
         "features": list(SDACS_V3_FEATURE_NAMES),
         "rows": len(rows),
         "excluded_sample_indexes": excluded,

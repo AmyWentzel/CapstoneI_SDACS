@@ -17,6 +17,7 @@ idf_component_register(
         "command_dispatcher.c"
         "device_state.c"
         "fft_metrics.c"
+        "hpf_filter.c"
         "fuel_gauge.c"
         "network_provisioning.c"
         "node_identity.c"

@@ -192,7 +192,7 @@ static void capture_publish_preflight_failed(capture_task_state_t *state,
         result ? (unsigned)result->elapsed_ms : 0U,
         result ? (double)result->effective_sample_rate_hz : 0.0,
         result ? (double)result->effective_raw_word_rate_hz : 0.0,
-        result ? result->raw_words_read : 0ULL,
+        result ? result->raw_words_read : (uint64_t)0,
         result ? (unsigned)result->samples : 0U,
         result ? (unsigned)result->read_calls : 0U,
         result ? (unsigned)result->successful_reads : 0U,
@@ -450,6 +450,7 @@ static void capture_task_run(void *arg)
     capture_io_stats_t io_stats = {0};
 
     static int32_t read_buf[SDACS_I2S_FRAMES_PER_READ];
+    static int32_t scene_buf[SDACS_I2S_FRAMES_PER_READ];
     static int32_t chunk[SDACS_AUDIO_CHUNK_SAMPLES];
     size_t chunk_fill = 0;
     bool fatal_error = false;
@@ -500,7 +501,9 @@ static void capture_task_run(void *arg)
         ESP_LOGI(TAG, "SD writes disabled; running MQTT/features-only capture");
     }
 
-    fft_metrics_reset();
+    fft_metrics_reset_path(FFT_METRICS_PATH_SPECTRAL);
+    fft_metrics_reset_path(FFT_METRICS_PATH_SCENE);
+    audio_input_reset_hpf();
     audio_input_reset_counters();
 
 #if SDACS_I2S_PREFLIGHT_ENABLED
@@ -551,7 +554,9 @@ static void capture_task_run(void *arg)
         }
     }
 
-    fft_metrics_reset();
+    fft_metrics_reset_path(FFT_METRICS_PATH_SPECTRAL);
+    fft_metrics_reset_path(FFT_METRICS_PATH_SCENE);
+    audio_input_reset_hpf();
     audio_input_reset_counters();
     audio_input_set_raw_diagnostics_enabled(true);
     audio_input_reset_raw_diagnostics();
@@ -572,6 +577,9 @@ static void capture_task_run(void *arg)
     audio_input_reset_raw_diagnostics();
 #endif
 
+    /* Preflight/warmup consumes samples; begin every real capture with a clean HPF state. */
+    audio_input_reset_hpf();
+
     capture_set_state(state, SDACS_MODE_CAPTURING,
                       state->ctx.sd_writes_enabled ? "capture started" : "capture started: MQTT/features-only mode");
     (void)temp_humidity_publish_latest_once("capture_start");
@@ -585,8 +593,9 @@ static void capture_task_run(void *arg)
     next_publish_us = start_us + feature_interval_us;
 
     while (esp_timer_get_time() < end_us) {
-        err = audio_input_read_s24(
+        err = audio_input_read_dual_s24(
             read_buf,
+            scene_buf,
             SDACS_I2S_FRAMES_PER_READ,
             &samples_read,
             SDACS_I2S_READ_TIMEOUT_MS
@@ -610,8 +619,14 @@ static void capture_task_run(void *arg)
         }
 
         if (samples_read > 0) {
-            fft_metrics_push_samples(read_buf, samples_read);
-            fft_metrics_accumulate_block(read_buf, samples_read);
+            fft_metrics_push_samples_for_path(
+                FFT_METRICS_PATH_SPECTRAL, read_buf, samples_read);
+            fft_metrics_accumulate_block_for_path(
+                FFT_METRICS_PATH_SPECTRAL, read_buf, samples_read);
+            fft_metrics_push_samples_for_path(
+                FFT_METRICS_PATH_SCENE, scene_buf, samples_read);
+            fft_metrics_accumulate_block_for_path(
+                FFT_METRICS_PATH_SCENE, scene_buf, samples_read);
             total_samples += (uint32_t)samples_read;
 
             for (size_t i = 0; i < samples_read; ++i) {
@@ -640,12 +655,22 @@ static void capture_task_run(void *arg)
             uint32_t expected_samples = (uint32_t)(((int64_t)SDACS_SAMPLE_RATE_HZ * window_elapsed_us) / 1000000LL);
             float window_effective_sr = 0.0f;
             audio_metrics_t metrics = {0};
-            bool have_metrics = fft_metrics_compute_and_reset(&metrics, state->ctx.cal_offset_db);
+            audio_metrics_t scene_metrics = {0};
+            bool have_metrics = fft_metrics_compute_and_reset_for_path(
+                FFT_METRICS_PATH_SPECTRAL, &metrics, state->ctx.cal_offset_db);
+            bool have_scene_metrics = fft_metrics_compute_and_reset_for_path(
+                FFT_METRICS_PATH_SCENE, &scene_metrics, state->ctx.cal_offset_db);
             if (!have_metrics) {
                 metrics.dbfs = -120.0f;
                 metrics.laeq_db = metrics.dbfs + state->ctx.cal_offset_db;
                 metrics.peak_db = metrics.laeq_db;
                 metrics.sample_count = 0;
+            }
+            if (!have_scene_metrics) {
+                scene_metrics.dbfs = -120.0f;
+                scene_metrics.laeq_db = scene_metrics.dbfs + state->ctx.cal_offset_db;
+                scene_metrics.peak_db = scene_metrics.laeq_db;
+                scene_metrics.sample_count = 0;
             }
             {
                 window_effective_sr = window_elapsed_us > 0
@@ -792,6 +817,8 @@ static void capture_task_run(void *arg)
                     .i2s_data_bits = 32,
                     .i2s_valid_bits = SDACS_MIC_VALID_BITS,
                     .i2s_sample_conversion_mode = SDACS_I2S_SAMPLE_CONVERSION_MODE,
+                    .scene_metrics_valid = have_scene_metrics,
+                    .scene_metrics = scene_metrics,
                     .raw_diag = raw_diag,
                     .audio_read_errors = window_audio_read_errors,
                     .audio_read_timeouts = window_audio_read_timeouts,
@@ -949,6 +976,23 @@ static void capture_task_run(void *arg)
                          (double)raw_diag.low24.dbfs,
                          raw_diag.raw_word0);
 #endif
+
+                ESP_LOGI(TAG,
+                         "SCENE PATH seq=%u hpf=%s cutoff=%.1f order=%u gain=%.3f dbfs=%.2f rms=%.6f peak_db_spl=%.2f f_peak_acoustic=%.1f low=%.4f mid=%.4f high=%.4f total=%.6e scene_clipped=%u",
+                         (unsigned)seq,
+                         SDACS_SCENE_HPF_ENABLED ? "true" : "false",
+                         (double)SDACS_SCENE_HPF_CUTOFF_HZ,
+                         (unsigned)SDACS_SCENE_HPF_ORDER,
+                         (double)SDACS_SCENE_SOFTWARE_GAIN,
+                         (double)scene_metrics.dbfs,
+                         (double)scene_metrics.rms_norm,
+                         (double)scene_metrics.peak_db,
+                         (double)scene_metrics.f_peak_acoustic_hz,
+                         (double)scene_metrics.fft_low_ratio,
+                         (double)scene_metrics.fft_mid_ratio,
+                         (double)scene_metrics.fft_high_ratio,
+                         (double)scene_metrics.fft_total_energy,
+                         (unsigned)raw_diag.scene_clipped_sample_count);
 
                 ESP_LOGI(TAG, "LAeq=%.2f dB peak=%.2f dB written=%u",
                          metrics.laeq_db, metrics.peak_db, (unsigned)samples_written);

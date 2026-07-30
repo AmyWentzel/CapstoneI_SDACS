@@ -10,6 +10,10 @@
 
 #include "sdacs_config.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 typedef struct {
     float fft_in[SDACS_FFT_SIZE * 2];
     float hann_window[SDACS_FFT_SIZE];
@@ -24,7 +28,8 @@ typedef struct {
     bool initialized;
 } fft_metrics_ctx_t;
 
-static fft_metrics_ctx_t s_fft = {0};
+static fft_metrics_ctx_t s_fft_paths[FFT_METRICS_PATH_COUNT] = {0};
+static bool s_fft_library_initialized = false;
 
 typedef struct {
     float peak_hz;
@@ -146,13 +151,13 @@ static void set_dominant_band(fft_band_metrics_t *metrics)
     metrics->dominant_band_peak_hz = peak_hz;
 }
 
-static fft_band_metrics_t compute_fft_band_metrics(void)
+static fft_band_metrics_t compute_fft_band_metrics(fft_metrics_ctx_t *ctx)
 {
     const float ratio_epsilon = 1e-12f;
     const float tone_low_hz = SDACS_TONE_1KHZ_CENTER_HZ - SDACS_TONE_1KHZ_BAND_HALF_WIDTH_HZ;
     const float tone_high_hz = SDACS_TONE_1KHZ_CENTER_HZ + SDACS_TONE_1KHZ_BAND_HALF_WIDTH_HZ;
     fft_band_metrics_t metrics = {0};
-    int start = s_fft.fft_index;
+    int start = ctx->fft_index;
     float peak_energy = 0.0f;
     int peak_bin = 0;
     float acoustic_peak_energy = 0.0f;
@@ -162,18 +167,18 @@ static fft_band_metrics_t compute_fft_band_metrics(void)
 
     for (int i = 0; i < SDACS_FFT_SIZE; ++i) {
         int buf_index = (start + i) % SDACS_FFT_SIZE;
-        float sample = (float)s_fft.fft_buffer[buf_index] / 8388608.0f;
-        s_fft.fft_in[2 * i] = sample * s_fft.hann_window[i];
-        s_fft.fft_in[(2 * i) + 1] = 0.0f;
+        float sample = (float)ctx->fft_buffer[buf_index] / 8388608.0f;
+        ctx->fft_in[2 * i] = sample * ctx->hann_window[i];
+        ctx->fft_in[(2 * i) + 1] = 0.0f;
     }
 
-    dsps_fft2r_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
-    dsps_bit_rev_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
-    dsps_cplx2reC_fc32(s_fft.fft_in, SDACS_FFT_SIZE);
+    dsps_fft2r_fc32(ctx->fft_in, SDACS_FFT_SIZE);
+    dsps_bit_rev_fc32(ctx->fft_in, SDACS_FFT_SIZE);
+    dsps_cplx2reC_fc32(ctx->fft_in, SDACS_FFT_SIZE);
 
     for (int i = 1; i < SDACS_FFT_SIZE / 2; ++i) {
-        float real = s_fft.fft_in[2 * i];
-        float imag = s_fft.fft_in[(2 * i) + 1];
+        float real = ctx->fft_in[2 * i];
+        float imag = ctx->fft_in[(2 * i) + 1];
         float energy = (real * real) + (imag * imag);
         float freq_hz = ((float)i * SDACS_SAMPLE_RATE_HZ) / SDACS_FFT_SIZE;
 
@@ -315,54 +320,90 @@ static fft_band_metrics_t compute_fft_band_metrics(void)
     return metrics;
 }
 
+static fft_metrics_ctx_t *fft_metrics_get_ctx(fft_metrics_path_t path)
+{
+    if (path < FFT_METRICS_PATH_SPECTRAL || path >= FFT_METRICS_PATH_COUNT) {
+        return NULL;
+    }
+    return &s_fft_paths[path];
+}
+
 esp_err_t fft_metrics_init(void)
 {
-    if (s_fft.initialized) {
-        return ESP_OK;
+    if (!s_fft_library_initialized) {
+        ESP_RETURN_ON_ERROR(
+            dsps_fft2r_init_fc32(NULL, SDACS_FFT_SIZE),
+            "fft_metrics",
+            "FFT init failed");
+        s_fft_library_initialized = true;
     }
 
-    ESP_RETURN_ON_ERROR(dsps_fft2r_init_fc32(NULL, SDACS_FFT_SIZE), "fft_metrics", "FFT init failed");
-    for (int i = 0; i < SDACS_FFT_SIZE; ++i) {
-        s_fft.hann_window[i] =
-            0.5f * (1.0f - cosf((2.0f * (float)M_PI * i) / (SDACS_FFT_SIZE - 1)));
+    for (int path = 0; path < FFT_METRICS_PATH_COUNT; ++path) {
+        fft_metrics_ctx_t *ctx = &s_fft_paths[path];
+        if (ctx->initialized) {
+            continue;
+        }
+        for (int i = 0; i < SDACS_FFT_SIZE; ++i) {
+            ctx->hann_window[i] =
+                0.5f * (1.0f - cosf((2.0f * (float)M_PI * i) / (SDACS_FFT_SIZE - 1)));
+        }
+        ctx->initialized = true;
+        ctx->min_sample = INT32_MAX;
+        ctx->max_sample = INT32_MIN;
     }
-
-    s_fft.initialized = true;
-    s_fft.min_sample = INT32_MAX;
-    s_fft.max_sample = INT32_MIN;
     return ESP_OK;
+}
+
+void fft_metrics_reset_path(fft_metrics_path_t path)
+{
+    fft_metrics_ctx_t *ctx = fft_metrics_get_ctx(path);
+    if (!ctx) {
+        return;
+    }
+    ctx->fft_index = 0;
+    memset(ctx->fft_buffer, 0, sizeof(ctx->fft_buffer));
+    memset(ctx->fft_in, 0, sizeof(ctx->fft_in));
+    ctx->sum_sq = 0.0;
+    ctx->peak_abs = 0;
+    ctx->min_sample = INT32_MAX;
+    ctx->max_sample = INT32_MIN;
+    ctx->zeros = 0;
+    ctx->count = 0;
 }
 
 void fft_metrics_reset(void)
 {
-    s_fft.fft_index = 0;
-    memset(s_fft.fft_buffer, 0, sizeof(s_fft.fft_buffer));
-    memset(s_fft.fft_in, 0, sizeof(s_fft.fft_in));
-    s_fft.sum_sq = 0.0;
-    s_fft.peak_abs = 0;
-    s_fft.min_sample = INT32_MAX;
-    s_fft.max_sample = INT32_MIN;
-    s_fft.zeros = 0;
-    s_fft.count = 0;
+    fft_metrics_reset_path(FFT_METRICS_PATH_SPECTRAL);
 }
 
-void fft_metrics_push_samples(const int32_t *samples, size_t n)
+void fft_metrics_push_samples_for_path(fft_metrics_path_t path,
+                                       const int32_t *samples,
+                                       size_t n)
 {
-    if (!samples) {
+    fft_metrics_ctx_t *ctx = fft_metrics_get_ctx(path);
+    if (!ctx || !samples) {
         return;
     }
 
     for (size_t i = 0; i < n; ++i) {
-        s_fft.fft_buffer[s_fft.fft_index++] = samples[i];
-        if (s_fft.fft_index >= SDACS_FFT_SIZE) {
-            s_fft.fft_index = 0;
+        ctx->fft_buffer[ctx->fft_index++] = samples[i];
+        if (ctx->fft_index >= SDACS_FFT_SIZE) {
+            ctx->fft_index = 0;
         }
     }
 }
 
-void fft_metrics_accumulate_block(const int32_t *samples, size_t n)
+void fft_metrics_push_samples(const int32_t *samples, size_t n)
 {
-    if (!samples) {
+    fft_metrics_push_samples_for_path(FFT_METRICS_PATH_SPECTRAL, samples, n);
+}
+
+void fft_metrics_accumulate_block_for_path(fft_metrics_path_t path,
+                                           const int32_t *samples,
+                                           size_t n)
+{
+    fft_metrics_ctx_t *ctx = fft_metrics_get_ctx(path);
+    if (!ctx || !samples) {
         return;
     }
 
@@ -370,41 +411,42 @@ void fft_metrics_accumulate_block(const int32_t *samples, size_t n)
         int32_t sample = samples[i];
         int32_t abs_sample = (sample < 0) ? -sample : sample;
 
-        if (abs_sample > s_fft.peak_abs) {
-            s_fft.peak_abs = abs_sample;
+        if (abs_sample > ctx->peak_abs) {
+            ctx->peak_abs = abs_sample;
         }
-        if (sample < s_fft.min_sample) {
-            s_fft.min_sample = sample;
+        if (sample < ctx->min_sample) {
+            ctx->min_sample = sample;
         }
-        if (sample > s_fft.max_sample) {
-            s_fft.max_sample = sample;
+        if (sample > ctx->max_sample) {
+            ctx->max_sample = sample;
         }
         if (sample == 0) {
-            s_fft.zeros++;
+            ctx->zeros++;
         }
-        s_fft.sum_sq += (double)sample * (double)sample;
-        s_fft.count++;
+        ctx->sum_sq += (double)sample * (double)sample;
+        ctx->count++;
     }
 }
 
-bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
+void fft_metrics_accumulate_block(const int32_t *samples, size_t n)
 {
-    if (!out || s_fft.count == 0) {
+    fft_metrics_accumulate_block_for_path(FFT_METRICS_PATH_SPECTRAL, samples, n);
+}
+
+bool fft_metrics_compute_and_reset_for_path(fft_metrics_path_t path,
+                                            audio_metrics_t *out,
+                                            float cal_offset_db)
+{
+    fft_metrics_ctx_t *ctx = fft_metrics_get_ctx(path);
+    if (!ctx || !out || ctx->count == 0) {
         return false;
     }
 
-    /*
-     * Production samples are normalized against signed 24-bit full scale.
-     * The active conversion mode is selected in audio_input.c. For this build,
-     * SHIFT8 is the production feature path, while LOW24 remains diagnostic.
-     * SPL calibration must not be finalized until quiet/tone captures prove the
-     * selected conversion and slot are correct.
-     */
-    float rms = sqrtf((float)(s_fft.sum_sq / (double)s_fft.count));
+    float rms = sqrtf((float)(ctx->sum_sq / (double)ctx->count));
     float rms_norm = rms / 8388608.0f;
     float dbfs = 20.0f * log10f(rms_norm + 1e-12f);
-    float peak_norm = (float)s_fft.peak_abs / 8388608.0f;
-    fft_band_metrics_t fft_metrics = compute_fft_band_metrics();
+    float peak_norm = (float)ctx->peak_abs / 8388608.0f;
+    fft_band_metrics_t fft_metrics = compute_fft_band_metrics(ctx);
 
     *out = (audio_metrics_t){
         .rms_norm = rms_norm,
@@ -467,19 +509,25 @@ bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
         .fft_low_ratio = fft_metrics.low_ratio,
         .fft_mid_ratio = fft_metrics.mid_ratio,
         .fft_high_ratio = fft_metrics.high_ratio,
-        .peak_abs = s_fft.peak_abs,
-        .p2p_raw = s_fft.max_sample - s_fft.min_sample,
-        .zeros = s_fft.zeros,
-        .sample_count = s_fft.count,
+        .peak_abs = ctx->peak_abs,
+        .p2p_raw = ctx->max_sample - ctx->min_sample,
+        .zeros = ctx->zeros,
+        .sample_count = ctx->count,
     };
     snprintf(out->dominant_band_name, sizeof(out->dominant_band_name), "%s",
              fft_metrics.dominant_band_name);
 
-    s_fft.sum_sq = 0.0;
-    s_fft.peak_abs = 0;
-    s_fft.min_sample = INT32_MAX;
-    s_fft.max_sample = INT32_MIN;
-    s_fft.zeros = 0;
-    s_fft.count = 0;
+    ctx->sum_sq = 0.0;
+    ctx->peak_abs = 0;
+    ctx->min_sample = INT32_MAX;
+    ctx->max_sample = INT32_MIN;
+    ctx->zeros = 0;
+    ctx->count = 0;
     return true;
+}
+
+bool fft_metrics_compute_and_reset(audio_metrics_t *out, float cal_offset_db)
+{
+    return fft_metrics_compute_and_reset_for_path(
+        FFT_METRICS_PATH_SPECTRAL, out, cal_offset_db);
 }

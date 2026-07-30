@@ -32,7 +32,7 @@
 #endif
 
 #define SDACS_NODE_ID                    SDACS_SECRET_NODE_ID
-#define SDACS_FW_VERSION                 "mic-gain-v1"
+#define SDACS_FW_VERSION                 "mic-gain-hpf-v1"
 #define SDACS_SD_SPI_HOST                SPI2_HOST
 #define SDACS_SD_SPI_MAX_FREQ_KHZ        5000
 #define SDACS_SD_MOUNT_RETRY_COUNT       5
@@ -58,7 +58,7 @@
 #define SDACS_MQTT_PUBLISH_TASK_STACK_SIZE  12288
 #define SDACS_MQTT_PUBLISH_TASK_PRIORITY    5
 #define SDACS_MQTT_PUBLISH_TASK_CORE        0
-#define SDACS_MQTT_FEATURE_JSON_MAX_LEN     12288
+#define SDACS_MQTT_FEATURE_JSON_MAX_LEN     16384
 #define SDACS_MQTT_STATUS_JSON_MAX_LEN      2048
 
 #define SDACS_I2S_BCLK_GPIO              GPIO_NUM_11
@@ -70,14 +70,24 @@
 #define SDACS_MIC_I2S_SLOT_BITS          32
 #define SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL (-26.0f)
 /*
- * Production PCM software gain. This is applied after SHIFT8/LOW24 conversion
- * and before every RMS, dBFS, FFT, band-energy, and AI feature calculation.
+ * Dual-path acoustic processing.
  *
- * Start with 8.0x (+18.06 dB) for the mic-gain validation build. Clipping is
- * protected with signed 24-bit saturation and reported in MQTT diagnostics.
- * Set to 1.0f to disable gain without changing the processing pipeline.
+ * Spectral path (unfiltered): retains the existing 8x gain so low/mid/high
+ * frequency features remain available for a later spectral classifier.
+ *
+ * Scene path: applies a fourth-order Butterworth HPF at 150 Hz to the converted
+ * 24-bit microphone samples, then applies a fixed 16x post-filter gain. This
+ * path is exported with the scene_* MQTT fields and is the intended input for
+ * the quiet/speech/noisy Edge Impulse model after retraining.
+ *
+ * Both paths use signed 24-bit saturation and publish independent clipping
+ * diagnostics. Automatic gain control is intentionally not used.
  */
 #define SDACS_MIC_SOFTWARE_GAIN          8.0f
+#define SDACS_SCENE_HPF_ENABLED          1
+#define SDACS_SCENE_HPF_CUTOFF_HZ        150.0f
+#define SDACS_SCENE_HPF_ORDER            4
+#define SDACS_SCENE_SOFTWARE_GAIN        16.0f
 #define SDACS_MIC_S24_MIN                (-8388608)
 #define SDACS_MIC_S24_MAX                8388607
 #define SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS 1

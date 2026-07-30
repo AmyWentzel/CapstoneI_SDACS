@@ -400,6 +400,93 @@ static esp_err_t mqtt_start_client(const char *broker_uri)
     return ESP_OK;
 }
 
+static int append_scene_metrics_json(char *out, size_t out_sz, int len, const sdacs_features_t *f)
+{
+    if (!out || !f || len <= 0 || (size_t)len >= out_sz) {
+        return len;
+    }
+    if (out[(size_t)len - 1U] != '}') {
+        return len;
+    }
+
+    const audio_metrics_t *m = &f->scene_metrics;
+    size_t pos = (size_t)len - 1U;
+    int written = snprintf(
+        out + pos,
+        out_sz - pos,
+        ","
+        "\"scene_metrics_valid\":%s,"
+        "\"scene_hpf_enabled\":%s,"
+        "\"scene_hpf_cutoff_hz\":%.1f,"
+        "\"scene_hpf_order\":%u,"
+        "\"scene_software_gain\":%.3f,"
+        "\"scene_rms\":%.6f,"
+        "\"scene_dbfs\":%.2f,"
+        "\"scene_db_spl\":%.2f,"
+        "\"scene_peak_db_spl\":%.2f,"
+        "\"scene_f_peak_hz\":%.1f,"
+        "\"scene_f_peak_acoustic_hz\":%.1f,"
+        "\"scene_low_rumble_ratio\":%.6f,"
+        "\"scene_band_bass_ratio\":%.6f,"
+        "\"scene_band_low_mid_ratio\":%.6f,"
+        "\"scene_band_mid_ratio\":%.6f,"
+        "\"scene_band_presence_ratio\":%.6f,"
+        "\"scene_band_high_ratio\":%.6f,"
+        "\"scene_band_bass_peak_hz\":%.1f,"
+        "\"scene_band_low_mid_peak_hz\":%.1f,"
+        "\"scene_band_mid_peak_hz\":%.1f,"
+        "\"scene_band_presence_peak_hz\":%.1f,"
+        "\"scene_band_high_peak_hz\":%.1f,"
+        "\"scene_dominant_band_name\":\"%s\","
+        "\"scene_dominant_band_ratio\":%.6f,"
+        "\"scene_dominant_band_peak_hz\":%.1f,"
+        "\"scene_fft_low_ratio\":%.6f,"
+        "\"scene_fft_mid_ratio\":%.6f,"
+        "\"scene_fft_high_ratio\":%.6f,"
+        "\"scene_fft_total_energy\":%.6e,"
+        "\"scene_p2p_raw\":%" PRId32 ","
+        "\"scene_zeros\":%u,"
+        "\"scene_n\":%u"
+        "}",
+        f->scene_metrics_valid ? "true" : "false",
+        SDACS_SCENE_HPF_ENABLED ? "true" : "false",
+        (double)SDACS_SCENE_HPF_CUTOFF_HZ,
+        (unsigned)SDACS_SCENE_HPF_ORDER,
+        (double)SDACS_SCENE_SOFTWARE_GAIN,
+        (double)m->rms_norm,
+        (double)m->dbfs,
+        (double)m->laeq_db,
+        (double)m->peak_db,
+        (double)m->fft_peak_hz,
+        (double)m->f_peak_acoustic_hz,
+        (double)m->low_rumble_ratio,
+        (double)m->band_bass_ratio,
+        (double)m->band_low_mid_ratio,
+        (double)m->band_mid_ratio,
+        (double)m->band_presence_ratio,
+        (double)m->band_high_ratio,
+        (double)m->band_bass_peak_hz,
+        (double)m->band_low_mid_peak_hz,
+        (double)m->band_mid_peak_hz,
+        (double)m->band_presence_peak_hz,
+        (double)m->band_high_peak_hz,
+        m->dominant_band_name,
+        (double)m->dominant_band_ratio,
+        (double)m->dominant_band_peak_hz,
+        (double)m->fft_low_ratio,
+        (double)m->fft_mid_ratio,
+        (double)m->fft_high_ratio,
+        (double)m->fft_total_energy,
+        m->p2p_raw,
+        (unsigned)m->zeros,
+        (unsigned)m->sample_count);
+
+    if (written < 0 || (size_t)written >= (out_sz - pos)) {
+        return len;
+    }
+    return (int)(pos + (size_t)written);
+}
+
 static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_features_t *f)
 {
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
@@ -429,19 +516,38 @@ static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_f
         "\"converted_p2p_raw\":%" PRId32 ","
         "\"converted_zeros\":%u,"
         "\"mic_software_gain\":%.3f,"
+        "\"scene_software_gain\":%.3f,"
+        "\"hpf_enabled\":%s,"
+        "\"hpf_cutoff_hz\":%.1f,"
+        "\"hpf_order\":%u,"
         "\"pre_gain_peak_abs\":%" PRId32 ","
         "\"post_gain_peak_abs\":%" PRId32 ","
+        "\"scene_post_gain_peak_abs\":%" PRId32 ","
         "\"clipped_sample_count\":%u,"
+        "\"spectral_clipped_sample_count\":%u,"
+        "\"scene_clipped_sample_count\":%u,"
         "\"pre_gain_min\":%" PRId32 ","
         "\"pre_gain_max\":%" PRId32 ","
         "\"pre_gain_rms\":%.2f,"
         "\"pre_gain_dbfs\":%.2f,"
+        "\"post_hpf_min\":%" PRId32 ","
+        "\"post_hpf_max\":%" PRId32 ","
+        "\"post_hpf_peak_abs\":%" PRId32 ","
+        "\"post_hpf_p2p\":%" PRId32 ","
+        "\"post_hpf_rms\":%.2f,"
+        "\"post_hpf_dbfs\":%.2f,"
         "\"current_min\":%" PRId32 ","
         "\"current_max\":%" PRId32 ","
         "\"current_peak_abs\":%" PRId32 ","
         "\"current_p2p\":%" PRId32 ","
         "\"current_rms\":%.2f,"
         "\"current_dbfs\":%.2f,"
+        "\"scene_current_min\":%" PRId32 ","
+        "\"scene_current_max\":%" PRId32 ","
+        "\"scene_current_peak_abs\":%" PRId32 ","
+        "\"scene_current_p2p\":%" PRId32 ","
+        "\"scene_current_rms\":%.2f,"
+        "\"scene_current_dbfs\":%.2f,"
         "\"shift8_min\":%" PRId32 ","
         "\"shift8_max\":%" PRId32 ","
         "\"shift8_peak_abs\":%" PRId32 ","
@@ -477,19 +583,38 @@ static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_f
         d->converted_p2p_raw,
         (unsigned)d->converted_zeros,
         (double)d->software_gain,
+        (double)d->scene_software_gain,
+        d->hpf_enabled ? "true" : "false",
+        (double)d->hpf_cutoff_hz,
+        (unsigned)d->hpf_order,
         d->pre_gain_peak_abs,
         d->post_gain_peak_abs,
+        d->scene_post_gain_peak_abs,
         (unsigned)d->clipped_sample_count,
+        (unsigned)d->spectral_clipped_sample_count,
+        (unsigned)d->scene_clipped_sample_count,
         d->pre_gain.min,
         d->pre_gain.max,
         (double)d->pre_gain.rms,
         (double)d->pre_gain.dbfs,
+        d->post_hpf.min,
+        d->post_hpf.max,
+        d->post_hpf.peak_abs,
+        d->post_hpf.p2p,
+        (double)d->post_hpf.rms,
+        (double)d->post_hpf.dbfs,
         d->current.min,
         d->current.max,
         d->current.peak_abs,
         d->current.p2p,
         (double)d->current.rms,
         (double)d->current.dbfs,
+        d->scene.min,
+        d->scene.max,
+        d->scene.peak_abs,
+        d->scene.p2p,
+        (double)d->scene.rms,
+        (double)d->scene.dbfs,
         d->shift8.min,
         d->shift8.max,
         d->shift8.peak_abs,
@@ -765,6 +890,7 @@ static int build_features_json(char *out, size_t out_sz, const sdacs_features_t 
         (unsigned)f->err
     );
 
+    len = append_scene_metrics_json(out, out_sz, len, f);
     return append_raw_diag_json(out, out_sz, len, f);
 }
 

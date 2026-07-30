@@ -38,6 +38,57 @@ class TelemetryUpdate(BaseModel):
     fft_mid_ratio: float | None = None
     fft_high_ratio: float | None = None
     fft_total_energy: float | None = None
+
+    # HPF scene path for quiet/speech/noisy classification.
+    scene_metrics_valid: bool | None = None
+    scene_hpf_enabled: bool | None = None
+    scene_hpf_cutoff_hz: float | None = None
+    scene_hpf_order: int | None = None
+    scene_software_gain: float | None = None
+    scene_rms: float | None = None
+    scene_dbfs: float | None = None
+    scene_db_spl: float | None = None
+    scene_peak_db_spl: float | None = None
+    scene_f_peak_hz: float | None = None
+    scene_f_peak_acoustic_hz: float | None = None
+    scene_low_rumble_ratio: float | None = None
+    scene_band_bass_ratio: float | None = None
+    scene_band_low_mid_ratio: float | None = None
+    scene_band_mid_ratio: float | None = None
+    scene_band_presence_ratio: float | None = None
+    scene_band_high_ratio: float | None = None
+    scene_band_bass_peak_hz: float | None = None
+    scene_band_low_mid_peak_hz: float | None = None
+    scene_band_mid_peak_hz: float | None = None
+    scene_band_presence_peak_hz: float | None = None
+    scene_band_high_peak_hz: float | None = None
+    scene_dominant_band_name: str | None = None
+    scene_dominant_band_ratio: float | None = None
+    scene_dominant_band_peak_hz: float | None = None
+    scene_fft_low_ratio: float | None = None
+    scene_fft_mid_ratio: float | None = None
+    scene_fft_high_ratio: float | None = None
+    scene_fft_total_energy: float | None = None
+    scene_p2p_raw: int | None = None
+    scene_zeros: int | None = None
+    scene_n: int | None = None
+
+    # Gain/HPF verification diagnostics.
+    hpf_enabled: bool | None = None
+    hpf_cutoff_hz: float | None = None
+    hpf_order: int | None = None
+    mic_software_gain: float | None = None
+    clipped_sample_count: int | None = None
+    spectral_clipped_sample_count: int | None = None
+    scene_clipped_sample_count: int | None = None
+    pre_gain_dbfs: float | None = None
+    post_hpf_dbfs: float | None = None
+    current_dbfs: float | None = None
+    scene_current_dbfs: float | None = None
+    pre_gain_peak_abs: int | None = None
+    post_gain_peak_abs: int | None = None
+    scene_post_gain_peak_abs: int | None = None
+
     p2p_raw: int | None = None
     zeros: int | None = None
     temp_c: float | None = None

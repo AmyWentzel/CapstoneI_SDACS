@@ -38,7 +38,8 @@ SDACS_V3_FEATURE_NAMES = tuple(
     for source in SDACS_V3_SOURCE_FIELDS
     for statistic in ("mean", "std", "range")
 )
-SDACS_V3_FEATURE_SCHEMA = "sdacs_v3_57_feature_room_window_v1"
+SDACS_V3_FEATURE_SCHEMA = "sdacs_v3_57_feature_room_window_scene_hpf_v2"
+SDACS_V3_SOURCE_PATH = "scene_hpf_150hz_gain16"
 SDACS_V3_FEATURE_PROVENANCE_VERIFIED = True
 SDACS_V3_FEATURE_PROVENANCE_ERROR = None
 
@@ -69,9 +70,22 @@ def _capture_id(row: Mapping[str, Any]) -> str | None:
 
 
 def _finite_number(row: Mapping[str, Any], field: str, node_id: str) -> float:
-    value = row.get(field)
+    scene_field = f"scene_{field}"
+    scene_value = row.get(scene_field)
+    scene_valid = row.get("scene_metrics_valid")
+    # A firmware record that explicitly marks scene metrics invalid must fall
+    # back to the unfiltered spectral path. Older/imported rows may omit the
+    # validity flag, in which case a populated scene field is accepted.
+    if scene_valid is True:
+        use_scene = True
+    elif scene_valid is False:
+        use_scene = False
+    else:
+        use_scene = scene_value not in (None, "")
+    selected_field = scene_field if use_scene else field
+    value = scene_value if use_scene else row.get(field)
     if isinstance(value, bool) or value in (None, ""):
-        raise FeatureWindowError(f"{node_id} is missing {field}.")
+        raise FeatureWindowError(f"{node_id} is missing {selected_field}.")
     try:
         number = float(value)
     except (TypeError, ValueError) as exc:
@@ -124,6 +138,7 @@ def build_feature_window(
         "capture_id": capture_id,
         "sample_index": sample_index,
         "feature_schema": SDACS_V3_FEATURE_SCHEMA,
+        "source_path": SDACS_V3_SOURCE_PATH,
         "source_node_ids": list(SDACS_NODE_IDS),
         "source_rows": [by_node[node] for node in SDACS_NODE_IDS],
         "aggregation_rules": {
@@ -132,6 +147,7 @@ def build_feature_window(
             "mean": "arithmetic mean across four nodes",
             "standard_deviation": "population standard deviation (ddof=0)",
             "range": "maximum minus minimum",
+            "feature_source": "prefer scene_* HPF fields; fall back to legacy unfiltered fields",
             "missing_values": "reject window",
             "duplicate_nodes": "reject window",
             "non_finite_values": "reject window",

@@ -210,6 +210,10 @@ class CaptureService:
                 "capture_id": capture_id,
                 "feature_schema": SDACS_V3_FEATURE_SCHEMA,
                 "feature_names": list(SDACS_V3_FEATURE_NAMES),
+                "processing_path": {
+                    "scene_classifier": "150 Hz fourth-order HPF -> fixed 16x gain -> Edge Impulse quiet/speech/noisy",
+                    "spectral_analysis": "unfiltered fixed 8x gain -> low/mid/high room-band analysis",
+                },
                 "grouping_scope": "four-node synchronized room window",
                 "source_csv": "acoustic_input.csv",
                 "window_count": len(windows),

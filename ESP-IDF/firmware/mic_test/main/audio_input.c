@@ -15,12 +15,14 @@
 #include "esp_timer.h"
 
 #include "sdacs_config.h"
+#include "hpf_filter.h"
 
 typedef struct {
     i2s_chan_handle_t rx_chan;
     int32_t raw[SDACS_I2S_FRAMES_PER_READ * 2U];
     audio_input_debug_t last_debug;
     audio_input_counters_t counters;
+    hpf_filter_t scene_hpf;
     bool initialized;
     bool rx_enabled;
 } audio_input_t;
@@ -47,10 +49,13 @@ typedef struct {
     uint32_t raw_word_repeated_count;
     uint32_t converted_zeros;
     uint32_t sample_count;
-    uint32_t clipped_sample_count;
+    uint32_t spectral_clipped_sample_count;
+    uint32_t scene_clipped_sample_count;
     int32_t converted_sample0;
     conversion_accum_t pre_gain;
+    conversion_accum_t post_hpf;
     conversion_accum_t current;
+    conversion_accum_t scene;
     conversion_accum_t shift8;
     conversion_accum_t low24;
     conversion_accum_t shift16;
@@ -169,6 +174,38 @@ static inline float configured_software_gain(void)
     return (isfinite(gain) && gain > 0.0f) ? gain : 1.0f;
 }
 
+static inline float configured_scene_software_gain(void)
+{
+    const float gain = SDACS_SCENE_SOFTWARE_GAIN;
+    return (isfinite(gain) && gain > 0.0f) ? gain : 1.0f;
+}
+
+static inline int32_t round_and_saturate_s24(double sample, bool *clipped)
+{
+    if (clipped) {
+        *clipped = false;
+    }
+    if (!isfinite(sample)) {
+        if (clipped) {
+            *clipped = true;
+        }
+        return 0;
+    }
+    if (sample > (double)SDACS_MIC_S24_MAX) {
+        if (clipped) {
+            *clipped = true;
+        }
+        return SDACS_MIC_S24_MAX;
+    }
+    if (sample < (double)SDACS_MIC_S24_MIN) {
+        if (clipped) {
+            *clipped = true;
+        }
+        return SDACS_MIC_S24_MIN;
+    }
+    return (int32_t)lrint(sample);
+}
+
 static inline int32_t apply_software_gain_s24(int32_t sample, float gain, bool *clipped)
 {
     const double scaled = (double)sample * (double)gain;
@@ -252,7 +289,13 @@ static void conversion_diag_from_accum(audio_input_conversion_diag_t *out,
     };
 }
 
-static void raw_diag_accumulate(uint32_t raw_word, int32_t pre_gain_sample, int32_t current_sample, bool clipped)
+static void raw_diag_accumulate(uint32_t raw_word,
+                                int32_t pre_gain_sample,
+                                int32_t post_hpf_sample,
+                                int32_t spectral_sample,
+                                int32_t scene_sample,
+                                bool spectral_clipped,
+                                bool scene_clipped)
 {
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
     if (!s_raw_diagnostics_enabled) {
@@ -267,7 +310,7 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t pre_gain_sample, int3
         s_raw_diag.raw_word0 = raw_word;
         s_raw_diag.raw_word_min = raw_word;
         s_raw_diag.raw_word_max = raw_word;
-        s_raw_diag.converted_sample0 = current_sample;
+        s_raw_diag.converted_sample0 = spectral_sample;
         s_raw_diag.have_sample = true;
     } else {
         if (s_raw_diag.sample_count == 1U) {
@@ -290,15 +333,20 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t pre_gain_sample, int3
     s_raw_diag.previous_raw_word = raw_word;
     s_raw_diag.have_previous_raw = true;
 
-    if (current_sample == 0) {
+    if (spectral_sample == 0) {
         s_raw_diag.converted_zeros++;
     }
-    if (clipped) {
-        s_raw_diag.clipped_sample_count++;
+    if (spectral_clipped) {
+        s_raw_diag.spectral_clipped_sample_count++;
+    }
+    if (scene_clipped) {
+        s_raw_diag.scene_clipped_sample_count++;
     }
 
     conversion_accum_push(&s_raw_diag.pre_gain, pre_gain_sample);
-    conversion_accum_push(&s_raw_diag.current, current_sample);
+    conversion_accum_push(&s_raw_diag.post_hpf, post_hpf_sample);
+    conversion_accum_push(&s_raw_diag.current, spectral_sample);
+    conversion_accum_push(&s_raw_diag.scene, scene_sample);
     conversion_accum_push(&s_raw_diag.shift8, shift8_sample);
     conversion_accum_push(&s_raw_diag.low24, low24_sample);
     conversion_accum_push(&s_raw_diag.shift16, shift16_sample);
@@ -306,8 +354,11 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t pre_gain_sample, int3
 #else
     (void)raw_word;
     (void)pre_gain_sample;
-    (void)current_sample;
-    (void)clipped;
+    (void)post_hpf_sample;
+    (void)spectral_sample;
+    (void)scene_sample;
+    (void)spectral_clipped;
+    (void)scene_clipped;
 #endif
 }
 
@@ -316,7 +367,9 @@ static void raw_diag_reset_internal(void)
     memset(&s_raw_diag, 0, sizeof(s_raw_diag));
     s_raw_diag.raw_word_min = UINT32_MAX;
     conversion_accum_reset(&s_raw_diag.pre_gain);
+    conversion_accum_reset(&s_raw_diag.post_hpf);
     conversion_accum_reset(&s_raw_diag.current);
+    conversion_accum_reset(&s_raw_diag.scene);
     conversion_accum_reset(&s_raw_diag.shift8);
     conversion_accum_reset(&s_raw_diag.low24);
     conversion_accum_reset(&s_raw_diag.shift16);
@@ -431,6 +484,15 @@ esp_err_t audio_input_init(void)
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_audio.rx_chan, &std_cfg), TAG, "init std mode failed");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_audio.rx_chan), TAG, "enable failed");
 
+#if SDACS_SCENE_HPF_ENABLED
+    if (!hpf_filter_init(&s_audio.scene_hpf,
+                         (float)SDACS_SAMPLE_RATE_HZ,
+                         (float)SDACS_SCENE_HPF_CUTOFF_HZ)) {
+        ESP_LOGE(TAG, "Failed to initialize scene HPF");
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
+
     s_audio.initialized = true;
     s_audio.rx_enabled = true;
     raw_diag_reset_internal();
@@ -473,6 +535,7 @@ esp_err_t audio_input_prepare_for_capture(void)
 
     audio_input_reset_counters();
     audio_input_reset_raw_diagnostics();
+    audio_input_reset_hpf();
 
     err = audio_input_disable_rx();
     if (err != ESP_OK) {
@@ -490,6 +553,7 @@ esp_err_t audio_input_prepare_for_capture(void)
 
     vTaskDelay(pdMS_TO_TICKS(80));
     audio_input_warmup_drain(SDACS_I2S_PREFLIGHT_WARMUP_MS);
+    audio_input_reset_hpf();
     audio_input_reset_counters();
 
     ESP_LOGI(TAG,
@@ -537,14 +601,15 @@ esp_err_t audio_input_recover_rx(const char *reason)
     return ESP_OK;
 }
 
-esp_err_t audio_input_read_s24(int32_t *dst,
-                               size_t max_samples,
-                               size_t *samples_read,
-                               uint32_t timeout_ms)
+esp_err_t audio_input_read_dual_s24(int32_t *spectral_dst,
+                                    int32_t *scene_dst,
+                                    size_t max_samples,
+                                    size_t *samples_read,
+                                    uint32_t timeout_ms)
 {
     size_t bytes_read = 0;
 
-    if (!dst || max_samples < audio_input_selected_sample_capacity() || !samples_read) {
+    if (!spectral_dst || max_samples < audio_input_selected_sample_capacity() || !samples_read) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!s_audio.initialized || !s_audio.rx_chan) {
@@ -614,7 +679,8 @@ esp_err_t audio_input_read_s24(int32_t *dst,
     uint32_t raw_min = UINT32_MAX;
     uint32_t raw_max = 0;
     bool have_prev_raw = false;
-    const float software_gain = configured_software_gain();
+    const float spectral_gain = configured_software_gain();
+    const float scene_gain = configured_scene_software_gain();
 
     for (size_t i = 0; i < selected_samples_read; ++i) {
 #if SDACS_I2S_RX_MODE == SDACS_I2S_RX_MODE_STEREO_RAW
@@ -623,26 +689,53 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         size_t raw_index = i;
 #endif
         if (raw_index >= raw_words_read) {
+            selected_samples_read = i;
+            *samples_read = i;
             break;
         }
+
         uint32_t raw_word = (uint32_t)s_audio.raw[raw_index];
         int32_t pre_gain_sample = i2s_word_to_production_sample(raw_word);
-        bool clipped = false;
-        int32_t sample = apply_software_gain_s24(pre_gain_sample, software_gain, &clipped);
-        int32_t abs_sample = (sample < 0) ? -sample : sample;
-        dst[i] = sample;
-        raw_diag_accumulate(raw_word, pre_gain_sample, sample, clipped);
 
-        if (sample < min_sample) {
-            min_sample = sample;
+        bool spectral_clipped = false;
+        int32_t spectral_sample = apply_software_gain_s24(
+            pre_gain_sample, spectral_gain, &spectral_clipped);
+
+        float hpf_output = (float)pre_gain_sample;
+#if SDACS_SCENE_HPF_ENABLED
+        hpf_output = hpf_filter_process(&s_audio.scene_hpf, hpf_output);
+#endif
+        bool hpf_clipped = false;
+        int32_t post_hpf_sample = round_and_saturate_s24(hpf_output, &hpf_clipped);
+        bool scene_gain_clipped = false;
+        int32_t scene_sample = apply_software_gain_s24(
+            post_hpf_sample, scene_gain, &scene_gain_clipped);
+        bool scene_clipped = hpf_clipped || scene_gain_clipped;
+
+        spectral_dst[i] = spectral_sample;
+        if (scene_dst) {
+            scene_dst[i] = scene_sample;
         }
-        if (sample > max_sample) {
-            max_sample = sample;
+
+        raw_diag_accumulate(raw_word,
+                            pre_gain_sample,
+                            post_hpf_sample,
+                            spectral_sample,
+                            scene_sample,
+                            spectral_clipped,
+                            scene_clipped);
+
+        int32_t abs_sample = (spectral_sample < 0) ? -spectral_sample : spectral_sample;
+        if (spectral_sample < min_sample) {
+            min_sample = spectral_sample;
+        }
+        if (spectral_sample > max_sample) {
+            max_sample = spectral_sample;
         }
         if (abs_sample > peak_abs) {
             peak_abs = abs_sample;
         }
-        if (sample == 0) {
+        if (spectral_sample == 0) {
             ++zero_count;
         }
         if (raw_word != 0U) {
@@ -673,7 +766,7 @@ esp_err_t audio_input_read_s24(int32_t *dst,
         .raw1 = (raw_words_read > 1) ? (uint32_t)s_audio.raw[1] : 0U,
         .raw_min = raw_min,
         .raw_max = raw_max,
-        .sample0 = (selected_samples_read > 0) ? dst[0] : 0,
+        .sample0 = (selected_samples_read > 0) ? spectral_dst[0] : 0,
         .min_sample = min_sample,
         .max_sample = max_sample,
         .peak_abs = peak_abs,
@@ -710,6 +803,21 @@ esp_err_t audio_input_read_s24(int32_t *dst,
     return ESP_OK;
 }
 
+esp_err_t audio_input_read_s24(int32_t *dst,
+                               size_t max_samples,
+                               size_t *samples_read,
+                               uint32_t timeout_ms)
+{
+    return audio_input_read_dual_s24(dst, NULL, max_samples, samples_read, timeout_ms);
+}
+
+void audio_input_reset_hpf(void)
+{
+#if SDACS_SCENE_HPF_ENABLED
+    hpf_filter_reset(&s_audio.scene_hpf);
+#endif
+}
+
 bool audio_input_get_last_debug(audio_input_debug_t *out)
 {
     if (!out || !s_audio.initialized) {
@@ -728,6 +836,10 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
 
     memset(out, 0, sizeof(*out));
     out->software_gain = configured_software_gain();
+    out->scene_software_gain = configured_scene_software_gain();
+    out->hpf_enabled = SDACS_SCENE_HPF_ENABLED != 0;
+    out->hpf_cutoff_hz = SDACS_SCENE_HPF_CUTOFF_HZ;
+    out->hpf_order = SDACS_SCENE_HPF_ORDER;
     out->dbfs_normalization_bits = SDACS_MIC_VALID_BITS;
 
 #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
@@ -739,11 +851,16 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     out->raw_word_repeated_count = s_raw_diag.raw_word_repeated_count;
     out->converted_zeros = s_raw_diag.converted_zeros;
     out->sample_count = s_raw_diag.sample_count;
-    out->clipped_sample_count = s_raw_diag.clipped_sample_count;
+    out->spectral_clipped_sample_count = s_raw_diag.spectral_clipped_sample_count;
+    out->scene_clipped_sample_count = s_raw_diag.scene_clipped_sample_count;
+    out->clipped_sample_count =
+        s_raw_diag.spectral_clipped_sample_count + s_raw_diag.scene_clipped_sample_count;
     out->converted_sample0 = s_raw_diag.converted_sample0;
 
     conversion_diag_from_accum(&out->pre_gain, &s_raw_diag.pre_gain, 8388607.0f);
+    conversion_diag_from_accum(&out->post_hpf, &s_raw_diag.post_hpf, 8388607.0f);
     conversion_diag_from_accum(&out->current, &s_raw_diag.current, 8388607.0f);
+    conversion_diag_from_accum(&out->scene, &s_raw_diag.scene, 8388607.0f);
     conversion_diag_from_accum(&out->shift8, &s_raw_diag.shift8, 8388607.0f);
     conversion_diag_from_accum(&out->low24, &s_raw_diag.low24, 8388607.0f);
     conversion_diag_from_accum(&out->shift16, &s_raw_diag.shift16, 32767.0f);
@@ -754,6 +871,7 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     out->converted_p2p_raw = out->current.p2p;
     out->pre_gain_peak_abs = out->pre_gain.peak_abs;
     out->post_gain_peak_abs = out->current.peak_abs;
+    out->scene_post_gain_peak_abs = out->scene.peak_abs;
     if (s_raw_diag.current.count > 0U) {
         float rms = sqrtf((float)(s_raw_diag.current.sum_sq / (double)s_raw_diag.current.count));
         out->dbfs_norm_24bit = 20.0f * log10f((rms / 8388607.0f) + 1e-12f);
@@ -764,7 +882,9 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
     }
 #else
     out->pre_gain.dbfs = -120.0f;
+    out->post_hpf.dbfs = -120.0f;
     out->current.dbfs = -120.0f;
+    out->scene.dbfs = -120.0f;
     out->shift8.dbfs = -120.0f;
     out->low24.dbfs = -120.0f;
     out->shift16.dbfs = -120.0f;

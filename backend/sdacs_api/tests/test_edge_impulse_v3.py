@@ -146,3 +146,36 @@ def test_golden_fixture_has_exact_contract():
     }
     assert value["tolerance"] == 0.02
     assert value["features"][43] == 162.3798
+
+
+def test_scene_hpf_fields_are_preferred_over_unfiltered_fields():
+    rows = source_rows()
+    for index, row in enumerate(rows, start=1):
+        row["scene_metrics_valid"] = True
+        for field in SDACS_V3_SOURCE_FIELDS:
+            row[f"scene_{field}"] = float(index * 10)
+            row[field] = float(index)
+
+    window = build_feature_window(
+        rows, capture_id="capture_fixture", sample_index=7
+    )
+
+    assert window["source_path"] == "scene_hpf_150hz_gain16"
+    assert window["features"]["dbfs_mean"] == pytest.approx(25.0)
+    assert window["features"]["dbfs_range"] == pytest.approx(30.0)
+
+
+def test_invalid_scene_metrics_fall_back_to_unfiltered_fields():
+    rows = source_rows()
+    for index, row in enumerate(rows, start=1):
+        row["scene_metrics_valid"] = False
+        for field in SDACS_V3_SOURCE_FIELDS:
+            row[f"scene_{field}"] = float(index * 100)
+            row[field] = float(index)
+
+    window = build_feature_window(
+        rows, capture_id="capture_fixture", sample_index=7
+    )
+
+    assert window["features"]["dbfs_mean"] == pytest.approx(2.5)
+    assert window["features"]["dbfs_range"] == pytest.approx(3.0)
