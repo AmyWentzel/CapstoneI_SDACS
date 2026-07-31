@@ -15,6 +15,27 @@ class NodeTelemetry {
     this.fftMidRatio,
     this.fftHighRatio,
     this.fftTotalEnergy,
+    this.sceneDbfs,
+    this.sceneRms,
+    this.sceneDbSpl,
+    this.scenePeakDbSpl,
+    this.scenePeakFrequencyHz,
+    this.sceneAcousticPeakFrequencyHz,
+    this.sceneFftLowRatio,
+    this.sceneFftMidRatio,
+    this.sceneFftHighRatio,
+    this.sceneFftTotalEnergy,
+    this.effectiveSampleRateHz,
+    this.sampleRateOk,
+    this.sceneMetricsValid,
+    this.hpfEnabled,
+    this.sceneClippedSampleCount,
+    this.scenePostGainPeakAbs,
+    this.hpfOrder,
+    this.hpfCutoffHz,
+    this.micSoftwareGain,
+    this.sceneSoftwareGain,
+    this.audioError,
     this.temperatureC,
     this.humidityPercent,
     this.batterySoc,
@@ -47,6 +68,27 @@ class NodeTelemetry {
   final double? fftMidRatio;
   final double? fftHighRatio;
   final double? fftTotalEnergy;
+  final double? sceneDbfs;
+  final double? sceneRms;
+  final double? sceneDbSpl;
+  final double? scenePeakDbSpl;
+  final double? scenePeakFrequencyHz;
+  final double? sceneAcousticPeakFrequencyHz;
+  final double? sceneFftLowRatio;
+  final double? sceneFftMidRatio;
+  final double? sceneFftHighRatio;
+  final double? sceneFftTotalEnergy;
+  final double? effectiveSampleRateHz;
+  final bool? sampleRateOk;
+  final bool? sceneMetricsValid;
+  final bool? hpfEnabled;
+  final int? sceneClippedSampleCount;
+  final int? scenePostGainPeakAbs;
+  final int? hpfOrder;
+  final double? hpfCutoffHz;
+  final double? micSoftwareGain;
+  final double? sceneSoftwareGain;
+  final String? audioError;
   final double? temperatureC;
   final double? humidityPercent;
   final double? batterySoc;
@@ -123,6 +165,62 @@ class NodeTelemetry {
         'fftTotalEnergy',
         'fft_total_energy',
       ], _parseDouble),
+      sceneDbfs: read('sceneDbfs', const ['scene_dbfs'], _parseDouble),
+      sceneRms: read('sceneRms', const ['scene_rms'], _parseDouble),
+      sceneDbSpl: read('sceneDbSpl', const ['scene_db_spl'], _parseDouble),
+      scenePeakDbSpl: read('scenePeakDbSpl', const [
+        'scene_peak_db_spl',
+      ], _parseDouble),
+      scenePeakFrequencyHz: read('scenePeakFrequencyHz', const [
+        'scene_f_peak_hz',
+      ], _parseDouble),
+      sceneAcousticPeakFrequencyHz: read('sceneAcousticPeakFrequencyHz', const [
+        'scene_f_peak_acoustic_hz',
+      ], _parseDouble),
+      sceneFftLowRatio: read('sceneFftLowRatio', const [
+        'scene_fft_low_ratio',
+      ], _parseDouble),
+      sceneFftMidRatio: read('sceneFftMidRatio', const [
+        'scene_fft_mid_ratio',
+      ], _parseDouble),
+      sceneFftHighRatio: read('sceneFftHighRatio', const [
+        'scene_fft_high_ratio',
+      ], _parseDouble),
+      sceneFftTotalEnergy: read('sceneFftTotalEnergy', const [
+        'scene_fft_total_energy',
+      ], _parseDouble),
+      effectiveSampleRateHz: read('effectiveSampleRateHz', const [
+        'effective_sample_rate_hz',
+      ], _parseDouble),
+      sampleRateOk: read('sampleRateOk', const ['sample_rate_ok'], _parseBool),
+      sceneMetricsValid: read('sceneMetricsValid', const [
+        'scene_metrics_valid',
+      ], _parseBool),
+      hpfEnabled: read('hpfEnabled', const [
+        'hpf_enabled',
+        'scene_hpf_enabled',
+      ], _parseBool),
+      sceneClippedSampleCount: read('sceneClippedSampleCount', const [
+        'scene_clipped_sample_count',
+      ], _parseInt),
+      scenePostGainPeakAbs: read('scenePostGainPeakAbs', const [
+        'scene_post_gain_peak_abs',
+      ], _parseInt),
+      hpfOrder: read('hpfOrder', const [
+        'hpf_order',
+        'scene_hpf_order',
+      ], _parseInt),
+      hpfCutoffHz: read('hpfCutoffHz', const [
+        'hpf_cutoff_hz',
+        'scene_hpf_cutoff_hz',
+      ], _parseDouble),
+      micSoftwareGain: read('micSoftwareGain', const [
+        'mic_software_gain',
+      ], _parseDouble),
+      sceneSoftwareGain: read('sceneSoftwareGain', const [
+        'scene_software_gain',
+      ], _parseDouble),
+      audioError: read('audioError', const ['audio_error'], _parseString),
       temperatureC: read('temperatureC', const [
         'temperatureC',
         'temperature_c',
@@ -224,6 +322,79 @@ class NodeTelemetry {
         fftTotalEnergy,
         update.fftTotalEnergy,
       ),
+      sceneDbfs: choose('sceneDbfs', sceneDbfs, update.sceneDbfs),
+      sceneRms: choose('sceneRms', sceneRms, update.sceneRms),
+      sceneDbSpl: choose('sceneDbSpl', sceneDbSpl, update.sceneDbSpl),
+      scenePeakDbSpl: choose(
+        'scenePeakDbSpl',
+        scenePeakDbSpl,
+        update.scenePeakDbSpl,
+      ),
+      scenePeakFrequencyHz: choose(
+        'scenePeakFrequencyHz',
+        scenePeakFrequencyHz,
+        update.scenePeakFrequencyHz,
+      ),
+      sceneAcousticPeakFrequencyHz: choose(
+        'sceneAcousticPeakFrequencyHz',
+        sceneAcousticPeakFrequencyHz,
+        update.sceneAcousticPeakFrequencyHz,
+      ),
+      sceneFftLowRatio: choose(
+        'sceneFftLowRatio',
+        sceneFftLowRatio,
+        update.sceneFftLowRatio,
+      ),
+      sceneFftMidRatio: choose(
+        'sceneFftMidRatio',
+        sceneFftMidRatio,
+        update.sceneFftMidRatio,
+      ),
+      sceneFftHighRatio: choose(
+        'sceneFftHighRatio',
+        sceneFftHighRatio,
+        update.sceneFftHighRatio,
+      ),
+      sceneFftTotalEnergy: choose(
+        'sceneFftTotalEnergy',
+        sceneFftTotalEnergy,
+        update.sceneFftTotalEnergy,
+      ),
+      effectiveSampleRateHz: choose(
+        'effectiveSampleRateHz',
+        effectiveSampleRateHz,
+        update.effectiveSampleRateHz,
+      ),
+      sampleRateOk: choose('sampleRateOk', sampleRateOk, update.sampleRateOk),
+      sceneMetricsValid: choose(
+        'sceneMetricsValid',
+        sceneMetricsValid,
+        update.sceneMetricsValid,
+      ),
+      hpfEnabled: choose('hpfEnabled', hpfEnabled, update.hpfEnabled),
+      sceneClippedSampleCount: choose(
+        'sceneClippedSampleCount',
+        sceneClippedSampleCount,
+        update.sceneClippedSampleCount,
+      ),
+      scenePostGainPeakAbs: choose(
+        'scenePostGainPeakAbs',
+        scenePostGainPeakAbs,
+        update.scenePostGainPeakAbs,
+      ),
+      hpfOrder: choose('hpfOrder', hpfOrder, update.hpfOrder),
+      hpfCutoffHz: choose('hpfCutoffHz', hpfCutoffHz, update.hpfCutoffHz),
+      micSoftwareGain: choose(
+        'micSoftwareGain',
+        micSoftwareGain,
+        update.micSoftwareGain,
+      ),
+      sceneSoftwareGain: choose(
+        'sceneSoftwareGain',
+        sceneSoftwareGain,
+        update.sceneSoftwareGain,
+      ),
+      audioError: choose('audioError', audioError, update.audioError),
       temperatureC: choose('temperatureC', temperatureC, update.temperatureC),
       humidityPercent: choose(
         'humidityPercent',
@@ -297,9 +468,12 @@ class NodeTelemetry {
 
   static Map<String, dynamic> _telemetrySource(Map<String, dynamic> json) {
     final root = _stringKeyMap(json);
-    final source = <String, dynamic>{...root};
     final rawMap = _decodeMap(root['raw_json']);
-    if (rawMap != null) source.addAll(rawMap);
+    // Raw firmware JSON is a compatibility fallback. Promoted API fields win.
+    final source = <String, dynamic>{
+      ...?rawMap,
+      ...Map.fromEntries(root.entries.where((entry) => entry.value != null)),
+    };
     for (final nestedKey in const [
       'latest',
       'latest_features',
@@ -310,8 +484,12 @@ class NodeTelemetry {
         // Aggregate REST records are full Pydantic objects, so fields absent
         // from that MQTT record type arrive as null. They must not erase a
         // value supplied by another nested record type.
+        final nestedRaw = _decodeMap(nested['raw_json']);
+        final normalizedNested = <String, dynamic>{...?nestedRaw, ...nested};
         source.addAll(
-          Map.fromEntries(nested.entries.where((e) => e.value != null)),
+          Map.fromEntries(
+            normalizedNested.entries.where((e) => e.value != null),
+          ),
         );
       }
     }
@@ -358,16 +536,24 @@ class NodeTelemetry {
 
   static int? _parseInt(dynamic value) {
     if (value is int) return value;
-    if (value is num && value.isFinite) return value.toInt();
-    return int.tryParse(value?.toString() ?? '');
+    if (value is num && value.isFinite && value == value.truncateToDouble()) {
+      return value.toInt();
+    }
+    final parsed = double.tryParse(value?.toString().trim() ?? '');
+    return parsed != null &&
+            parsed.isFinite &&
+            parsed == parsed.truncateToDouble()
+        ? parsed.toInt()
+        : null;
   }
 
   static bool? _parseBool(dynamic value) {
     if (value is bool) return value;
     if (value is num) return value != 0;
     if (value is String) {
-      if (value.toLowerCase() == 'true') return true;
-      if (value.toLowerCase() == 'false') return false;
+      final normalized = value.trim().toLowerCase();
+      if (normalized == 'true' || normalized == '1') return true;
+      if (normalized == 'false' || normalized == '0') return false;
     }
     return null;
   }

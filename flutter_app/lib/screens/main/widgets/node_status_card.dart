@@ -24,6 +24,16 @@ class NodeTelemetryFormat {
 
   static String firmware(String? value) =>
       value == null || value.trim().isEmpty ? 'Unknown' : value;
+
+  static String compact(double? value, {String suffix = ''}) {
+    if (value == null || !value.isFinite) return '\u2014';
+    final formatted = value == value.roundToDouble()
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(2);
+    return '$formatted$suffix';
+  }
+
+  static String gain(double? value) => compact(value, suffix: '\u00d7');
 }
 
 class NodeStatusCard extends StatefulWidget {
@@ -176,6 +186,10 @@ class _NodeStatusCardState extends State<NodeStatusCard> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        SizedBox(
+                          width: constraints.maxWidth,
+                          child: _SceneProcessing(telemetry: telemetry),
+                        ),
                       ],
                     ),
                   ),
@@ -186,6 +200,167 @@ class _NodeStatusCardState extends State<NodeStatusCard> {
       ),
     );
   }
+}
+
+class _SceneProcessing extends StatelessWidget {
+  const _SceneProcessing({required this.telemetry});
+
+  final NodeTelemetry telemetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final audioError = telemetry.audioError?.trim();
+    final pollingWarning =
+        audioError?.toLowerCase() == 'i2s_timeouts' &&
+        telemetry.sampleRateOk == true;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(height: 14),
+        Text(
+          'Scene Processing',
+          style: Theme.of(
+            context,
+          ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 14,
+          runSpacing: 6,
+          children: [
+            _DetailMetric(
+              label: 'Scene level',
+              value: NodeTelemetryFormat.number(
+                telemetry.sceneDbfs,
+                2,
+                suffix: ' dBFS',
+              ),
+            ),
+            _DetailMetric(
+              label: 'Scene RMS',
+              value: NodeTelemetryFormat.rms(telemetry.sceneRms),
+            ),
+            _DetailMetric(
+              label: 'Sample rate',
+              value: NodeTelemetryFormat.compact(
+                telemetry.effectiveSampleRateHz,
+                suffix: ' Hz',
+              ),
+            ),
+            _StateMetric(
+              label: 'Sample rate status',
+              value: _booleanLabel(telemetry.sampleRateOk, 'OK', 'Warning'),
+              color: _stateColor(colors, telemetry.sampleRateOk),
+            ),
+            _StateMetric(
+              label: 'HPF',
+              value: _hpfLabel(telemetry),
+              color: _stateColor(colors, telemetry.hpfEnabled),
+            ),
+            _DetailMetric(
+              label: 'Raw gain',
+              value: NodeTelemetryFormat.gain(telemetry.micSoftwareGain),
+            ),
+            _DetailMetric(
+              label: 'Scene gain',
+              value: NodeTelemetryFormat.gain(telemetry.sceneSoftwareGain),
+            ),
+            _StateMetric(
+              label: 'Scene clipping',
+              value: telemetry.sceneClippedSampleCount?.toString() ?? 'Unknown',
+              color: telemetry.sceneClippedSampleCount == null
+                  ? colors.outline
+                  : telemetry.sceneClippedSampleCount == 0
+                  ? colors.primary
+                  : colors.error,
+            ),
+            _StateMetric(
+              label: 'Scene metrics',
+              value: _booleanLabel(
+                telemetry.sceneMetricsValid,
+                'Valid',
+                'Invalid',
+              ),
+              color: _stateColor(colors, telemetry.sceneMetricsValid),
+            ),
+          ],
+        ),
+        if (audioError != null && audioError.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            pollingWarning
+                ? 'I2S polling warnings'
+                : 'Audio error: $audioError',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: pollingWarning ? colors.tertiary : colors.error,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  static String _booleanLabel(bool? value, String yes, String no) =>
+      value == null
+      ? 'Unknown'
+      : value
+      ? yes
+      : no;
+
+  static Color _stateColor(ColorScheme colors, bool? value) => value == null
+      ? colors.outline
+      : value
+      ? colors.primary
+      : colors.error;
+
+  static String _hpfLabel(NodeTelemetry telemetry) {
+    final state = _booleanLabel(telemetry.hpfEnabled, 'Enabled', 'Disabled');
+    final details = <String>[];
+    if (telemetry.hpfCutoffHz != null) {
+      details.add(
+        NodeTelemetryFormat.compact(telemetry.hpfCutoffHz, suffix: ' Hz'),
+      );
+    }
+    if (telemetry.hpfOrder != null) {
+      details.add('${telemetry.hpfOrder}th order');
+    }
+    return details.isEmpty
+        ? state
+        : '$state \u00b7 ${details.join(' \u00b7 ')}';
+  }
+}
+
+class _StateMetric extends StatelessWidget {
+  const _StateMetric({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 180,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.circle, size: 7, color: color),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            '$label: $value',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _PrimaryMetric extends StatelessWidget {

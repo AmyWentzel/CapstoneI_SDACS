@@ -176,4 +176,36 @@ void main() {
     expect(find.text('32.6 dB SPL'), findsNothing);
     metric.dispose();
   });
+
+  testWidgets('healthy i2s timeout is shown as a non-fatal warning', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _card(
+        const NodeTelemetry(
+          nodeId: 'node03',
+          sceneDbfs: -64.26,
+          sceneRms: 0.000612,
+          effectiveSampleRateHz: 47872,
+          sampleRateOk: true,
+          sceneMetricsValid: true,
+          sceneClippedSampleCount: 0,
+          hpfEnabled: true,
+          hpfCutoffHz: 150,
+          hpfOrder: 4,
+          micSoftwareGain: 8,
+          sceneSoftwareGain: 16,
+          audioError: 'i2s_timeouts',
+        ),
+        height: 420,
+      ),
+    );
+    await tester.tap(find.text('Details'));
+    await tester.pump();
+
+    expect(find.text('Scene Processing'), findsOneWidget);
+    expect(find.textContaining('Sample rate status: OK'), findsOneWidget);
+    expect(find.text('I2S polling warnings'), findsOneWidget);
+    expect(find.textContaining('Audio error:'), findsNothing);
+  });
 }
