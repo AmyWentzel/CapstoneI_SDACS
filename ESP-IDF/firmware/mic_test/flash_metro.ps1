@@ -27,6 +27,7 @@ $IdfPy = "C:\Espressif\frameworks\esp-idf-v5.3.1\tools\idf.py"
 
 $env:IDF_PATH = "C:\Espressif\frameworks\esp-idf-v5.3.1"
 $env:IDF_PYTHON_ENV_PATH = "C:\Espressif\python_env\idf5.3_py3.11_env"
+$env:IDF_TARGET = "esp32s3"
 $idfTools = @(
     "C:\Espressif\tools\xtensa-esp-elf-gdb\14.2_20240403\xtensa-esp-elf-gdb\bin",
     "C:\Espressif\tools\riscv32-esp-elf-gdb\14.2_20240403\riscv32-esp-elf-gdb\bin",
