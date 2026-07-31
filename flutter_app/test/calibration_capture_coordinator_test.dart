@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_test_app/config/backend_config.dart';
 import 'package:flutter_test_app/models/capture_session.dart';
-import 'package:flutter_test_app/screens/operator_tools/operator_tools_screen.dart';
 import 'package:flutter_test_app/services/calibration_audio_service.dart';
 import 'package:flutter_test_app/services/calibration_capture_coordinator.dart';
 import 'package:flutter_test_app/services/sdacs_api_service.dart';
@@ -235,14 +234,4 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 10)),
   );
-
-  test('suggested offset follows the documented formula', () {
-    // 120.0 + 94.0 - 92.7 = 121.3 dB.
-    final value = suggestedSplOffset(
-      currentOffsetDb: 120,
-      referenceSplDb: 94,
-      measuredSplDb: 92.7,
-    );
-    expect(value, closeTo(121.3, 0.0001));
-  });
 }

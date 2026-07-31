@@ -8,6 +8,7 @@ class NodeTelemetry {
     this.rms,
     this.dbfs,
     this.dbSpl,
+    this.calOffsetDb,
     this.peakFrequencyHz,
     this.p2pRaw,
     this.zeros,
@@ -61,6 +62,7 @@ class NodeTelemetry {
   final double? rms;
   final double? dbfs;
   final double? dbSpl;
+  final double? calOffsetDb;
   final double? peakFrequencyHz;
   final double? p2pRaw;
   final int? zeros;
@@ -142,6 +144,10 @@ class NodeTelemetry {
       rms: read('rms', const ['rms'], _parseDouble),
       dbfs: read('dbfs', const ['dbfs'], _parseDouble),
       dbSpl: read('dbSpl', const ['dbSpl', 'db_spl'], _parseDouble),
+      calOffsetDb: read('calOffsetDb', const [
+        'calOffsetDb',
+        'cal_offset_db',
+      ], _parseDouble),
       peakFrequencyHz: read('peakFrequencyHz', const [
         'peakFrequencyHz',
         'f_peak_hz',
@@ -307,6 +313,11 @@ class NodeTelemetry {
       rms: choose('rms', rms, update.rms),
       dbfs: choose('dbfs', dbfs, update.dbfs),
       dbSpl: choose('dbSpl', dbSpl, update.dbSpl),
+      calOffsetDb: choose(
+        'calOffsetDb',
+        calOffsetDb,
+        update.calOffsetDb,
+      ),
       peakFrequencyHz: choose(
         'peakFrequencyHz',
         peakFrequencyHz,
@@ -444,6 +455,7 @@ class NodeTelemetry {
       rms: 0.12 + number * 0.01,
       dbfs: -24.5 + number,
       dbSpl: (62 + number).toDouble(),
+      calOffsetDb: 120,
       peakFrequencyHz: (1000 + number * 50).toDouble(),
       fftLowRatio: 0.25,
       fftMidRatio: 0.5,

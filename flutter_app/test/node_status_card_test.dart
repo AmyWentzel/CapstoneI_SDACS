@@ -28,6 +28,7 @@ NodeTelemetry _populated({double spl = 32.61}) => NodeTelemetry(
   nodeId: 'node01',
   status: 'online',
   dbSpl: spl,
+  calOffsetDb: 120.0,
   rms: 0.000045,
   dbfs: -87.39,
   peakFrequencyHz: 46.9,
@@ -61,6 +62,7 @@ void main() {
     await tester.pump();
     expect(find.textContaining('RMS: 0.000045'), findsOneWidget);
     expect(find.textContaining('dBFS: -87.4 dBFS'), findsOneWidget);
+    expect(find.textContaining('Calibration offset: 120.0 dB'), findsOneWidget);
     expect(find.textContaining('Temperature: 24.9 °C'), findsOneWidget);
     expect(find.textContaining('Humidity: 46.8% RH'), findsOneWidget);
     expect(find.textContaining('Battery: 98%'), findsOneWidget);
@@ -100,6 +102,7 @@ void main() {
       'node_id': 'node01',
       'record_type': 'features',
       'db_spl': 32.61,
+      'cal_offset_db': 120.0,
       'rms': 0.000045,
       'dbfs': -87.39,
       'f_peak_hz': 46.9,
@@ -113,6 +116,7 @@ void main() {
     final merged = acoustic.merge(environment);
     expect(merged.nodeId, 'node01');
     expect(merged.dbSpl, 32.61);
+    expect(merged.calOffsetDb, 120.0);
     expect(merged.rms, 0.000045);
     expect(merged.peakFrequencyHz, 46.9);
     expect(merged.temperatureC, 24.87);

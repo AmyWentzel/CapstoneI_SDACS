@@ -8,6 +8,7 @@ from threading import RLock
 from typing import Any
 
 from .capture_processing import acoustic_analysis, atomic_json, fuse
+from .calibration import build_calibration_preview
 from .capture_store import CaptureStore
 from .config import Settings
 from .ai_features import (
@@ -136,7 +137,7 @@ class CaptureService:
         return directory
 
     def artifact(self, capture_id: str, filename: str) -> Path:
-        allowed = {"acoustic_summary.json", "acoustic_map.png", "ai_input.json", "ai_summary.json", "ai_window_predictions.json", "edge_impulse_result.json", "combined_result.json"}
+        allowed = {"acoustic_summary.json", "acoustic_map.png", "ai_input.json", "ai_summary.json", "ai_window_predictions.json", "edge_impulse_result.json", "combined_result.json", "calibration_result.json"}
         if filename not in allowed:
             raise ValueError("Invalid artifact")
         return self.directory(capture_id) / filename
@@ -149,6 +150,47 @@ class CaptureService:
 
     def save_layout(self, layout: RoomLayout) -> RoomLayout:
         return self.layouts.save(layout)
+
+    def calibration_preview(self, capture_id: str, reference_spl_db: float) -> dict[str, Any]:
+        session = self.require(capture_id)
+        if session.get("validation_label") not in {
+            "calibration_1khz",
+            "spl_calibration_verification",
+        }:
+            raise ValueError("Capture is not a 1 kHz SPL calibration capture")
+        if session.get("status") not in TERMINAL_STATUSES:
+            raise ValueError("Calibration capture has not finished processing")
+        telemetry = self.store.telemetry(capture_id)
+        return build_calibration_preview(
+            capture_id,
+            reference_spl_db,
+            telemetry,
+            list(self.settings.expected_nodes),
+        )
+
+    def record_calibration_result(self, capture_id: str, result: dict[str, Any]) -> None:
+        session = self.require(capture_id)
+        directory = self.directory(capture_id)
+        atomic_json(directory / "calibration_result.json", result)
+        session["calibration"] = result
+        session.setdefault("artifacts", {})["calibration_result"] = "calibration_result.json"
+        session["updated_at"] = self._now()
+        self._save(session)
+
+    def latest_calibration_result(self) -> dict[str, Any] | None:
+        for session in self.store.list_sessions():
+            calibration = session.get("calibration")
+            if isinstance(calibration, dict):
+                return calibration
+            capture_id = session.get("capture_id")
+            if not isinstance(capture_id, str):
+                continue
+            path = self.directory(capture_id) / "calibration_result.json"
+            if path.is_file():
+                import json
+
+                return json.loads(path.read_text(encoding="utf-8"))
+        return None
 
     async def _wait_then_process(self, capture_id: str, timeout: float) -> None:
         await asyncio.sleep(timeout)

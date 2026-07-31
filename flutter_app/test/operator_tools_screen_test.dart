@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_test_app/app/app_routes.dart';
+import 'package:flutter_test_app/models/capture_session.dart';
+import 'package:flutter_test_app/models/spl_calibration.dart';
 import 'package:flutter_test_app/screens/operator_tools/operator_tools_screen.dart';
 import 'package:flutter_test_app/screens/main/main_screen.dart';
 import 'package:flutter_test_app/services/calibration_audio_service.dart';
+import 'package:flutter_test_app/services/sdacs_api_service.dart';
 import 'package:flutter_test_app/state/operation_controller.dart';
 
 class FakeCalibrationAudio implements CalibrationAudio {
@@ -78,13 +81,91 @@ class FakeCalibrationAudio implements CalibrationAudio {
   }
 }
 
+class FakeCalibrationApi extends SdacsApiService {
+  FakeCalibrationApi();
+
+  int previewCalls = 0;
+  int applyCalls = 0;
+
+  SplCalibrationPreview get preview => SplCalibrationPreview(
+    captureId: 'capture_calibration_test',
+    referenceSplDb: 70,
+    status: 'ready',
+    toleranceDb: 1,
+    generatedAt: DateTime.utc(2026, 7, 31),
+    nodes: List.generate(4, (index) {
+      final number = index + 1;
+      return SplCalibrationNodePreview(
+        nodeId: 'node0$number',
+        sampleCount: 50,
+        eligible: true,
+        warnings: const [],
+        measuredDbfs: -50 - index * 0.25,
+        measuredSplDb: 70 - index * 0.25,
+        currentOffsetDb: 120,
+        suggestedOffsetDb: 120 + index * 0.25,
+        adjustmentDb: index * 0.25,
+        measurementErrorDb: -index * 0.25,
+        representativeFrequencyHz: 1000,
+        toneDetectedCount: 50,
+        toneSampleCount: 50,
+        toneDetectionRate: 1,
+        withinTolerance: true,
+      );
+    }),
+    warnings: const [],
+  );
+
+  @override
+  Future<SplCalibrationPreview> previewSplCalibration({
+    required String captureId,
+    required double referenceSplDb,
+  }) async {
+    previewCalls++;
+    return preview;
+  }
+
+  @override
+  Future<SplCalibrationApplyResult> applySplCalibration({
+    required String captureId,
+    required double referenceSplDb,
+    Map<String, double>? nodeOffsetsDb,
+    bool allowPartial = false,
+  }) async {
+    applyCalls++;
+    return SplCalibrationApplyResult(
+      captureId: captureId,
+      referenceSplDb: referenceSplDb,
+      status: 'complete',
+      appliedAt: DateTime.utc(2026, 7, 31),
+      nodes: preview.nodes
+          .map(
+            (node) => SplCalibrationNodeApplyResult(
+              nodeId: node.nodeId,
+              requestedOffsetDb: node.suggestedOffsetDb!,
+              requestId: 'request_${node.nodeId}',
+              published: true,
+              acknowledged: true,
+              applied: true,
+              reportedOffsetDb: node.suggestedOffsetDb,
+              reason: 'saved',
+            ),
+          )
+          .toList(),
+      warnings: const [],
+    );
+  }
+}
+
 void main() {
   late FakeCalibrationAudio audio;
   late OperationController operations;
+  late FakeCalibrationApi api;
 
   setUp(() {
     audio = FakeCalibrationAudio();
     operations = OperationController();
+    api = FakeCalibrationApi();
   });
 
   Widget app() => MaterialApp(
@@ -92,6 +173,7 @@ void main() {
       '/': (_) => OperatorToolsScreen(
         audioService: audio,
         operationController: operations,
+        apiService: api,
       ),
       AppRoutes.setup: (_) =>
           const Scaffold(body: Text('Existing Setup Screen')),
@@ -159,7 +241,7 @@ void main() {
 
     expect(find.text('Operator Tools'), findsOneWidget);
     expect(find.text('Room and Node Setup'), findsOneWidget);
-    expect(find.text('Advanced Calibration'), findsOneWidget);
+    expect(find.text('Manual Diagnostics'), findsOneWidget);
     expect(find.text('Calibration Signals'), findsOneWidget);
     expect(find.text('Run 1 kHz Calibration Capture'), findsOneWidget);
     expect(find.text('Run Sweep Calibration Capture'), findsOneWidget);
@@ -269,5 +351,54 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('1 kHz Reference Tone'), findsOneWidget);
     expect(find.text('20 Hz–20 kHz Logarithmic Sweep'), findsOneWidget);
+  });
+
+  testWidgets('SPL workflow previews, applies, and exposes verification', (
+    tester,
+  ) async {
+    operations.completeCalibration(
+      const CaptureCombinedResult({
+        'capture_id': 'capture_calibration_test',
+        'acoustic_analysis': {'node_metrics': <String, dynamic>{}},
+      }),
+      CalibrationSignal.oneKhzTone,
+    );
+    await tester.pumpWidget(app());
+
+    final input = find.byKey(const Key('reference-spl-input'));
+    await tester.ensureVisible(input);
+    await tester.enterText(input, '70');
+    await tester.tap(find.byKey(const Key('calculate-offsets')));
+    await tester.pumpAndSettle();
+
+    expect(api.previewCalls, 1);
+    expect(
+      find.text(
+        'Ready to apply: all four nodes passed calibration data checks.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('100% (50/50)', findRichText: true),
+      findsNWidgets(4),
+    );
+
+    final apply = find.byKey(const Key('apply-offsets'));
+    await tester.ensureVisible(apply);
+    await tester.tap(apply);
+    await tester.pumpAndSettle();
+    expect(find.text('Apply SPL calibration offsets?'), findsOneWidget);
+    await tester.tap(find.text('Apply to Four Nodes'));
+    await tester.pumpAndSettle();
+
+    expect(api.applyCalls, 1);
+    expect(
+      find.textContaining('Offsets saved by all four nodes'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('run-calibration-verification')),
+      findsOneWidget,
+    );
   });
 }

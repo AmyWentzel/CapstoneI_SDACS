@@ -201,3 +201,14 @@ publish failures are returned as HTTP errors rather than empty successful scans.
 The endpoint publishes `ble_advertise` to `sdacs/group/all/cmd`, waits one
 second, scans for eight seconds, and returns only detected `SDACS-node01`
 through `SDACS-node04` devices with median `ble_rssi_dbm` values.
+
+## SPL calibration API
+
+The backend now supports an end-to-end four-node SPL calibration workflow:
+
+- `POST /api/calibration/preview` calculates safe per-node proposals from a completed `calibration_1khz` or `spl_calibration_verification` capture.
+- `POST /api/calibration/apply` sends `set_cal_offset` to each node and requires a matching firmware acknowledgement.
+- `GET /api/calibration/latest` returns the latest persisted apply record.
+- `GET /api/captures/{capture_id}/calibration` returns the capture-specific `calibration_result.json` artifact.
+
+See `../../docs/SPL_CALIBRATION_WORKFLOW.md` for the operator procedure and payload examples.

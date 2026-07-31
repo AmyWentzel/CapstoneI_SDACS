@@ -9,7 +9,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from .config import Settings
 from .capture_service import CaptureService
 from .ble_scanner import BleScanError, scan_sdacs_nodes
-from .models import BleScanResponse, CaptureStartRequest, CaptureStartResponse, CommandRequest, PublishResult
+from .models import (
+    BleScanResponse,
+    CalibrationApplyRequest,
+    CalibrationApplyResponse,
+    CalibrationPreviewRequest,
+    CalibrationPreviewResponse,
+    CaptureStartRequest,
+    CaptureStartResponse,
+    CommandRequest,
+    PublishResult,
+)
 from .mqtt_client import SdacsMqttClient
 from .state_store import StateStore
 from .room_layout import RoomLayout
@@ -140,6 +150,181 @@ def build_router(
     @router.get("/api/captures/{capture_id}/edge-impulse")
     async def get_capture_edge_impulse(capture_id: str) -> JSONResponse:
         return json_artifact(capture_id, "edge_impulse_result.json")
+
+    @router.get("/api/captures/{capture_id}/calibration")
+    async def get_capture_calibration(capture_id: str) -> JSONResponse:
+        return json_artifact(capture_id, "calibration_result.json")
+
+    @router.post("/api/calibration/preview", response_model=CalibrationPreviewResponse)
+    async def preview_calibration(request: CalibrationPreviewRequest) -> dict[str, Any]:
+        try:
+            return capture_service.calibration_preview(
+                request.capture_id, request.reference_spl_db
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Capture not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get("/api/calibration/latest")
+    async def latest_calibration() -> dict[str, Any]:
+        result = capture_service.latest_calibration_result()
+        if result is None:
+            raise HTTPException(status_code=404, detail="No applied calibration is available")
+        return result
+
+    @router.post("/api/calibration/apply", response_model=CalibrationApplyResponse)
+    async def apply_calibration(request: CalibrationApplyRequest) -> dict[str, Any]:
+        try:
+            preview = capture_service.calibration_preview(
+                request.capture_id, request.reference_spl_db
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Capture not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        expected = list(settings.expected_nodes)
+        by_node = {row["node_id"]: row for row in preview["nodes"]}
+        if not request.allow_partial and preview["status"] != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail="All four nodes require valid 1 kHz calibration data before offsets can be applied.",
+            )
+
+        requested_offsets = request.node_offsets_db or {
+            node_id: row["suggested_offset_db"]
+            for node_id, row in by_node.items()
+            if row["eligible"] and row["suggested_offset_db"] is not None
+        }
+        unknown = sorted(set(requested_offsets) - set(expected))
+        if unknown:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown calibration node IDs: {', '.join(unknown)}"
+            )
+        if not request.allow_partial and set(requested_offsets) != set(expected):
+            raise HTTPException(
+                status_code=400,
+                detail="Offsets for node01 through node04 are required.",
+            )
+        ineligible = sorted(
+            node_id
+            for node_id in requested_offsets
+            if not by_node.get(node_id, {}).get("eligible", False)
+        )
+        if ineligible:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Offsets cannot be applied to nodes that failed calibration checks: "
+                    + ", ".join(ineligible)
+                ),
+            )
+        changed = []
+        for node_id, offset in requested_offsets.items():
+            suggested = by_node[node_id].get("suggested_offset_db")
+            if suggested is None or abs(float(offset) - float(suggested)) > 0.10:
+                changed.append(node_id)
+        if changed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Requested offsets must match the backend calibration preview: "
+                    + ", ".join(sorted(changed))
+                ),
+            )
+
+        pending: dict[str, dict[str, Any]] = {}
+        started = datetime.now(timezone.utc)
+        for node_id in expected:
+            if node_id not in requested_offsets:
+                continue
+            offset = float(requested_offsets[node_id])
+            if not 60.0 <= offset <= 180.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Offset for {node_id} must be from 60 to 180 dB.",
+                )
+            request_id = f"cal_{started.strftime('%H%M%S%f')}_{node_id}"
+            topic = f"sdacs/node/{node_id}/cmd"
+            payload = {
+                "cmd": "set_cal_offset",
+                "request_id": request_id,
+                "cal_offset_db": round(offset, 3),
+            }
+            published = mqtt_client.publish_json(topic, payload)
+            pending[node_id] = {
+                "node_id": node_id,
+                "requested_offset_db": offset,
+                "request_id": request_id,
+                "published": published,
+                "acknowledged": False,
+                "applied": False,
+                "reported_offset_db": None,
+                "reason": None if published else "mqtt_publish_failed",
+            }
+
+        deadline = asyncio.get_running_loop().time() + request.acknowledgement_timeout_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            waiting = False
+            for row in pending.values():
+                if not row["published"] or row["acknowledged"]:
+                    continue
+                response = state_store.get_command_response(row["request_id"])
+                if response is None:
+                    waiting = True
+                    continue
+                row["acknowledged"] = True
+                result = response.result or response.raw_json.get("result")
+                reason = response.reason or response.raw_json.get("reason")
+                reported = response.cal_offset_db
+                if reported is None:
+                    value = response.raw_json.get("cal_offset_db")
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        reported = float(value)
+                row["reported_offset_db"] = reported
+                matches_requested = (
+                    reported is not None
+                    and abs(float(reported) - float(row["requested_offset_db"])) <= 0.05
+                )
+                row["applied"] = result == "ok" and matches_requested
+                if result != "ok":
+                    row["reason"] = reason or "rejected"
+                elif not matches_requested:
+                    row["reason"] = "reported_offset_mismatch"
+                else:
+                    row["reason"] = reason
+            if not waiting:
+                break
+            await _sleep(0.1)
+
+        for row in pending.values():
+            if row["published"] and not row["acknowledged"]:
+                row["reason"] = "acknowledgement_timeout"
+
+        applied_count = sum(1 for row in pending.values() if row["applied"])
+        if applied_count == len(pending) and len(pending) == len(expected):
+            status = "complete"
+        elif applied_count:
+            status = "partial"
+        else:
+            status = "failed"
+        warnings = []
+        if status != "complete":
+            warnings.append(
+                f"Calibration was confirmed on {applied_count} of {len(pending)} requested nodes."
+            )
+        result = {
+            "capture_id": request.capture_id,
+            "reference_spl_db": request.reference_spl_db,
+            "status": status,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+            "nodes": list(pending.values()),
+            "warnings": warnings,
+            "preview": preview,
+        }
+        capture_service.record_calibration_result(request.capture_id, result)
+        return result
 
     @router.get("/api/captures/{capture_id}/plot", response_class=FileResponse)
     async def get_capture_plot(capture_id: str) -> FileResponse:

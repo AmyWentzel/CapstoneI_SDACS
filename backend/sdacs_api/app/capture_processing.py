@@ -149,6 +149,7 @@ def acoustic_analysis(
         rms_values = finite_values("rms")
         dbfs_values = finite_values("dbfs")
         spl_values = finite_values("db_spl")
+        cal_offset_values = finite_values("cal_offset_db")
         peak_values = [value for value in finite_values("f_peak_hz") if value > 0]
         band_energies = {"low": 0.0, "mid": 0.0, "high": 0.0}
         usable_band_rows = 0
@@ -224,6 +225,8 @@ def acoustic_analysis(
             "mean_rms": mean(rms_values),
             "mean_dbfs": mean(dbfs_values),
             "mean_estimated_spl_db": mean(spl_values),
+            "cal_offset_db": median(cal_offset_values) if cal_offset_values else None,
+            "current_offset_db": median(cal_offset_values) if cal_offset_values else None,
             "peak_frequency_hz": median(peak_values) if peak_values else None,
             "representative_peak_frequency_hz": median(peak_values) if peak_values else None,
             "mean_fft_low_ratio": band_ratios["low"],

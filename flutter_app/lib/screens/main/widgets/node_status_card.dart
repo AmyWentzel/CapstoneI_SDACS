@@ -149,6 +149,14 @@ class _NodeStatusCardState extends State<NodeStatusCard> {
                           ),
                         ),
                         _DetailMetric(
+                          label: 'Calibration offset',
+                          value: NodeTelemetryFormat.number(
+                            telemetry.calOffsetDb,
+                            1,
+                            suffix: ' dB',
+                          ),
+                        ),
+                        _DetailMetric(
                           label: 'Temperature',
                           value: NodeTelemetryFormat.number(
                             telemetry.temperatureC,

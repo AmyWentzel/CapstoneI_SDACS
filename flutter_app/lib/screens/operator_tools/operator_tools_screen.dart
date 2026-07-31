@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_routes.dart';
 import '../../config/backend_config.dart';
-import '../../models/capture_node_metric.dart';
 import '../../models/capture_session.dart';
+import '../../models/spl_calibration.dart';
 import '../../services/calibration_audio_service.dart';
 import '../../services/calibration_capture_coordinator.dart';
 import '../../services/sdacs_api_service.dart';
@@ -18,11 +18,13 @@ class OperatorToolsScreen extends StatefulWidget {
     this.audioService,
     this.operationController,
     this.coordinator,
+    this.apiService,
   });
 
   final CalibrationAudio? audioService;
   final OperationController? operationController;
   final CalibrationCaptureCoordinator? coordinator;
+  final SdacsApiService? apiService;
 
   @override
   State<OperatorToolsScreen> createState() => _OperatorToolsScreenState();
@@ -37,6 +39,7 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
   late final OperationController _operations;
   late final bool _ownsAudio;
   CalibrationCaptureCoordinator? _coordinator;
+  SdacsApiService? _api;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<CalibrationPlaybackState>? _stateSubscription;
@@ -44,8 +47,14 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
   Duration _previewPosition = Duration.zero;
   Duration _previewDuration = signalDuration;
   bool _starting = false;
-  bool _offsetsCalculated = false;
+  bool _calculatingOffsets = false;
+  bool _applyingOffsets = false;
+  bool _verificationPending = false;
+  bool _lastPreviewWasVerification = false;
   String? _referenceError;
+  String? _lastPreviewedCaptureId;
+  SplCalibrationPreview? _calibrationPreview;
+  SplCalibrationApplyResult? _applyResult;
 
   bool get _isPreview => _operations.operation == ActiveOperation.audioPreview;
   bool get _isCalibrationCapture => OperationAccess(
@@ -81,12 +90,38 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
   }
 
   void _operationChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final result = _latestOneKhzResult;
+    setState(() {
+      if (result != null &&
+          _calibrationPreview != null &&
+          _calibrationPreview!.captureId != result.captureId) {
+        _calibrationPreview = null;
+        _applyResult = null;
+      }
+    });
+    final reference = _parseReference(showError: false);
+    if (_operations.operation == ActiveOperation.idle &&
+        result != null &&
+        result.captureId != _lastPreviewedCaptureId &&
+        reference != null &&
+        !_calculatingOffsets) {
+      unawaited(_calculateOffsets());
+    }
   }
+
+  CaptureCombinedResult? get _latestOneKhzResult =>
+      _operations.latestCalibrationSignal == CalibrationSignal.oneKhzTone
+      ? _operations.latestCalibrationResult
+      : null;
+
+  SdacsApiService _apiService() => _api ??=
+      widget.apiService ??
+      SdacsApiService(config: BackendConfigScope.configOf(context));
 
   CalibrationCaptureCoordinator _captureCoordinator() {
     return _coordinator ??= CalibrationCaptureCoordinator(
-      api: SdacsApiService(config: BackendConfigScope.configOf(context)),
+      api: _apiService(),
       audio: _audio,
       operations: _operations,
     );
@@ -201,23 +236,167 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
     }
   }
 
-  void _calculateOffsets() {
+  double? _parseReference({bool showError = true}) {
     final reference = double.tryParse(_referenceSplController.text.trim());
-    if (reference == null ||
-        !reference.isFinite ||
-        reference < minimumReferenceSpl ||
-        reference > maximumReferenceSpl) {
+    final valid = reference != null &&
+        reference.isFinite &&
+        reference >= minimumReferenceSpl &&
+        reference <= maximumReferenceSpl;
+    if (!valid && showError && mounted) {
       setState(() {
         _referenceError =
             'Enter a finite reference SPL from $minimumReferenceSpl to $maximumReferenceSpl dB.';
-        _offsetsCalculated = false;
       });
-      return;
     }
+    return valid ? reference : null;
+  }
+
+  Future<void> _calculateOffsets() async {
+    if (_calculatingOffsets || _applyingOffsets) return;
+    final reference = _parseReference();
+    final captureId = _latestOneKhzResult?.captureId;
+    if (reference == null || captureId == null) return;
+    final verificationResult = _verificationPending;
     setState(() {
       _referenceError = null;
-      _offsetsCalculated = true;
+      _calculatingOffsets = true;
+      _applyResult = null;
     });
+    try {
+      final preview = await _apiService().previewSplCalibration(
+        captureId: captureId,
+        referenceSplDb: reference,
+      );
+      if (!mounted) return;
+      setState(() {
+        _calibrationPreview = preview;
+        _lastPreviewedCaptureId = captureId;
+        _lastPreviewWasVerification = verificationResult;
+        _verificationPending = false;
+      });
+    } on SdacsApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to calculate offsets: ${error.message}')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to calculate offsets: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _calculatingOffsets = false);
+    }
+  }
+
+  Future<void> _applyOffsets() async {
+    final preview = _calibrationPreview;
+    if (_applyingOffsets || _calculatingOffsets || preview == null || !preview.canApply) {
+      return;
+    }
+    final offsets = <String, double>{
+      for (final node in preview.nodes)
+        if (node.suggestedOffsetDb != null) node.nodeId: node.suggestedOffsetDb!,
+    };
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Apply SPL calibration offsets?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Each node will save the new additive dB SPL offset in persistent firmware storage.',
+            ),
+            const SizedBox(height: 12),
+            ...preview.nodes.map(
+              (node) => Text(
+                '${node.nodeId}: ${node.suggestedOffsetDb?.toStringAsFixed(2)} dB',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Apply to Four Nodes'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _applyingOffsets = true;
+      _applyResult = null;
+    });
+    try {
+      final result = await _apiService().applySplCalibration(
+        captureId: preview.captureId,
+        referenceSplDb: preview.referenceSplDb,
+        nodeOffsetsDb: offsets,
+      );
+      if (!mounted) return;
+      setState(() => _applyResult = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.complete
+                ? 'Calibration offsets were acknowledged and saved by all four nodes.'
+                : 'Calibration apply completed with status: ${result.status}.',
+          ),
+        ),
+      );
+    } on SdacsApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to apply offsets: ${error.message}')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to apply offsets: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _applyingOffsets = false);
+    }
+  }
+
+  Future<void> _runVerification() async {
+    if (_starting || _isBlocking || _applyResult?.complete != true) return;
+    setState(() {
+      _starting = true;
+      _verificationPending = true;
+    });
+    try {
+      final session = await _captureCoordinator().start(
+        CalibrationSignal.oneKhzTone,
+        verification: true,
+      );
+      if (session != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Verification capture started: ${session.captureId}. The result will be checked against ±${_calibrationPreview?.toleranceDb.toStringAsFixed(1) ?? '1.0'} dB.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _verificationPending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
   }
 
   @override
@@ -333,7 +512,7 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
                                       signal: CalibrationSignal.oneKhzTone,
                                       title: '1 kHz Reference Tone',
                                       description:
-                                          'Use a reference sound-level meter during this capture.',
+                                          'Co-locate all four node microphones beside a reference sound-level meter during this capture.',
                                       runLabel: 'Run 1 kHz Calibration Capture',
                                       activeSignal: activeSignal,
                                       isPreview: _isPreview,
@@ -402,25 +581,29 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
                         ),
                         const SizedBox(height: 18),
                         _SplCalibrationSection(
-                          result:
-                              _operations.latestCalibrationSignal ==
-                                  CalibrationSignal.oneKhzTone
-                              ? _operations.latestCalibrationResult
-                              : null,
+                          captureId: _latestOneKhzResult?.captureId,
+                          preview: _calibrationPreview,
+                          applyResult: _applyResult,
                           referenceController: _referenceSplController,
                           referenceError: _referenceError,
-                          offsetsCalculated: _offsetsCalculated,
+                          calculating: _calculatingOffsets,
+                          applying: _applyingOffsets,
+                          verificationPending: _verificationPending,
+                          verificationResult: _lastPreviewWasVerification,
+                          isBlocked: _isBlocking,
                           onCalculate: _calculateOffsets,
+                          onApply: _applyOffsets,
+                          onVerify: _runVerification,
                         ),
                         const SizedBox(height: 18),
                         _ToolSection(
-                          title: 'Advanced Calibration',
+                          title: 'Manual Diagnostics',
                           icon: Icons.tune,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Text(
-                                'The existing calibration screen is a placeholder; a complete advanced workflow is not configured.',
+                                'The SPL workflow above is backend-authoritative. Open the existing controls only for additional manual sensor diagnostics.',
                               ),
                               const SizedBox(height: 14),
                               OutlinedButton.icon(
@@ -433,7 +616,7 @@ class _OperatorToolsScreenState extends State<OperatorToolsScreen> {
                                       ),
                                 icon: const Icon(Icons.science_outlined),
                                 label: const Text(
-                                  'Open Existing Calibration Controls',
+                                  'Open Manual Calibration Controls',
                                 ),
                               ),
                             ],
@@ -484,131 +667,425 @@ String _signalName(CalibrationSignal signal) => switch (signal) {
   CalibrationSignal.none => 'Calibration Signal',
 };
 
-double? suggestedSplOffset({
-  required double? currentOffsetDb,
-  required double referenceSplDb,
-  required double? measuredSplDb,
-}) {
-  if (currentOffsetDb == null || measuredSplDb == null) return null;
-  return currentOffsetDb + referenceSplDb - measuredSplDb;
-}
-
 class _SplCalibrationSection extends StatelessWidget {
   const _SplCalibrationSection({
-    required this.result,
+    required this.captureId,
+    required this.preview,
+    required this.applyResult,
     required this.referenceController,
     required this.referenceError,
-    required this.offsetsCalculated,
+    required this.calculating,
+    required this.applying,
+    required this.verificationPending,
+    required this.verificationResult,
+    required this.isBlocked,
     required this.onCalculate,
+    required this.onApply,
+    required this.onVerify,
   });
 
-  final CaptureCombinedResult? result;
+  final String? captureId;
+  final SplCalibrationPreview? preview;
+  final SplCalibrationApplyResult? applyResult;
   final TextEditingController referenceController;
   final String? referenceError;
-  final bool offsetsCalculated;
+  final bool calculating;
+  final bool applying;
+  final bool verificationPending;
+  final bool verificationResult;
+  final bool isBlocked;
   final VoidCallback onCalculate;
+  final VoidCallback onApply;
+  final VoidCallback onVerify;
 
   @override
   Widget build(BuildContext context) {
-    final metrics = result?.nodeMetrics ?? const <String, CaptureNodeMetric>{};
-    final reference = double.tryParse(referenceController.text.trim());
+    final colors = Theme.of(context).colorScheme;
     return _ToolSection(
       title: 'SPL Calibration',
       icon: Icons.speed_outlined,
-      child: metrics.isEmpty
+      child: captureId == null
           ? const Text(
               'Run a 1 kHz Calibration Capture to calculate suggested node offsets.',
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'SPL Calibration Result',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                Text(
+                  '1 kHz capture: $captureId',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 6),
+                const Text(
+                  'Enter the reference meter reading measured beside the clustered node microphones. The backend uses the capture median dBFS and validates the dedicated 1 kHz detector before proposing firmware offsets.',
+                ),
+                const SizedBox(height: 14),
                 TextField(
                   key: const Key('reference-spl-input'),
                   controller: referenceController,
+                  enabled: !calculating && !applying && !isBlocked,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
                   decoration: InputDecoration(
-                    labelText: 'Reference SPL measured at the node (dB SPL)',
+                    labelText: 'Reference sound-level meter reading (dB SPL)',
+                    helperText: 'Accepted range: 30–140 dB SPL',
                     errorText: referenceError,
                   ),
                 ),
                 const SizedBox(height: 12),
-                OutlinedButton(
+                OutlinedButton.icon(
                   key: const Key('calculate-offsets'),
-                  onPressed: onCalculate,
-                  child: const Text('Calculate Suggested Offsets'),
+                  onPressed: calculating || applying || isBlocked
+                      ? null
+                      : onCalculate,
+                  icon: calculating
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.calculate_outlined),
+                  label: Text(
+                    calculating
+                        ? 'Calculating…'
+                        : preview == null
+                        ? 'Calculate Suggested Offsets'
+                        : 'Refresh Suggested Offsets',
+                  ),
                 ),
-                if (offsetsCalculated && reference != null) ...[
+                if (preview != null) ...[
                   const SizedBox(height: 16),
-                  ...metrics.entries.map(
-                    (entry) => _OffsetRow(
-                      nodeId: entry.key,
-                      measured: entry.value.estimatedSplDb,
-                      currentOffset: entry.value.currentOffsetDb,
-                      reference: reference,
+                  _CalibrationStatusBanner(
+                    preview: preview!,
+                    verificationPending: verificationPending,
+                    verificationResult: verificationResult,
+                  ),
+                  const SizedBox(height: 12),
+                  ...preview!.nodes.map(
+                    (node) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _CalibrationNodeCard(
+                        node: node,
+                        applyResult: _applyForNode(applyResult, node.nodeId),
+                      ),
                     ),
                   ),
+                  if (preview!.warnings.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    ...preview!.warnings.map(
+                      (warning) => Text(
+                        '• $warning',
+                        style: TextStyle(color: colors.tertiary),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  FilledButton.icon(
+                    key: const Key('apply-offsets'),
+                    onPressed:
+                        preview!.canApply && !applying && !calculating && !isBlocked
+                        ? onApply
+                        : null,
+                    icon: applying
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_outlined),
+                    label: Text(
+                      applying ? 'Applying to Nodes…' : 'Apply Confirmed Offsets',
+                    ),
+                  ),
+                  if (!preview!.canApply) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Offsets remain locked until all four nodes pass sample count, 1 kHz tone, clipping, and firmware-range checks.',
+                      style: TextStyle(color: colors.tertiary),
+                    ),
+                  ],
+                  if (applyResult != null) ...[
+                    const SizedBox(height: 14),
+                    _CalibrationApplyBanner(result: applyResult!),
+                  ],
+                  if (applyResult?.complete == true) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      key: const Key('run-calibration-verification'),
+                      onPressed: isBlocked ? null : onVerify,
+                      icon: const Icon(Icons.verified_outlined),
+                      label: const Text('Run 1 kHz Verification Capture'),
+                    ),
+                  ],
                 ],
-                const SizedBox(height: 14),
-                const Text(
-                  'Applying SPL offsets requires backend or firmware support.',
-                  style: TextStyle(color: Colors.amberAccent),
-                ),
-                const SizedBox(height: 8),
-                const FilledButton(
-                  onPressed: null,
-                  child: Text('Apply Confirmed Offsets'),
-                ),
               ],
             ),
     );
   }
+
+  static SplCalibrationNodeApplyResult? _applyForNode(
+    SplCalibrationApplyResult? result,
+    String nodeId,
+  ) {
+    if (result == null) return null;
+    for (final row in result.nodes) {
+      if (row.nodeId == nodeId) return row;
+    }
+    return null;
+  }
 }
 
-class _OffsetRow extends StatelessWidget {
-  const _OffsetRow({
-    required this.nodeId,
-    required this.measured,
-    required this.currentOffset,
-    required this.reference,
+class _CalibrationStatusBanner extends StatelessWidget {
+  const _CalibrationStatusBanner({
+    required this.preview,
+    required this.verificationPending,
+    required this.verificationResult,
   });
 
-  final String nodeId;
-  final double? measured;
-  final double? currentOffset;
-  final double reference;
+  final SplCalibrationPreview preview;
+  final bool verificationPending;
+  final bool verificationResult;
 
   @override
   Widget build(BuildContext context) {
-    final suggested = suggestedSplOffset(
-      currentOffsetDb: currentOffset,
-      referenceSplDb: reference,
-      measuredSplDb: measured,
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Wrap(
-        spacing: 16,
-        runSpacing: 4,
+    final colors = Theme.of(context).colorScheme;
+    final verificationPassed = verificationResult && preview.allWithinTolerance;
+    final verificationFailed =
+        verificationResult && preview.status == 'ready' && !preview.allWithinTolerance;
+    final icon = verificationPassed
+        ? Icons.verified
+        : verificationFailed
+        ? Icons.error_outline
+        : preview.status == 'ready'
+        ? Icons.check_circle_outline
+        : preview.status == 'partial'
+        ? Icons.warning_amber_rounded
+        : Icons.error_outline;
+    final color = verificationPassed
+        ? Colors.greenAccent
+        : verificationFailed
+        ? colors.error
+        : preview.status == 'ready'
+        ? colors.primary
+        : preview.status == 'partial'
+        ? colors.tertiary
+        : colors.error;
+    final text = verificationPending
+        ? 'Verification capture is processing.'
+        : verificationPassed
+        ? 'Verification passed: all four nodes are within ±${preview.toleranceDb.toStringAsFixed(1)} dB.'
+        : verificationFailed
+        ? 'Verification failed: at least one node is outside ±${preview.toleranceDb.toStringAsFixed(1)} dB.'
+        : preview.status == 'ready'
+        ? 'Ready to apply: all four nodes passed calibration data checks.'
+        : preview.status == 'partial'
+        ? 'Partial result: correct the flagged node data and repeat the capture.'
+        : 'Invalid calibration capture: offsets cannot be applied.';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(nodeId, style: const TextStyle(fontWeight: FontWeight.w800)),
-          Text(
-            'Measured: ${measured?.toStringAsFixed(1) ?? 'Unavailable'} dB SPL',
+          Icon(icon, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
-          Text(
-            'Current offset: ${currentOffset?.toStringAsFixed(1) ?? 'Unavailable'}',
-          ),
-          Text(
-            'Suggested offset: ${suggested?.toStringAsFixed(1) ?? 'Unavailable'}',
-          ),
-          const Text('Apply status: Backend setter unavailable'),
         ],
+      ),
+    );
+  }
+}
+
+class _CalibrationNodeCard extends StatelessWidget {
+  const _CalibrationNodeCard({required this.node, required this.applyResult});
+
+  final SplCalibrationNodePreview node;
+  final SplCalibrationNodeApplyResult? applyResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final stateColor = node.eligible ? colors.primary : colors.error;
+    final tonePercent = node.toneDetectionRate == null
+        ? 'Unavailable'
+        : '${(node.toneDetectionRate! * 100).toStringAsFixed(0)}% '
+              '(${node.toneDetectedCount}/${node.toneSampleCount})';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: MainScreen.background.withValues(alpha: 0.34),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: stateColor.withValues(alpha: 0.30)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  node.nodeId,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              Icon(
+                node.eligible ? Icons.check_circle : Icons.cancel_outlined,
+                color: stateColor,
+                size: 19,
+              ),
+              const SizedBox(width: 5),
+              Text(node.eligible ? 'Eligible' : 'Blocked'),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 18,
+            runSpacing: 8,
+            children: [
+              _CalibrationMetric(
+                label: 'Samples',
+                value: '${node.sampleCount}',
+              ),
+              _CalibrationMetric(
+                label: 'Measured dBFS',
+                value: _db(node.measuredDbfs, 'dBFS'),
+              ),
+              _CalibrationMetric(
+                label: 'Measured SPL',
+                value: _db(node.measuredSplDb, 'dB SPL'),
+              ),
+              _CalibrationMetric(
+                label: 'Current offset',
+                value: _db(node.currentOffsetDb, 'dB'),
+              ),
+              _CalibrationMetric(
+                label: 'Suggested offset',
+                value: _db(node.suggestedOffsetDb, 'dB'),
+              ),
+              _CalibrationMetric(
+                label: 'Adjustment',
+                value: _signedDb(node.adjustmentDb),
+              ),
+              _CalibrationMetric(
+                label: '1 kHz peak',
+                value: node.representativeFrequencyHz == null
+                    ? 'Unavailable'
+                    : '${node.representativeFrequencyHz!.toStringAsFixed(1)} Hz',
+              ),
+              _CalibrationMetric(
+                label: 'Tone detected',
+                value: tonePercent,
+              ),
+              _CalibrationMetric(
+                label: 'Meter error',
+                value: _signedDb(node.measurementErrorDb),
+              ),
+              _CalibrationMetric(
+                label: 'Tolerance',
+                value: node.withinTolerance == null
+                    ? 'Unavailable'
+                    : node.withinTolerance!
+                    ? 'Pass'
+                    : 'Outside tolerance',
+              ),
+            ],
+          ),
+          if (node.warnings.isNotEmpty) ...[
+            const SizedBox(height: 9),
+            ...node.warnings.map(
+              (warning) => Text(
+                '• $warning',
+                style: TextStyle(color: colors.tertiary),
+              ),
+            ),
+          ],
+          if (applyResult != null) ...[
+            const Divider(height: 20),
+            Text(
+              applyResult!.applied
+                  ? 'Apply status: saved and acknowledged · reported ${applyResult!.reportedOffsetDb?.toStringAsFixed(2) ?? '—'} dB'
+                  : 'Apply status: ${_applyFailureLabel(applyResult!)}',
+              style: TextStyle(
+                color: applyResult!.applied ? Colors.greenAccent : colors.error,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static String _db(double? value, String suffix) => value == null
+      ? 'Unavailable'
+      : '${value.toStringAsFixed(2)} $suffix';
+
+  static String _signedDb(double? value) => value == null
+      ? 'Unavailable'
+      : '${value >= 0 ? '+' : ''}${value.toStringAsFixed(2)} dB';
+
+  static String _applyFailureLabel(SplCalibrationNodeApplyResult row) {
+    if (!row.published) return 'MQTT publish failed';
+    if (!row.acknowledged) return 'firmware acknowledgement timed out';
+    return row.reason?.replaceAll('_', ' ') ?? 'firmware rejected the offset';
+  }
+}
+
+class _CalibrationMetric extends StatelessWidget {
+  const _CalibrationMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 155,
+    child: Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: '$label: ',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          TextSpan(text: value),
+        ],
+      ),
+    ),
+  );
+}
+
+class _CalibrationApplyBanner extends StatelessWidget {
+  const _CalibrationApplyBanner({required this.result});
+
+  final SplCalibrationApplyResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final color = result.complete ? Colors.greenAccent : colors.error;
+    final applied = result.nodes.where((node) => node.applied).length;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        result.complete
+            ? 'Offsets saved by all four nodes. Run a new verification capture before treating SPL as calibrated.'
+            : 'Apply result: $applied of ${result.nodes.length} nodes confirmed. Review each node status before retrying.',
+        style: const TextStyle(fontWeight: FontWeight.w700),
       ),
     );
   }

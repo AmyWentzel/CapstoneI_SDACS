@@ -13,12 +13,24 @@ class TelemetryUpdate(BaseModel):
     raw_timestamp: str | int | float | None = None
     status: str | None = None
     capture_state: str | None = None
+    mode: str | None = None
+    state: str | None = None
+    cmd: str | None = None
+    result: str | None = None
+    reason: str | None = None
     fw_version: str | None = None
     seq: int | None = None
     n: int | None = None
     rms: float | None = None
     dbfs: float | None = None
     db_spl: float | None = None
+    peak_db_spl: float | None = None
+    cal_offset_db: float | None = None
+    tone_1khz_peak_hz: float | None = None
+    tone_1khz_ratio: float | None = None
+    tone_1khz_local_ratio: float | None = None
+    tone_1khz_contrast_db: float | None = None
+    tone_1khz_detected: bool | None = None
     f_peak_hz: float | None = None
     f_peak_acoustic_hz: float | None = None
     low_rumble_ratio: float | None = None
@@ -177,6 +189,65 @@ class BleScanResponse(BaseModel):
     scan_duration_seconds: float
     detected_count: int
     nodes: list[BleNodeScanResult]
+
+
+class CalibrationPreviewRequest(BaseModel):
+    capture_id: str
+    reference_spl_db: float = Field(ge=30.0, le=140.0)
+
+
+class CalibrationApplyRequest(CalibrationPreviewRequest):
+    node_offsets_db: dict[str, float] | None = None
+    allow_partial: bool = False
+    acknowledgement_timeout_seconds: float = Field(default=5.0, ge=0.5, le=15.0)
+
+
+class CalibrationNodePreview(BaseModel):
+    node_id: str
+    sample_count: int
+    measured_dbfs: float | None = None
+    measured_spl_db: float | None = None
+    current_offset_db: float | None = None
+    suggested_offset_db: float | None = None
+    adjustment_db: float | None = None
+    measurement_error_db: float | None = None
+    representative_frequency_hz: float | None = None
+    tone_detected_count: int = 0
+    tone_sample_count: int = 0
+    tone_detection_rate: float | None = None
+    eligible: bool
+    within_tolerance: bool | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalibrationPreviewResponse(BaseModel):
+    capture_id: str
+    reference_spl_db: float
+    status: Literal["ready", "partial", "invalid"]
+    tolerance_db: float
+    generated_at: str
+    nodes: list[CalibrationNodePreview]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalibrationNodeApplyResult(BaseModel):
+    node_id: str
+    requested_offset_db: float
+    request_id: str
+    published: bool
+    acknowledged: bool
+    applied: bool
+    reported_offset_db: float | None = None
+    reason: str | None = None
+
+
+class CalibrationApplyResponse(BaseModel):
+    capture_id: str
+    reference_spl_db: float
+    status: Literal["complete", "partial", "failed"]
+    applied_at: str
+    nodes: list[CalibrationNodeApplyResult]
+    warnings: list[str] = Field(default_factory=list)
 
 
 def utc_now_iso() -> str:

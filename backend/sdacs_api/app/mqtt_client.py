@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -5,7 +7,10 @@ from datetime import datetime, timezone
 from typing import Any
 from collections.abc import Callable
 
-import paho.mqtt.client as mqtt
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:  # Test/offline environments can still exercise pure backend logic.
+    mqtt = None
 from pydantic import ValidationError
 
 from .config import Settings
@@ -81,25 +86,37 @@ class SdacsMqttClient:
         self.telemetry_observer = telemetry_observer
         self.connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=settings.mqtt_client_id,
-        )
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self._on_message
+        self._client = None
+        if mqtt is not None:
+            self._client = mqtt.Client(
+                callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+                client_id=settings.mqtt_client_id,
+            )
+            self._client.on_connect = self._on_connect
+            self._client.on_disconnect = self._on_disconnect
+            self._client.on_message = self._on_message
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._client is None:
+            raise RuntimeError(
+                "paho-mqtt is required to start the SDACS MQTT client. "
+                "Install backend requirements before deployment."
+            )
         self._loop = loop
         LOG.info("Connecting to MQTT broker %s:%s", self.settings.mqtt_host, self.settings.mqtt_port)
         self._client.connect_async(self.settings.mqtt_host, self.settings.mqtt_port, keepalive=60)
         self._client.loop_start()
 
     def stop(self) -> None:
+        if self._client is None:
+            return
         self._client.loop_stop()
         self._client.disconnect()
 
     def publish_json(self, topic: str, payload: dict[str, Any]) -> bool:
+        if self._client is None or mqtt is None:
+            LOG.error("MQTT publish unavailable because paho-mqtt is not installed")
+            return False
         result = self._client.publish(topic, json.dumps(payload), qos=1)
         accepted = result.rc == mqtt.MQTT_ERR_SUCCESS
         if not accepted:

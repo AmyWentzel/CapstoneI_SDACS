@@ -8,6 +8,7 @@ import '../models/ble_scan_result.dart';
 import '../models/capture_session.dart';
 import '../models/node_telemetry.dart';
 import '../models/room_layout.dart';
+import '../models/spl_calibration.dart';
 
 class SdacsApiException implements Exception {
   const SdacsApiException(this.message);
@@ -202,6 +203,75 @@ class SdacsApiService {
       );
     }
     return session;
+  }
+
+  Future<SplCalibrationPreview> previewSplCalibration({
+    required String captureId,
+    required double referenceSplDb,
+  }) async {
+    captureId = requireCaptureId(captureId);
+    final json = await _postJson('/api/calibration/preview', {
+      'capture_id': captureId,
+      'reference_spl_db': referenceSplDb,
+    });
+    if (json is! Map<String, dynamic>) {
+      throw const SdacsApiException(
+        'Backend returned invalid SPL calibration preview data.',
+      );
+    }
+    final preview = SplCalibrationPreview.fromJson(json);
+    if (preview.captureId != captureId) {
+      throw const SdacsApiException(
+        'Backend returned a preview for a different capture.',
+      );
+    }
+    return preview;
+  }
+
+  Future<SplCalibrationApplyResult> applySplCalibration({
+    required String captureId,
+    required double referenceSplDb,
+    Map<String, double>? nodeOffsetsDb,
+    bool allowPartial = false,
+  }) async {
+    captureId = requireCaptureId(captureId);
+    final json = await _postJson(
+      '/api/calibration/apply',
+      {
+        'capture_id': captureId,
+        'reference_spl_db': referenceSplDb,
+        'node_offsets_db': ?nodeOffsetsDb,
+        'allow_partial': allowPartial,
+      },
+      timeout: const Duration(seconds: 20),
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const SdacsApiException(
+        'Backend returned invalid SPL calibration apply data.',
+      );
+    }
+    final result = SplCalibrationApplyResult.fromJson(json);
+    if (result.captureId != captureId) {
+      throw const SdacsApiException(
+        'Backend returned an apply result for a different capture.',
+      );
+    }
+    return result;
+  }
+
+  Future<SplCalibrationApplyResult?> getLatestSplCalibration() async {
+    try {
+      final json = await _getJson('/api/calibration/latest');
+      if (json is! Map<String, dynamic>) {
+        throw const SdacsApiException(
+          'Backend returned invalid latest calibration data.',
+        );
+      }
+      return SplCalibrationApplyResult.fromJson(json);
+    } on SdacsApiException catch (error) {
+      if (error.message.contains('HTTP 404')) return null;
+      rethrow;
+    }
   }
 
   Future<CaptureCombinedResult?> getCaptureResult(String captureId) async {

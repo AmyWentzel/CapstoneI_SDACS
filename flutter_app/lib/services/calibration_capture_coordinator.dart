@@ -36,7 +36,10 @@ class CalibrationCaptureCoordinator {
   DateTime? _effectiveStart;
   CalibrationSignal _signal = CalibrationSignal.none;
 
-  Future<CaptureSession?> start(CalibrationSignal signal) async {
+  Future<CaptureSession?> start(
+    CalibrationSignal signal, {
+    bool verification = false,
+  }) async {
     if (!operations.begin(
       ActiveOperation.calibrationAudioPreparing,
       signal: signal,
@@ -85,7 +88,9 @@ class CalibrationCaptureCoordinator {
         delayMs: startDelayMs,
         recordSeconds: captureDuration.inSeconds,
         validationLabel: signal == CalibrationSignal.oneKhzTone
-            ? 'calibration_1khz'
+            ? verification
+                  ? 'spl_calibration_verification'
+                  : 'calibration_1khz'
             : 'calibration_sweep',
         requestId:
             'capture_${now().toUtc().toIso8601String().replaceAll(RegExp(r'[-:.]'), '')}',
