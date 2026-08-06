@@ -160,7 +160,18 @@ void main() {
             'quiet_room_white_noise': 0.11,
             'noisy': 0.08,
           },
-          'model': {'project_name': 'SDACS_V3', 'deploy_version': 1},
+          'model': {'project_name': 'SDACS_V4', 'deploy_version': 1},
+          'window_count': 59,
+          'successful_window_count': 59,
+          'window_label_counts': {
+            'speech': 45,
+            'noisy': 14,
+            'quiet_room_white_noise': 0,
+          },
+          'fusion': {
+            'method': 'arithmetic_mean_of_window_probabilities',
+            'successful_window_count': 59,
+          },
           'warnings': <String>[],
         },
       );
@@ -174,7 +185,18 @@ void main() {
       expect(find.text('81% confidence'), findsOneWidget);
       expect(find.text('Quiet Room / White Noise'), findsOneWidget);
       expect(find.text('Noisy'), findsOneWidget);
-      expect(find.text('Model: SDACS_V3 v1'), findsOneWidget);
+      expect(find.text('Model: SDACS_V4 v1'), findsOneWidget);
+      expect(
+        find.text('Evidence: 59 synchronized four-node windows'),
+        findsOneWidget,
+      );
+      expect(find.text('Speech: 45 windows'), findsOneWidget);
+      expect(find.text('Noisy: 14 windows'), findsOneWidget);
+      expect(find.text('Speech activity was detected.'), findsOneWidget);
+      expect(
+        find.textContaining('Inspect the area represented by node04 first'),
+        findsOneWidget,
+      );
     },
   );
 
@@ -204,6 +226,7 @@ void main() {
 
     expect(find.text('Uncertain'), findsOneWidget);
     expect(find.text('Highest candidate: Speech — 48%'), findsOneWidget);
+    expect(find.text('Treat this capture as uncertain.'), findsOneWidget);
   });
 
   testWidgets('window analysis does not fabricate a capture classification', (

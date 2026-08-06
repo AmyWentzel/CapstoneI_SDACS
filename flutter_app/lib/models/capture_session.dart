@@ -201,6 +201,7 @@ class EdgeImpulseResult {
     required this.status,
     required this.scores,
     required this.warnings,
+    required this.windowLabelCounts,
     this.predictedLabel,
     this.displayLabel,
     this.confidence,
@@ -209,6 +210,9 @@ class EdgeImpulseResult {
     this.modelName,
     this.modelVersion,
     this.inferenceTimeMs,
+    this.windowCount,
+    this.successfulWindowCount,
+    this.fusionMethod,
     this.error,
   });
 
@@ -222,6 +226,10 @@ class EdgeImpulseResult {
   final String? modelName;
   final String? modelVersion;
   final double? inferenceTimeMs;
+  final int? windowCount;
+  final int? successfulWindowCount;
+  final String? fusionMethod;
+  final Map<String, int> windowLabelCounts;
   final List<String> warnings;
   final String? error;
 
@@ -255,6 +263,19 @@ class EdgeImpulseResult {
             (key, value) => MapEntry('$key', value),
           )
         : const <String, dynamic>{};
+    final fusion = json['fusion'] is Map
+        ? (json['fusion'] as Map).map((key, value) => MapEntry('$key', value))
+        : const <String, dynamic>{};
+    final counts = <String, int>{};
+    final rawCounts =
+        json['window_label_counts'] ?? fusion['window_label_counts'];
+    if (rawCounts is Map) {
+      for (final entry in rawCounts.entries) {
+        if (entry.value is num) {
+          counts['${entry.key}'] = (entry.value as num).toInt();
+        }
+      }
+    }
     return EdgeImpulseResult(
       status: json['status']?.toString() ?? 'unavailable',
       predictedLabel:
@@ -272,6 +293,12 @@ class EdgeImpulseResult {
       inferenceTimeMs:
           (timing['total'] as num?)?.toDouble() ??
           (timing['classification'] as num?)?.toDouble(),
+      windowCount: (json['window_count'] as num?)?.toInt(),
+      successfulWindowCount:
+          (json['successful_window_count'] as num?)?.toInt() ??
+          (fusion['successful_window_count'] as num?)?.toInt(),
+      fusionMethod: fusion['method']?.toString(),
+      windowLabelCounts: Map.unmodifiable(counts),
       warnings: (json['warnings'] as List? ?? const [])
           .map((value) => '$value')
           .toList(),

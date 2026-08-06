@@ -207,6 +207,8 @@ class _GraphsScreenState extends State<GraphsScreen> {
                     onRetry: () => setState(() => _plotVersion++),
                   ),
                 const SizedBox(height: 12),
+                _Recommendation(result: result),
+                const SizedBox(height: 12),
                 _RoomSummary(acoustic: acoustic),
                 const SizedBox(height: 12),
                 _NodeResults(acoustic: acoustic),
@@ -214,8 +216,6 @@ class _GraphsScreenState extends State<GraphsScreen> {
                   const SizedBox(height: 12),
                   _Warnings(warnings: _warnings(result)),
                 ],
-                const SizedBox(height: 12),
-                _Recommendation(result: result),
               ],
             ],
           ],
@@ -329,11 +329,35 @@ class _AiClassificationCard extends StatelessWidget {
                 ],
               ),
             ),
-        if (result.modelName != null)
+        if (result.successfulWindowCount != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Evidence: ${result.successfulWindowCount} synchronized four-node windows',
+          ),
+        ],
+        if (result.windowLabelCounts.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final key in const [
+                'speech',
+                'quiet_room_white_noise',
+                'noisy',
+              ])
+                if (result.windowLabelCounts[key] case final count?)
+                  Chip(label: Text('${labels[key]}: $count windows')),
+            ],
+          ),
+        ],
+        if (result.modelName != null) ...[
+          const SizedBox(height: 4),
           Text(
             'Model: ${result.modelName}'
             '${result.modelVersion == null ? '' : ' v${result.modelVersion}'}',
           ),
+        ],
       ],
     );
   }
@@ -776,27 +800,263 @@ class _Recommendation extends StatelessWidget {
   const _Recommendation({required this.result});
   final CaptureCombinedResult result;
 
+  static const _labels = {
+    'speech': 'Speech',
+    'quiet_room_white_noise': 'Quiet Room / White Noise',
+    'noisy': 'Noisy',
+  };
+
   @override
   Widget build(BuildContext context) {
     final acoustic = result.acousticAnalysis;
     if (!acoustic.isSuccessful) return const SizedBox.shrink();
-    final summary = result.recommendation['summary']?.toString();
+    final plan = _buildPlan(result);
+    final backendSummary = result.recommendation['summary']?.toString().trim();
+
     return _Section(
-      title: 'Recommendation',
+      title: 'Recommendations & Spatial Interpretation',
       children: [
-        Text(
-          summary?.trim().isNotEmpty == true
-              ? summary!
-              : 'Acoustic analysis is complete.',
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(plan.icon, size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    plan.headline,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(plan.interpretation),
+                ],
+              ),
+            ),
+          ],
         ),
-        if (result.edgeImpulseResult.isUnavailable) ...[
+        const SizedBox(height: 14),
+        Text(
+          'Recommended next action',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 4),
+        Text(plan.primaryAction),
+        if (plan.secondaryActions.isNotEmpty) ...[
           const SizedBox(height: 8),
-          const Text('Agreement: Unavailable'),
-          const Text('Recommendation confidence: Unavailable'),
+          for (final action in plan.secondaryActions)
+            _EvidenceLine(icon: Icons.arrow_right, text: action),
+        ],
+        const Divider(height: 28),
+        Text('Evidence used', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        for (final item in plan.evidence)
+          _EvidenceLine(icon: Icons.check_circle_outline, text: item),
+        const SizedBox(height: 10),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Padding(
+            padding: EdgeInsets.all(12),
+            child: Text(
+              'Spatial-map note: use the acoustic profile above to compare relative node levels and frequency-band energy. The map supports room-level interpretation, but it should not be treated as exact source localization.',
+            ),
+          ),
+        ),
+        if (backendSummary?.isNotEmpty == true &&
+            backendSummary != plan.interpretation) ...[
+          const SizedBox(height: 12),
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            title: const Text('Backend analysis summary'),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(backendSummary!),
+              ),
+            ],
+          ),
         ],
       ],
     );
   }
+
+  static _RecommendationPlan _buildPlan(CaptureCombinedResult result) {
+    final ai = result.edgeImpulseResult;
+    final acoustic = result.acousticAnalysis;
+    final label = ai.predictedLabel;
+    final displayLabel = _labels[label] ?? label ?? 'Unknown';
+    final confidence = ai.confidence;
+    final confidenceText = confidence == null
+        ? 'an unavailable confidence score'
+        : '${(confidence * 100).toStringAsFixed(1)}% confidence';
+    final loudest = acoustic.loudestNodeId;
+    final variation = acoustic.spatialVariationDb;
+    final dominantBand = acoustic.dominantBand;
+    final dominantFrequency = acoustic.dominantFrequencyHz;
+    final evidence = <String>[];
+
+    if (ai.status == 'complete') {
+      evidence.add(
+        '${ai.accepted == true ? 'Accepted' : 'Leading'} AI class: $displayLabel at $confidenceText.',
+      );
+    } else {
+      evidence.add('AI classification status: ${ai.status}.');
+    }
+    if (ai.successfulWindowCount != null) {
+      evidence.add(
+        '${ai.successfulWindowCount} synchronized four-node windows contributed to the capture result.',
+      );
+    }
+    if (ai.windowLabelCounts.isNotEmpty) {
+      final counts = <String>[];
+      for (final key in const ['speech', 'quiet_room_white_noise', 'noisy']) {
+        final count = ai.windowLabelCounts[key];
+        if (count != null) counts.add('${_labels[key]} $count');
+      }
+      if (counts.isNotEmpty) {
+        evidence.add('Window winners: ${counts.join(', ')}.');
+      }
+    }
+    if (loudest != null) {
+      evidence.add(
+        variation != null && variation.isFinite
+            ? '$loudest was the loudest node; spatial variation was ${variation.toStringAsFixed(1)} dB.'
+            : '$loudest was the loudest measured node.',
+      );
+    }
+    if (dominantBand != null || dominantFrequency != null) {
+      final bandText = dominantBand == null ? '' : '$dominantBand-band';
+      final frequencyText = dominantFrequency == null
+          ? ''
+          : _hz(dominantFrequency);
+      evidence.add(
+        'Dominant acoustic evidence: ${[bandText, frequencyText].where((value) => value.isNotEmpty).join(' near ')}.',
+      );
+    }
+
+    if (ai.status != 'complete') {
+      return _RecommendationPlan(
+        icon: Icons.sync_problem,
+        headline: 'Complete a valid four-node AI capture before acting.',
+        interpretation:
+            'The spatial acoustic profile is available, but the classifier did not return a completed room-level result.',
+        primaryAction:
+            'Verify that node01 through node04 all publish the same capture ID and sample indexes, then repeat the capture.',
+        secondaryActions: const [
+          'Keep the room layout and source position unchanged during the repeat test.',
+          'Review the missing-node or excluded-window reason before comparing results.',
+        ],
+        evidence: evidence,
+      );
+    }
+
+    if (ai.accepted != true) {
+      return _RecommendationPlan(
+        icon: Icons.help_outline,
+        headline: 'Treat this capture as uncertain.',
+        interpretation:
+            '$displayLabel was the leading candidate at $confidenceText, below the ${(100 * (ai.threshold ?? 0.6)).round()}% acceptance threshold.',
+        primaryAction:
+            'Repeat a 60-second capture with a sustained, clearly controlled sound source and minimal silent intervals.',
+        secondaryActions: const [
+          'Compare the new probability distribution with this capture rather than lowering the threshold immediately.',
+          'Use the spatial map to check whether one node is dominating or whether the response is distributed across the room.',
+        ],
+        evidence: evidence,
+      );
+    }
+
+    if (label == 'speech') {
+      return _RecommendationPlan(
+        icon: Icons.record_voice_over,
+        headline: 'Speech activity was detected.',
+        interpretation:
+            'The classifier accepted speech at $confidenceText. Use the spatial map to identify the strongest measured region and determine whether speech energy is localized or distributed.',
+        primaryAction: loudest == null
+            ? 'Review the spatial acoustic map and identify the node with the strongest measured level.'
+            : 'Inspect the area represented by $loudest first; it had the strongest measured acoustic level.',
+        secondaryActions: const [
+          'For speech-privacy or room-treatment testing, repeat the capture after changing source position or adding absorption and compare the map.',
+          'Use continuous speech with limited pauses when validating the classifier because silent windows can reduce capture-level confidence.',
+        ],
+        evidence: evidence,
+      );
+    }
+
+    if (label == 'noisy') {
+      return _RecommendationPlan(
+        icon: Icons.volume_up,
+        headline: 'A sustained noisy condition was detected.',
+        interpretation:
+            'The classifier accepted the noisy class at $confidenceText. The spatial profile can be used to prioritize the region with the strongest measured contribution.',
+        primaryAction: loudest == null
+            ? 'Inspect the room for continuous equipment, ventilation, or broadband noise sources and repeat the capture after isolation.'
+            : 'Investigate equipment, ventilation, or other continuous sources nearest the region represented by $loudest.',
+        secondaryActions: const [
+          'Use the dominant band and frequency as supporting evidence when identifying the source.',
+          'Repeat the same capture after mitigation and compare confidence, node levels, and spatial variation.',
+        ],
+        evidence: evidence,
+      );
+    }
+
+    return _RecommendationPlan(
+      icon: Icons.nights_stay_outlined,
+      headline: 'The room was classified as quiet / white noise.',
+      interpretation:
+          'The classifier accepted the quiet-room class at $confidenceText. This capture can serve as a reference condition for later speech and noisy-room comparisons.',
+      primaryAction:
+          'Save this room layout and capture as the baseline, then keep node positions fixed during comparative tests.',
+      secondaryActions: const [
+        'Investigate any node that remains noticeably louder than the others before treating the room as uniformly quiet.',
+        'Repeat the baseline periodically after firmware, gain, calibration, or room-layout changes.',
+      ],
+      evidence: evidence,
+    );
+  }
+}
+
+class _RecommendationPlan {
+  const _RecommendationPlan({
+    required this.icon,
+    required this.headline,
+    required this.interpretation,
+    required this.primaryAction,
+    required this.secondaryActions,
+    required this.evidence,
+  });
+
+  final IconData icon;
+  final String headline;
+  final String interpretation;
+  final String primaryAction;
+  final List<String> secondaryActions;
+  final List<String> evidence;
+}
+
+class _EvidenceLine extends StatelessWidget {
+  const _EvidenceLine({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18),
+        const SizedBox(width: 7),
+        Expanded(child: Text(text)),
+      ],
+    ),
+  );
 }
 
 class _FailureCard extends StatelessWidget {
@@ -911,5 +1171,5 @@ String _hz(double? value) {
 }
 
 String _ratio(double? value) => value == null || !value.isFinite
-    ? 'â€”'
+    ? '—'
     : '${(value * 100).toStringAsFixed(0)}%';
