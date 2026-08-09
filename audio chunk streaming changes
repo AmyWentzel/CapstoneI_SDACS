@@ -1,0 +1,332 @@
+[1mdiff --git a/ESP-IDF/firmware/mic_test/main/mic_test.c b/ESP-IDF/firmware/mic_test/main/mic_test.c[m
+[1mindex d0dab46..95f6fdd 100644[m
+[1m--- a/ESP-IDF/firmware/mic_test/main/mic_test.c[m
+[1m+++ b/ESP-IDF/firmware/mic_test/main/mic_test.c[m
+[36m@@ -21,7 +21,6 @@[m
+ [m
+ #include <stdio.h>[m
+ #include <stdbool.h>[m
+[31m-#include <stdlib.h>[m
+ #include <stdint.h>[m
+ #include <string.h>[m
+ #include <math.h>[m
+[36m@@ -31,9 +30,7 @@[m
+ [m
+ #include "esp_log.h"[m
+ #include "esp_err.h"[m
+[31m-#include "esp_heap_caps.h"[m
+ #include "esp_timer.h"[m
+[31m-#include "nvs_flash.h"[m
+ [m
+ #include "driver/i2s_std.h"[m
+ #include "config_store.h"[m
+[36m@@ -55,13 +52,13 @@[m
+ // One-shot recording duration in seconds.[m
+ #define RECORD_SECONDS 20[m
+ // Audio is stored in fixed-size chunks to avoid one large contiguous allocation.[m
+[31m-#define AUDIO_CHUNK_SAMPLES 4096[m
+[32m+[m[32m#define AUDIO_CHUNK_SAMPLES 2048[m
+ #define CAL_OFFSET_DB  94.0f   // placeholder until calibrated[m
+ [m
+ // Temporary first-boot provisioning values (stored into NVS if wifi is empty).[m
+ #define PROVISION_WIFI_SSID   "195BSMT_2.4GHz"[m
+ #define PROVISION_WIFI_PASS   "LD4BSMT"[m
+[31m-#define PROVISION_MQTT_URI    "mqtt://192.168.1.50"[m
+[32m+[m[32m#define PROVISION_MQTT_URI    "mqtt://192.168.5.38:1883"[m
+ #define PROVISION_MQTT_TOPIC  "sdacs/node/node01/features"[m
+ [m
+ /* ============================================== */[m
+[36m@@ -71,12 +68,17 @@[m [mstatic const char *TAG = "MIC_TEST";[m
+ static i2s_chan_handle_t rx_chan = NULL;[m
+ static int32_t raw[I2S_FRAMES_PER_READ];[m
+ [m
+[31m-// Recorded audio for later FFT/MQTT pipeline.[m
+[31m-static int32_t **g_audio_chunks = NULL;[m
+[31m-static size_t g_audio_chunk_count = 0;[m
+[31m-static size_t g_audio_total_capacity = 0;[m
+[31m-static size_t g_audio_samples_count = 0;[m
+[31m-static const size_t g_audio_target_samples = (size_t)SAMPLE_RATE_HZ * RECORD_SECONDS;[m
+[32m+[m[32mtypedef struct __attribute__((packed)) {[m
+[32m+[m[32m    uint32_t magic;       // 'S''D''A''C'[m
+[32m+[m[32m    uint16_t ver;         // 1[m
+[32m+[m[32m    uint16_t flags;       // 0 for now[m
+[32m+[m[32m    uint32_t seq;         // chunk counter[m
+[32m+[m[32m    uint64_t t_us;        // esp_timer_get_time() when chunk completed[m
+[32m+[m[32m    uint32_t sample_rate; // 48000[m
+[32m+[m[32m    uint32_t n;           // samples in this chunk[m
+[32m+[m[32m} sdacs_audio_hdr_t;[m
+[32m+[m
+[32m+[m[32m#define SDACS_MAGIC 0x43414453u  // 'SDAC' little-endian[m
+ [m
+ static void maybe_provision_network_config(void)[m
+ {[m
+[36m@@ -105,20 +107,6 @@[m [mstatic void maybe_provision_network_config(void)[m
+     ESP_LOGI(TAG, "Provisioned WiFi/MQTT defaults into NVS (one-time).");[m
+ }[m
+ [m
+[31m-static inline bool audio_store_sample(int32_t sample)[m
+[31m-{[m
+[31m-    if (g_audio_samples_count >= g_audio_total_capacity) {[m
+[31m-        return false;[m
+[31m-    }[m
+[31m-[m
+[31m-    size_t sample_index = g_audio_samples_count;[m
+[31m-    size_t chunk_index = sample_index / AUDIO_CHUNK_SAMPLES;[m
+[31m-    size_t chunk_offset = sample_index % AUDIO_CHUNK_SAMPLES;[m
+[31m-    g_audio_chunks[chunk_index][chunk_offset] = sample;[m
+[31m-    g_audio_samples_count++;[m
+[31m-    return true;[m
+[31m-}[m
+[31m-[m
+ /*[m
+     Convert a 32-bit I2S slot word into a signed 24-bit sample.[m
+ [m
+[36m@@ -203,14 +191,45 @@[m [mstatic void i2s_mic_init(void)[m
+ ------------------------------------------------------------ */[m
+ static void mic_test_task(void *arg)[m
+ {[m
+[32m+[m[32m    const char *base_topic = NULL;[m
+[32m+[m[32m    const char *broker = NULL;[m
+[32m+[m[32m    ESP_ERROR_CHECK(config_store_get_mqtt(&broker, &base_topic));[m
+[32m+[m[32m    (void)broker;[m
+[32m+[m[32m    if (!base_topic || base_topic[0] == '\0') {[m
+[32m+[m[32m        ESP_LOGE(TAG, "MQTT base topic is empty.");[m
+[32m+[m[32m        vTaskDelete(NULL);[m
+[32m+[m[32m        return;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    char audio_topic[CONFIG_STORE_MAX_MQTT_TOPIC_LEN + 16];[m
+[32m+[m[32m    int topic_len = snprintf(audio_topic, sizeof(audio_topic), "%s/audio", base_topic);[m
+[32m+[m[32m    if (topic_len <= 0 || topic_len >= (int)sizeof(audio_topic)) {[m
+[32m+[m[32m        ESP_LOGE(TAG, "Audio topic too long; base topic='%s'", base_topic ? base_topic : "(null)");[m
+[32m+[m[32m        vTaskDelete(NULL);[m
+[32m+[m[32m        return;[m
+[32m+[m[32m    }[m
+[32m+[m
+     size_t bytes_read = 0;[m
+     int64_t start_us = esp_timer_get_time();[m
+     int64_t end_us = start_us + ((int64_t)RECORD_SECONDS * 1000000LL);[m
+     int64_t next_progress_us = start_us + 1000000LL;[m
+     double rms_sum_sq = 0.0;[m
+     size_t rms_count = 0;[m
+[32m+[m[32m    uint32_t samples_streamed = 0;[m
+[32m+[m
+[32m+[m[32m    sdacs_audio_hdr_t hdr = {[m
+[32m+[m[32m        .magic = SDACS_MAGIC,[m
+[32m+[m[32m        .ver = 1,[m
+[32m+[m[32m        .flags = 0,[m
+[32m+[m[32m        .seq = 0,[m
+[32m+[m[32m        .sample_rate = SAMPLE_RATE_HZ,[m
+[32m+[m[32m    };[m
+ [m
+[31m-    while (esp_timer_get_time() < end_us && g_audio_samples_count < g_audio_total_capacity) {[m
+[32m+[m[32m    static int32_t chunk[AUDIO_CHUNK_SAMPLES];[m
+[32m+[m[32m    static uint8_t payload[sizeof(sdacs_audio_hdr_t) + (AUDIO_CHUNK_SAMPLES * sizeof(int32_t))];[m
+[32m+[m[32m    size_t chunk_fill = 0;[m
+[32m+[m
+[32m+[m[32m    while (esp_timer_get_time() < end_us) {[m
+         esp_err_t err = i2s_channel_read([m
+             rx_chan,[m
+             raw,[m
+[36m@@ -231,13 +250,34 @@[m [mstatic void mic_test_task(void *arg)[m
+         // In MONO + LEFT-slot mode, each returned word is a valid mic sample.[m
+         for (int i = 0; i < n_raw; i++) {[m
+             int32_t s24 = i2s_word_to_s24(raw[i]);[m
+[31m-            if (!audio_store_sample(s24)) {[m
+[31m-                break;[m
+[31m-            }[m
+[32m+[m[32m            chunk[chunk_fill++] = s24;[m
+[32m+[m[32m            samples_streamed++;[m
+ [m
+             float norm = (float)s24 / 8388608.0f;[m
+             rms_sum_sq += (double)norm * (double)norm;[m
+             rms_count++;[m
+[32m+[m
+[32m+[m[32m            if (chunk_fill >= AUDIO_CHUNK_SAMPLES) {[m
+[32m+[m[32m                hdr.n = (uint32_t)chunk_fill;[m
+[32m+[m[32m                hdr.t_us = (uint64_t)esp_timer_get_time();[m
+[32m+[m
+[32m+[m[32m                memcpy(payload, &hdr, sizeof(hdr));[m
+[32m+[m[32m                memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));[m
+[32m+[m
+[32m+[m[32m                esp_err_t perr = wifi_mqtt_publish_raw([m
+[32m+[m[32m                    audio_topic,[m
+[32m+[m[32m                    payload,[m
+[32m+[m[32m                    sizeof(hdr) + (chunk_fill * sizeof(int32_t)),[m
+[32m+[m[32m                    0,[m
+[32m+[m[32m                    0[m
+[32m+[m[32m                );[m
+[32m+[m[32m                if (perr != ESP_OK && (hdr.seq % 20u == 0u)) {[m
+[32m+[m[32m                    ESP_LOGW(TAG, "Audio chunk publish dropped: %s", esp_err_to_name(perr));[m
+[32m+[m[32m                }[m
+[32m+[m
+[32m+[m[32m                hdr.seq++;[m
+[32m+[m[32m                chunk_fill = 0;[m
+[32m+[m[32m            }[m
+         }[m
+ [m
+         int64_t now_us = esp_timer_get_time();[m
+[36m@@ -253,8 +293,8 @@[m [mstatic void mic_test_task(void *arg)[m
+             float db_spl = dbfs + CAL_OFFSET_DB;[m
+ [m
+             ESP_LOGI(TAG, "Recording... %u/%u samples",[m
+[31m-                (unsigned)g_audio_samples_count,[m
+[31m-                (unsigned)g_audio_total_capacity);[m
+[32m+[m[32m                (unsigned)samples_streamed,[m
+[32m+[m[32m                (unsigned)(SAMPLE_RATE_HZ * RECORD_SECONDS));[m
+             ESP_LOGI(TAG, "  dBFS: %.2f dB", dbfs);[m
+             ESP_LOGI(TAG, "  SPL:  %.2f dB", db_spl);[m
+ [m
+[36m@@ -263,14 +303,33 @@[m [mstatic void mic_test_task(void *arg)[m
+         }[m
+     }[m
+ [m
+[32m+[m[32m    if (chunk_fill > 0) {[m
+[32m+[m[32m        hdr.n = (uint32_t)chunk_fill;[m
+[32m+[m[32m        hdr.t_us = (uint64_t)esp_timer_get_time();[m
+[32m+[m[32m        memcpy(payload, &hdr, sizeof(hdr));[m
+[32m+[m[32m        memcpy(payload + sizeof(hdr), chunk, chunk_fill * sizeof(int32_t));[m
+[32m+[m
+[32m+[m[32m        esp_err_t perr = wifi_mqtt_publish_raw([m
+[32m+[m[32m            audio_topic,[m
+[32m+[m[32m            payload,[m
+[32m+[m[32m            sizeof(hdr) + (chunk_fill * sizeof(int32_t)),[m
+[32m+[m[32m            0,[m
+[32m+[m[32m            0[m
+[32m+[m[32m        );[m
+[32m+[m[32m        if (perr != ESP_OK) {[m
+[32m+[m[32m            ESP_LOGW(TAG, "Final audio chunk publish dropped: %s", esp_err_to_name(perr));[m
+[32m+[m[32m        } else {[m
+[32m+[m[32m            hdr.seq++;[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+[32m+[m
+     ESP_ERROR_CHECK(i2s_channel_disable(rx_chan));[m
+ [m
+[31m-    ESP_LOGI(TAG, "Recording complete: %.2f s, samples=%u",[m
+[32m+[m[32m    ESP_LOGI(TAG, "Recording complete: %.2f s, streamed samples=%u",[m
+         (float)(esp_timer_get_time() - start_us) / 1000000.0f,[m
+[31m-        (unsigned)g_audio_samples_count);[m
+[31m-    ESP_LOGI(TAG, "Stored stream uses mono/left-slot samples without decimation.");[m
+[31m-    ESP_LOGI(TAG, "Samples stored in %u chunk(s) for later FFT/MQTT.",[m
+[31m-        (unsigned)g_audio_chunk_count);[m
+[32m+[m[32m        (unsigned)samples_streamed);[m
+[32m+[m[32m    ESP_LOGI(TAG, "Streamed %u audio chunk(s) to topic '%s'.",[m
+[32m+[m[32m        (unsigned)hdr.seq, audio_topic);[m
+ [m
+     vTaskDelete(NULL);[m
+ }[m
+[36m@@ -283,53 +342,7 @@[m [mvoid app_main(void)[m
+     ESP_ERROR_CHECK(config_store_init());[m
+     maybe_provision_network_config();[m
+ [m
+[31m-    size_t max_chunks = (g_audio_target_samples + AUDIO_CHUNK_SAMPLES - 1) / AUDIO_CHUNK_SAMPLES;[m
+[31m-    g_audio_chunks = (int32_t **)calloc(max_chunks, sizeof(int32_t *));[m
+[31m-    if (g_audio_chunks == NULL) {[m
+[31m-        ESP_LOGE(TAG, "Failed to allocate audio chunk table.");[m
+[31m-        return;[m
+[31m-    }[m
+[31m-[m
+[31m-    for (size_t i = 0; i < max_chunks; i++) {[m
+[31m-        size_t chunk_samples = AUDIO_CHUNK_SAMPLES;[m
+[31m-        size_t remaining = g_audio_target_samples - g_audio_total_capacity;[m
+[31m-        if (remaining < chunk_samples) {[m
+[31m-            chunk_samples = remaining;[m
+[31m-        }[m
+[31m-[m
+[31m-        int32_t *chunk = (int32_t *)heap_caps_malloc([m
+[31m-            chunk_samples * sizeof(int32_t),[m
+[31m-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT[m
+[31m-        );[m
+[31m-        if (chunk == NULL) {[m
+[31m-            chunk = (int32_t *)heap_caps_malloc([m
+[31m-                chunk_samples * sizeof(int32_t),[m
+[31m-                MALLOC_CAP_8BIT[m
+[31m-            );[m
+[31m-        }[m
+[31m-[m
+[31m-        if (chunk == NULL) {[m
+[31m-            break;[m
+[31m-        }[m
+[31m-[m
+[31m-        g_audio_chunks[g_audio_chunk_count++] = chunk;[m
+[31m-        g_audio_total_capacity += chunk_samples;[m
+[31m-    }[m
+[31m-[m
+[31m-    if (g_audio_total_capacity == 0) {[m
+[31m-        ESP_LOGE(TAG, "Audio buffer allocation failed.");[m
+[31m-        free(g_audio_chunks);[m
+[31m-        g_audio_chunks = NULL;[m
+[31m-        return;[m
+[31m-    }[m
+[31m-[m
+[31m-    if (g_audio_total_capacity < g_audio_target_samples) {[m
+[31m-        ESP_LOGW(TAG, "Allocated %u/%u samples (%.2f/%.2f s).",[m
+[31m-            (unsigned)g_audio_total_capacity,[m
+[31m-            (unsigned)g_audio_target_samples,[m
+[31m-            (float)g_audio_total_capacity / (float)SAMPLE_RATE_HZ,[m
+[31m-            (float)g_audio_target_samples / (float)SAMPLE_RATE_HZ);[m
+[31m-    }[m
+[32m+[m[32m    ESP_ERROR_CHECK(wifi_mqtt_start(NULL));[m
+ [m
+     i2s_mic_init();[m
+ [m
+[36m@@ -345,4 +358,3 @@[m [mvoid app_main(void)[m
+ [m
+     ESP_LOGI(TAG, "ICS-43434 one-shot capture started (%d s).", RECORD_SECONDS);[m
+ }[m
+[31m-[m
+[1mdiff --git a/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c b/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c[m
+[1mindex 0ed759e..45528a5 100644[m
+[1m--- a/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c[m
+[1m+++ b/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c[m
+[36m@@ -289,6 +289,27 @@[m [mbool wifi_mqtt_try_send(const sdacs_features_t *f)[m
+     return (xQueueSend(s_feat_q, f, 0) == pdTRUE);[m
+ }[m
+ [m
+[32m+[m[32mesp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t len, int qos, int retain)[m
+[32m+[m[32m{[m
+[32m+[m[32m    if (!topic || !payload || len == 0) {[m
+[32m+[m[32m        return ESP_ERR_INVALID_ARG;[m
+[32m+[m[32m    }[m
+[32m+[m[32m    if (!s_mqtt || !s_mqtt_connected) {[m
+[32m+[m[32m        return ESP_ERR_INVALID_STATE;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    int msg_id = esp_mqtt_client_publish([m
+[32m+[m[32m        s_mqtt,[m
+[32m+[m[32m        topic,[m
+[32m+[m[32m        (const char *)payload,[m
+[32m+[m[32m        (int)len,[m
+[32m+[m[32m        qos,[m
+[32m+[m[32m        retain[m
+[32m+[m[32m    );[m
+[32m+[m
+[32m+[m[32m    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;[m
+[32m+[m[32m}[m
+[32m+[m
+ bool wifi_mqtt_is_connected(void)[m
+ {[m
+     return s_mqtt_connected;[m
+[1mdiff --git a/ESP-IDF/firmware/mic_test/main/wifi_mqtt.h b/ESP-IDF/firmware/mic_test/main/wifi_mqtt.h[m
+[1mindex a9ff185..2203765 100644[m
+[1m--- a/ESP-IDF/firmware/mic_test/main/wifi_mqtt.h[m
+[1m+++ b/ESP-IDF/firmware/mic_test/main/wifi_mqtt.h[m
+[36m@@ -1,5 +1,6 @@[m
+ #pragma once[m
+ #include <stdbool.h>[m
+[32m+[m[32m#include <stddef.h>[m
+ #include <stdint.h>[m
+ #include "esp_err.h"[m
+ [m
+[36m@@ -29,5 +30,8 @@[m [mesp_err_t wifi_mqtt_start(const wifi_mqtt_cfg_t *cfg);[m
+ // Non-blocking enqueue (drops if queue is full)[m
+ bool wifi_mqtt_try_send(const sdacs_features_t *f);[m
+ [m
+[32m+[m[32m// Publish binary payload directly (returns error if MQTT is not connected)[m
+[32m+[m[32mesp_err_t wifi_mqtt_publish_raw(const char *topic, const void *payload, size_t len, int qos, int retain);[m
+[32m+[m
+ // Optional: check if MQTT is connected (for debug/UI)[m
+[31m-bool wifi_mqtt_is_connected(void);[m
+\ No newline at end of file[m
+[32m+[m[32mbool wifi_mqtt_is_connected(void);[m

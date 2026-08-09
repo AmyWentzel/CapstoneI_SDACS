@@ -1,0 +1,6 @@
+bin/
+runner/build/
+models/*/build/
+*.o
+*.a
+*.so

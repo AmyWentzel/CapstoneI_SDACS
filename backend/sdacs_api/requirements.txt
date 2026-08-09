@@ -1,0 +1,9 @@
+fastapi==0.128.2
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+paho-mqtt>=2.1,<3.0
+python-dotenv>=1.0,<2.0
+pandas>=2.2,<3.0
+numpy>=2.0,<3.0
+matplotlib>=3.9,<4.0
+bleak>=0.22,<2.0

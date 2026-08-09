@@ -1,0 +1,10 @@
+# Local Arduino/sketch artifacts that do not belong to this ESP-IDF project
+/.vscode/arduino.json
+/main/contada_unified.ino
+/main/main.code-workspace
+/main/app/
+/main/board/
+/main/control/
+/main/drivers/
+/main/net/
+/main/sim/

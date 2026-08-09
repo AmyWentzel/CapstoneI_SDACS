@@ -1,0 +1,319 @@
+diff --git a/ESP-IDF/firmware/mic_test/MIC_GAIN_VALIDATION.md b/ESP-IDF/firmware/mic_test/MIC_GAIN_VALIDATION.md
+new file mode 100644
+index 0000000..879f9c0
+--- /dev/null
++++ b/ESP-IDF/firmware/mic_test/MIC_GAIN_VALIDATION.md
+@@ -0,0 +1,56 @@
++# SDACS Microphone Software Gain Validation
++
++Firmware version: `mic-gain-v1`
++
++## Processing path
++
++```text
++32-bit I2S raw word
++→ selected left/right slot
++→ SHIFT8 or LOW24 signed 24-bit conversion
++→ configurable software gain
++→ signed 24-bit saturation
++→ RMS, dBFS, FFT, band energy, and published AI features
++```
++
++## Configuration
++
++Edit `main/sdacs_config.h`:
++
++```c
++#define SDACS_MIC_SOFTWARE_GAIN 8.0f
++```
++
++- `1.0f` disables gain while retaining the same processing path.
++- `8.0f` adds approximately 18.06 dB before feature extraction.
++- Gain is applied to PCM samples, not added only to the reported dBFS value.
++
++## Clipping protection
++
++Samples are saturated to the signed 24-bit range:
++
++```text
++-8,388,608 to +8,388,607
++```
++
++The telemetry diagnostics now include:
++
++- `mic_software_gain`
++- `pre_gain_peak_abs`
++- `post_gain_peak_abs`
++- `clipped_sample_count`
++- `pre_gain_rms`
++- `pre_gain_dbfs`
++- existing `current_*` values, which now represent post-gain production samples
++
++## Validation sequence
++
++1. Build and flash one node first.
++2. Capture a quiet-room sample.
++3. Capture a fixed 1 kHz tone at a stable speaker level and distance.
++4. Confirm `post_gain_peak_abs` is approximately gain × `pre_gain_peak_abs` when not clipped.
++5. Confirm `clipped_sample_count` remains zero. Reduce gain if clipping occurs.
++6. Repeat on all four nodes using the same setup.
++7. Recalibrate SPL and regenerate/retrain the Edge Impulse dataset after the production gain is finalized.
++
++The current Edge Impulse model was trained on the previous feature scale and should not be treated as valid after changing PCM gain.
+diff --git a/ESP-IDF/firmware/mic_test/main/audio_input.c b/ESP-IDF/firmware/mic_test/main/audio_input.c
+index dab1e79..ef9d7d3 100644
+--- a/ESP-IDF/firmware/mic_test/main/audio_input.c
++++ b/ESP-IDF/firmware/mic_test/main/audio_input.c
+@@ -47,7 +47,9 @@ typedef struct {
+     uint32_t raw_word_repeated_count;
+     uint32_t converted_zeros;
+     uint32_t sample_count;
++    uint32_t clipped_sample_count;
+     int32_t converted_sample0;
++    conversion_accum_t pre_gain;
+     conversion_accum_t current;
+     conversion_accum_t shift8;
+     conversion_accum_t low24;
+@@ -161,6 +163,37 @@ static inline int32_t i2s_word_to_production_sample(uint32_t raw_word)
+ #endif
+ }
+ 
++static inline float configured_software_gain(void)
++{
++    const float gain = SDACS_MIC_SOFTWARE_GAIN;
++    return (isfinite(gain) && gain > 0.0f) ? gain : 1.0f;
++}
++
++static inline int32_t apply_software_gain_s24(int32_t sample, float gain, bool *clipped)
++{
++    const double scaled = (double)sample * (double)gain;
++
++    if (clipped) {
++        *clipped = false;
++    }
++
++    if (scaled > (double)SDACS_MIC_S24_MAX) {
++        if (clipped) {
++            *clipped = true;
++        }
++        return SDACS_MIC_S24_MAX;
++    }
++
++    if (scaled < (double)SDACS_MIC_S24_MIN) {
++        if (clipped) {
++            *clipped = true;
++        }
++        return SDACS_MIC_S24_MIN;
++    }
++
++    return (int32_t)lrint(scaled);
++}
++
+ static void conversion_accum_reset(conversion_accum_t *acc)
+ {
+     if (!acc) {
+@@ -219,7 +252,7 @@ static void conversion_diag_from_accum(audio_input_conversion_diag_t *out,
+     };
+ }
+ 
+-static void raw_diag_accumulate(uint32_t raw_word, int32_t current_sample)
++static void raw_diag_accumulate(uint32_t raw_word, int32_t pre_gain_sample, int32_t current_sample, bool clipped)
+ {
+ #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
+     if (!s_raw_diagnostics_enabled) {
+@@ -260,7 +293,11 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t current_sample)
+     if (current_sample == 0) {
+         s_raw_diag.converted_zeros++;
+     }
++    if (clipped) {
++        s_raw_diag.clipped_sample_count++;
++    }
+ 
++    conversion_accum_push(&s_raw_diag.pre_gain, pre_gain_sample);
+     conversion_accum_push(&s_raw_diag.current, current_sample);
+     conversion_accum_push(&s_raw_diag.shift8, shift8_sample);
+     conversion_accum_push(&s_raw_diag.low24, low24_sample);
+@@ -268,7 +305,9 @@ static void raw_diag_accumulate(uint32_t raw_word, int32_t current_sample)
+     s_raw_diag.sample_count++;
+ #else
+     (void)raw_word;
++    (void)pre_gain_sample;
+     (void)current_sample;
++    (void)clipped;
+ #endif
+ }
+ 
+@@ -276,6 +315,7 @@ static void raw_diag_reset_internal(void)
+ {
+     memset(&s_raw_diag, 0, sizeof(s_raw_diag));
+     s_raw_diag.raw_word_min = UINT32_MAX;
++    conversion_accum_reset(&s_raw_diag.pre_gain);
+     conversion_accum_reset(&s_raw_diag.current);
+     conversion_accum_reset(&s_raw_diag.shift8);
+     conversion_accum_reset(&s_raw_diag.low24);
+@@ -574,6 +614,7 @@ esp_err_t audio_input_read_s24(int32_t *dst,
+     uint32_t raw_min = UINT32_MAX;
+     uint32_t raw_max = 0;
+     bool have_prev_raw = false;
++    const float software_gain = configured_software_gain();
+ 
+     for (size_t i = 0; i < selected_samples_read; ++i) {
+ #if SDACS_I2S_RX_MODE == SDACS_I2S_RX_MODE_STEREO_RAW
+@@ -585,10 +626,12 @@ esp_err_t audio_input_read_s24(int32_t *dst,
+             break;
+         }
+         uint32_t raw_word = (uint32_t)s_audio.raw[raw_index];
+-        int32_t sample = i2s_word_to_production_sample(raw_word);
++        int32_t pre_gain_sample = i2s_word_to_production_sample(raw_word);
++        bool clipped = false;
++        int32_t sample = apply_software_gain_s24(pre_gain_sample, software_gain, &clipped);
+         int32_t abs_sample = (sample < 0) ? -sample : sample;
+         dst[i] = sample;
+-        raw_diag_accumulate(raw_word, sample);
++        raw_diag_accumulate(raw_word, pre_gain_sample, sample, clipped);
+ 
+         if (sample < min_sample) {
+             min_sample = sample;
+@@ -684,6 +727,7 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
+     }
+ 
+     memset(out, 0, sizeof(*out));
++    out->software_gain = configured_software_gain();
+     out->dbfs_normalization_bits = SDACS_MIC_VALID_BITS;
+ 
+ #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
+@@ -695,8 +739,10 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
+     out->raw_word_repeated_count = s_raw_diag.raw_word_repeated_count;
+     out->converted_zeros = s_raw_diag.converted_zeros;
+     out->sample_count = s_raw_diag.sample_count;
++    out->clipped_sample_count = s_raw_diag.clipped_sample_count;
+     out->converted_sample0 = s_raw_diag.converted_sample0;
+ 
++    conversion_diag_from_accum(&out->pre_gain, &s_raw_diag.pre_gain, 8388607.0f);
+     conversion_diag_from_accum(&out->current, &s_raw_diag.current, 8388607.0f);
+     conversion_diag_from_accum(&out->shift8, &s_raw_diag.shift8, 8388607.0f);
+     conversion_diag_from_accum(&out->low24, &s_raw_diag.low24, 8388607.0f);
+@@ -706,6 +752,8 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
+     out->converted_sample_max = out->current.max;
+     out->converted_peak_abs = out->current.peak_abs;
+     out->converted_p2p_raw = out->current.p2p;
++    out->pre_gain_peak_abs = out->pre_gain.peak_abs;
++    out->post_gain_peak_abs = out->current.peak_abs;
+     if (s_raw_diag.current.count > 0U) {
+         float rms = sqrtf((float)(s_raw_diag.current.sum_sq / (double)s_raw_diag.current.count));
+         out->dbfs_norm_24bit = 20.0f * log10f((rms / 8388607.0f) + 1e-12f);
+@@ -715,6 +763,7 @@ bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
+         out->dbfs_norm_32bit = -120.0f;
+     }
+ #else
++    out->pre_gain.dbfs = -120.0f;
+     out->current.dbfs = -120.0f;
+     out->shift8.dbfs = -120.0f;
+     out->low24.dbfs = -120.0f;
+diff --git a/ESP-IDF/firmware/mic_test/main/audio_input.h b/ESP-IDF/firmware/mic_test/main/audio_input.h
+index cb02484..1fb6efd 100644
+--- a/ESP-IDF/firmware/mic_test/main/audio_input.h
++++ b/ESP-IDF/firmware/mic_test/main/audio_input.h
+@@ -46,6 +46,11 @@ typedef struct {
+     int32_t converted_sample_max;
+     int32_t converted_peak_abs;
+     int32_t converted_p2p_raw;
++    float software_gain;
++    int32_t pre_gain_peak_abs;
++    int32_t post_gain_peak_abs;
++    uint32_t clipped_sample_count;
++    audio_input_conversion_diag_t pre_gain;
+     audio_input_conversion_diag_t current;
+     audio_input_conversion_diag_t shift8;
+     audio_input_conversion_diag_t low24;
+diff --git a/ESP-IDF/firmware/mic_test/main/capture_task.c b/ESP-IDF/firmware/mic_test/main/capture_task.c
+index 558539f..ae6326e 100644
+--- a/ESP-IDF/firmware/mic_test/main/capture_task.c
++++ b/ESP-IDF/firmware/mic_test/main/capture_task.c
+@@ -927,9 +927,11 @@ static void capture_task_run(void *arg)
+ 
+ #if SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS
+                 ESP_LOGI(TAG,
+-                         "RAW DIAG seq=%u conversion=%s n=%u f_peak_full=%.1f f_peak_acoustic=%.1f tone_1khz_peak=%.1f tone_1khz_ratio=%.4f tone_1khz_detected=%s low_rumble_ratio=%.4f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
++                         "RAW DIAG seq=%u conversion=%s gain=%.3f clipped=%u n=%u f_peak_full=%.1f f_peak_acoustic=%.1f tone_1khz_peak=%.1f tone_1khz_ratio=%.4f tone_1khz_detected=%s low_rumble_ratio=%.4f pre_gain_p2p=%" PRId32 " pre_gain_dbfs=%.2f current_p2p=%" PRId32 " current_dbfs=%.2f shift8_p2p=%" PRId32 " shift8_dbfs=%.2f low24_p2p=%" PRId32 " low24_dbfs=%.2f raw0=0x%08" PRIX32,
+                          (unsigned)seq,
+                          SDACS_I2S_SAMPLE_CONVERSION_LABEL,
++                         (double)raw_diag.software_gain,
++                         (unsigned)raw_diag.clipped_sample_count,
+                          (unsigned)metrics.sample_count,
+                          (double)metrics.f_peak_full_hz,
+                          (double)metrics.f_peak_acoustic_hz,
+@@ -937,6 +939,8 @@ static void capture_task_run(void *arg)
+                          (double)metrics.tone_1khz_ratio,
+                          metrics.tone_1khz_detected ? "true" : "false",
+                          (double)metrics.low_rumble_ratio,
++                         raw_diag.pre_gain.p2p,
++                         (double)raw_diag.pre_gain.dbfs,
+                          raw_diag.current.p2p,
+                          (double)raw_diag.current.dbfs,
+                          raw_diag.shift8.p2p,
+diff --git a/ESP-IDF/firmware/mic_test/main/sdacs_config.h b/ESP-IDF/firmware/mic_test/main/sdacs_config.h
+index 85f30f3..b436e27 100644
+--- a/ESP-IDF/firmware/mic_test/main/sdacs_config.h
++++ b/ESP-IDF/firmware/mic_test/main/sdacs_config.h
+@@ -32,7 +32,7 @@
+ #endif
+ 
+ #define SDACS_NODE_ID                    SDACS_SECRET_NODE_ID
+-#define SDACS_FW_VERSION                 "ota-enable-v2"
++#define SDACS_FW_VERSION                 "mic-gain-v1"
+ #define SDACS_SD_SPI_HOST                SPI2_HOST
+ #define SDACS_SD_SPI_MAX_FREQ_KHZ        5000
+ #define SDACS_SD_MOUNT_RETRY_COUNT       5
+@@ -69,6 +69,17 @@
+ #define SDACS_MIC_VALID_BITS             24
+ #define SDACS_MIC_I2S_SLOT_BITS          32
+ #define SDACS_MIC_SENSITIVITY_DBFS_94DB_SPL (-26.0f)
++/*
++ * Production PCM software gain. This is applied after SHIFT8/LOW24 conversion
++ * and before every RMS, dBFS, FFT, band-energy, and AI feature calculation.
++ *
++ * Start with 8.0x (+18.06 dB) for the mic-gain validation build. Clipping is
++ * protected with signed 24-bit saturation and reported in MQTT diagnostics.
++ * Set to 1.0f to disable gain without changing the processing pipeline.
++ */
++#define SDACS_MIC_SOFTWARE_GAIN          8.0f
++#define SDACS_MIC_S24_MIN                (-8388608)
++#define SDACS_MIC_S24_MAX                8388607
+ #define SDACS_ENABLE_RAW_SAMPLE_DIAGNOSTICS 1
+ #define SDACS_I2S_CONVERSION_SHIFT8      0
+ #define SDACS_I2S_CONVERSION_LOW24       1
+diff --git a/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c b/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c
+index dc0286e..6f71a91 100644
+--- a/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c
++++ b/ESP-IDF/firmware/mic_test/main/wifi_mqtt.c
+@@ -428,6 +428,14 @@ static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_f
+         "\"converted_peak_abs\":%" PRId32 ","
+         "\"converted_p2p_raw\":%" PRId32 ","
+         "\"converted_zeros\":%u,"
++        "\"mic_software_gain\":%.3f,"
++        "\"pre_gain_peak_abs\":%" PRId32 ","
++        "\"post_gain_peak_abs\":%" PRId32 ","
++        "\"clipped_sample_count\":%u,"
++        "\"pre_gain_min\":%" PRId32 ","
++        "\"pre_gain_max\":%" PRId32 ","
++        "\"pre_gain_rms\":%.2f,"
++        "\"pre_gain_dbfs\":%.2f,"
+         "\"current_min\":%" PRId32 ","
+         "\"current_max\":%" PRId32 ","
+         "\"current_peak_abs\":%" PRId32 ","
+@@ -468,6 +476,14 @@ static int append_raw_diag_json(char *out, size_t out_sz, int len, const sdacs_f
+         d->converted_peak_abs,
+         d->converted_p2p_raw,
+         (unsigned)d->converted_zeros,
++        (double)d->software_gain,
++        d->pre_gain_peak_abs,
++        d->post_gain_peak_abs,
++        (unsigned)d->clipped_sample_count,
++        d->pre_gain.min,
++        d->pre_gain.max,
++        (double)d->pre_gain.rms,
++        (double)d->pre_gain.dbfs,
+         d->current.min,
+         d->current.max,
+         d->current.peak_abs,

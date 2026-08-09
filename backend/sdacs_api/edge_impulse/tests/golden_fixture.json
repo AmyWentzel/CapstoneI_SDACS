@@ -1,0 +1,49 @@
+{
+  "status": "ready",
+  "sample_name": "sdacs_ei_scene_3class_testing.s345",
+  "expected_label": "quiet_room_white_noise",
+  "model_variant": "Unoptimized float32",
+  "project_id": 1071949,
+  "deploy_version": 1,
+  "feature_names": [
+    "dbfs_mean", "dbfs_std", "dbfs_range",
+    "f_peak_acoustic_hz_mean", "f_peak_acoustic_hz_std", "f_peak_acoustic_hz_range",
+    "low_rumble_ratio_mean", "low_rumble_ratio_std", "low_rumble_ratio_range",
+    "band_bass_ratio_mean", "band_bass_ratio_std", "band_bass_ratio_range",
+    "band_low_mid_ratio_mean", "band_low_mid_ratio_std", "band_low_mid_ratio_range",
+    "band_mid_ratio_mean", "band_mid_ratio_std", "band_mid_ratio_range",
+    "band_presence_ratio_mean", "band_presence_ratio_std", "band_presence_ratio_range",
+    "band_high_ratio_mean", "band_high_ratio_std", "band_high_ratio_range",
+    "band_bass_peak_hz_mean", "band_bass_peak_hz_std", "band_bass_peak_hz_range",
+    "band_low_mid_peak_hz_mean", "band_low_mid_peak_hz_std", "band_low_mid_peak_hz_range",
+    "band_mid_peak_hz_mean", "band_mid_peak_hz_std", "band_mid_peak_hz_range",
+    "band_presence_peak_hz_mean", "band_presence_peak_hz_std", "band_presence_peak_hz_range",
+    "band_high_peak_hz_mean", "band_high_peak_hz_std", "band_high_peak_hz_range",
+    "dominant_band_ratio_mean", "dominant_band_ratio_std", "dominant_band_ratio_range",
+    "dominant_band_peak_hz_mean", "dominant_band_peak_hz_std", "dominant_band_peak_hz_range",
+    "fft_low_ratio_mean", "fft_low_ratio_std", "fft_low_ratio_range",
+    "fft_mid_ratio_mean", "fft_mid_ratio_std", "fft_mid_ratio_range",
+    "fft_high_ratio_mean", "fft_high_ratio_std", "fft_high_ratio_range",
+    "fft_total_energy_mean", "fft_total_energy_std", "fft_total_energy_range"
+  ],
+  "features": [
+    -86.8425, 0.2702, 0.7600, 457.0250, 116.5768, 281.2000,
+    0.4727, 0.1423, 0.3929, 0.3958, 0.1540, 0.4292,
+    0.1925, 0.0910, 0.2393, 0.2135, 0.0564, 0.1458,
+    0.0939, 0.0085, 0.0229, 0.1044, 0.0154, 0.0402,
+    58.6250, 20.3083, 46.9000, 292.9750, 106.7704, 234.4000,
+    1007.8000, 375.7668, 890.7000, 2601.5500, 338.8398, 796.9000,
+    7570.3250, 1640.8122, 4593.8000, 0.4431, 0.0880, 0.2400,
+    140.6500, 162.3798, 375.0000, 0.4872, 0.1469, 0.4030,
+    0.3630, 0.1340, 0.3693, 0.1499, 0.0143, 0.0360,
+    0.0009, 0.0001, 0.0003
+  ],
+  "expected_probabilities": {
+    "noisy": 0.03,
+    "quiet_room_white_noise": 0.90,
+    "speech": 0.08
+  },
+  "expected_top_label": "quiet_room_white_noise",
+  "tolerance": 0.02,
+  "probability_note": "Studio values were supplied rounded to two decimal places."
+}
