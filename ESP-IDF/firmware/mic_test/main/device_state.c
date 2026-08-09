@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Thread-safe logical device state
+ *
+ * Purpose:
+ *   Tracks whether the node is idle, capturing, performing OTA, or in another mutually exclusive operation.
+ *
+ * Design note:
+ *   Central state checks prevent conflicting operations such as OTA during capture.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "device_state.h"
 
 static volatile sdacs_mode_t s_mode = SDACS_MODE_BOOT;

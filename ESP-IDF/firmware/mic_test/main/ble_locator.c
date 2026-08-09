@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Temporary BLE node-awareness advertisement service
+ *
+ * Purpose:
+ *   Advertises each node as SDACS-<node_id> during boot or on MQTT request so the Raspberry Pi gateway can discover node presence and RSSI.
+ *
+ * Design note:
+ *   BLE is non-connectable and time-bounded; it is used for topology awareness, not command transport.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "ble_locator.h"
 
 #include <stdio.h>

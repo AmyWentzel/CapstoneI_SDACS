@@ -1,3 +1,8 @@
+"""SDACS backend module: Validated room geometry models and SQLite-backed storage for node/source positions used by acoustic visualization.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import json

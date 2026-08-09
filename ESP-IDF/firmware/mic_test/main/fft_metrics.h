@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public FFT/acoustic feature interface
+ *
+ * Purpose:
+ *   Defines metric structures and APIs for spectral-path and scene-path streaming analysis.
+ *
+ * Design note:
+ *   Published features are derived from these normalized metrics rather than raw audio over MQTT.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Synchronized acoustic capture state machine
+ *
+ * Purpose:
+ *   Executes delayed group captures, validates I2S health, gathers spectral and scene features, writes optional storage artifacts, and publishes progress/completion telemetry.
+ *
+ * Design note:
+ *   Capture timing and validation are centralized here so all four nodes follow the same state transitions and acceptance checks.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "capture_task.h"
 
 #include <inttypes.h>
@@ -433,6 +446,14 @@ static bool capture_run_i2s_preflight(capture_task_state_t *state,
     return result.pass;
 }
 
+/* Main synchronized-capture worker. Sequence:
+ *   1) arm and wait for MQTT connectivity,
+ *   2) honor the group delay,
+ *   3) perform I2S preflight and reset DSP state,
+ *   4) stream spectral + scene samples into feature accumulators,
+ *   5) publish one-second feature windows while optionally writing SD data,
+ *   6) verify completion metrics/artifacts and publish capture_complete.
+ * Keeping this sequence in one task gives every node the same state machine. */
 static void capture_task_run(void *arg)
 {
     capture_task_state_t *state = (capture_task_state_t *)arg;

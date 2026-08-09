@@ -1,3 +1,8 @@
+"""SDACS backend module: Central backend configuration loaded from environment variables with deployment defaults for MQTT, API, paths, nodes, and Edge Impulse.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from functools import lru_cache
 import os
 from pathlib import Path

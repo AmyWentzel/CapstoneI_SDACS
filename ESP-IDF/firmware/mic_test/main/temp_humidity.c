@@ -1,3 +1,16 @@
+/*
+ * SDACS module: SHT41 environmental telemetry service
+ *
+ * Purpose:
+ *   Reads temperature and relative humidity with CRC validation, caches the latest sample, and publishes MQTT telemetry on the SDACS node topic hierarchy.
+ *
+ * Design note:
+ *   Environmental telemetry is asynchronous from the audio capture task to avoid blocking real-time sample processing.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "temp_humidity.h"
 
 #include <inttypes.h>

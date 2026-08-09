@@ -1,3 +1,8 @@
+"""SDACS verification: regression tests for room layout.
+
+These tests document expected final-system behavior and protect the production merge from regressions.
+"""
+
 import json
 from pathlib import Path
 

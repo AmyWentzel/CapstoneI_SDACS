@@ -1,3 +1,8 @@
+// SDACS Flutter component: Setup-screen model for operator-entered room configuration.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class RoomSetup {
   const RoomSetup({
     required this.roomLength,

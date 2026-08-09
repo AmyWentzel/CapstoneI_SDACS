@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Central compile-time SDACS hardware and signal-processing configuration
+ *
+ * Purpose:
+ *   Collects pin assignments, firmware version, capture timing, DSP parameters, fixed gains, calibration constants, task sizing, and feature flags.
+ *
+ * Design note:
+ *   Keeping validated constants in one file makes the final experimental configuration auditable and reproducible.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include "driver/gpio.h"

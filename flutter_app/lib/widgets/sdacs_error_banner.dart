@@ -1,3 +1,8 @@
+// SDACS Flutter component: Reusable SDACS UI widget: sdacs error banner.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'package:flutter/material.dart';
 
 class SdacsErrorBanner extends StatelessWidget {

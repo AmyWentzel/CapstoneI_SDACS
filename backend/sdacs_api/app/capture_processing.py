@@ -1,3 +1,8 @@
+"""SDACS backend module: Transforms captured telemetry into atomic CSV/JSON artifacts, room-level acoustic analysis, feature fusion, and AI inputs.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import csv
@@ -427,6 +432,8 @@ def acoustic_analysis(
     return summary
 
 
+# Room-level fusion deliberately aggregates synchronized node evidence instead
+# of selecting a single microphone, which is central to the distributed SDACS design.
 def fuse(capture: dict[str, Any], acoustic: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
     model_complete = edge.get("status") == "complete"
     top_label = edge.get("top_label", edge.get("predicted_label"))

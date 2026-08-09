@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public high-pass filter interface
+ *
+ * Purpose:
+ *   Defines biquad state and initialize/reset/process operations for the scene preprocessing path.
+ *
+ * Design note:
+ *   The structure is intentionally self-contained so host response tests can exercise it directly.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

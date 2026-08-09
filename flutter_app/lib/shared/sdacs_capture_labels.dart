@@ -1,3 +1,8 @@
+// SDACS Flutter component: Single source of truth for supported dataset/validation capture labels and their display metadata.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class SdacsCaptureLabelDefinition {
   const SdacsCaptureLabelDefinition({
     required this.id,

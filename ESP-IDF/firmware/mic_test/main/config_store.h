@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public persistent-configuration interface
+ *
+ * Purpose:
+ *   Defines size limits and typed getters/setters for NVS-backed SDACS settings.
+ *
+ * Design note:
+ *   Callers do not access NVS directly.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stddef.h>

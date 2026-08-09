@@ -1,3 +1,8 @@
+"""SDACS verification: regression tests for capture routes.
+
+These tests document expected final-system behavior and protect the production merge from regressions.
+"""
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -107,11 +112,9 @@ def test_production_app_registers_layout_and_existing_route_families():
     assert {"/api/layout", "/api/ble/scan", "/api/capture/start",
             "/api/ai/health", "/api/telemetry/latest"}.issubset(paths)
     assert any(path.startswith("/api/captures/") for path in paths)
-    included = [
-        nested.path
-        for route in app.routes
-        if hasattr(route, "original_router")
-        for nested in route.original_router.routes
-        if hasattr(nested, "path")
-    ]
-    assert "/ws/sdacs/live" in included
+    # FastAPI flattens included router entries into app.routes; inspect the public
+    # route path instead of relying on the version-specific original_router detail.
+    route_paths = {
+        route.path for route in app.routes if hasattr(route, "path")
+    }
+    assert "/ws/sdacs/live" in route_paths

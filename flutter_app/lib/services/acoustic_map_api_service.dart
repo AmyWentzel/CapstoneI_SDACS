@@ -1,3 +1,8 @@
+// SDACS Flutter component: HTTP client for acoustic-map endpoints and image/result retrieval.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;

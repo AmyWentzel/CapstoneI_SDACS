@@ -1,3 +1,8 @@
+"""SDACS backend module: Thread-safe in-memory latest-state cache for node telemetry, command acknowledgements, and observed captures.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from threading import RLock
 
 from .models import NodeState, TelemetryUpdate, utc_now_iso

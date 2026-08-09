@@ -1,3 +1,16 @@
+/*
+ * SDACS module: MAX17048 battery telemetry service
+ *
+ * Purpose:
+ *   Reads battery voltage/state-of-charge on the shared I2C bus, updates local LED indication, caches the latest sample, and publishes selected MQTT records.
+ *
+ * Design note:
+ *   Periodic sensing is decoupled from MQTT publication to avoid flooding the telemetry dataset.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "fuel_gauge.h"
 
 #include <inttypes.h>

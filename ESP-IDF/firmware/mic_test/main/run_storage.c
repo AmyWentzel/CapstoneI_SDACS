@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Optional microSD capture artifact manager
+ *
+ * Purpose:
+ *   Mounts the SD card, creates run-specific paths, streams raw samples/metrics, finalizes WAV output, validates artifacts, and records storage diagnostics.
+ *
+ * Design note:
+ *   Storage can be compile-time disabled for MQTT-only validation without disabling the rest of the sensing pipeline.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "run_storage.h"
 
 #include <dirent.h>

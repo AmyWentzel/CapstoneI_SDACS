@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Persistent SDACS configuration store
+ *
+ * Purpose:
+ *   Loads and updates Wi-Fi, MQTT, calibration, sample-rate, and deprecated identity values in ESP-IDF NVS with in-memory caching.
+ *
+ * Design note:
+ *   Compiled node identity is authoritative; legacy NVS node IDs are retained only for migration diagnostics.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "config_store.h"
 
 #include <stdbool.h>
@@ -20,7 +33,9 @@
 
 #define DEFAULT_WIFI_SSID  ""
 #define DEFAULT_WIFI_PASS  ""
-#define DEFAULT_MQTT_URI   "mqtt://192.168.1.50"
+/* No network-specific broker is compiled as the NVS fallback. Deployment
+ * provisioning (sdacs_secrets.h / provisioning script) must supply the broker. */
+#define DEFAULT_MQTT_URI   ""
 #define DEFAULT_MQTT_TOPIC ""
 #define DEFAULT_NODE_ID    "node01"
 #define DEFAULT_SAMPLE_HZ  48000U

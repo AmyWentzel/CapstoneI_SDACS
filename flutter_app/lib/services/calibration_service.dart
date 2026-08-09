@@ -1,3 +1,8 @@
+// SDACS Flutter component: Small service wrapper for calibration-related backend operations.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import '../models/calibration_result.dart';
 
 class CalibrationService {

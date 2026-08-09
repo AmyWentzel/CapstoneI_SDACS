@@ -1,3 +1,8 @@
+"""SDACS backend module: Coordinates capture-session lifecycle, telemetry collection, artifact processing, room layout, calibration, and Edge Impulse execution.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import asyncio

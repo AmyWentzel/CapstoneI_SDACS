@@ -1,3 +1,6 @@
+// SDACS Flutter verification: regression coverage for capture loading test.
+// These tests protect operator-visible behavior during the final branch merge.
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_test_app/screens/loading/loading_screen.dart';

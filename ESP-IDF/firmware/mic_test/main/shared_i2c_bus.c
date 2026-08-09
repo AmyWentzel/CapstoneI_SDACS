@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Shared I2C bus abstraction
+ *
+ * Purpose:
+ *   Owns installation of the common I2C controller and serialized read/write transactions for SHT41 and MAX17048 peripherals.
+ *
+ * Design note:
+ *   A single bus owner avoids duplicate driver installation and inconsistent pin/clock configuration.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "shared_i2c_bus.h"
 
 #include "driver/i2c.h"

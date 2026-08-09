@@ -1,3 +1,8 @@
+// SDACS Flutter component: Per-node metric record used in capture result summaries and plots.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class CaptureNodeMetric {
   const CaptureNodeMetric({
     required this.nodeId,

@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public interface for SDACS microphone acquisition
+ *
+ * Purpose:
+ *   Defines audio input lifecycle, dual-path read APIs, timing/error counters, and raw conversion diagnostics used by capture and validation code.
+ *
+ * Design note:
+ *   Callers receive already-normalized signed 24-bit production samples rather than manipulating I2S words directly.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

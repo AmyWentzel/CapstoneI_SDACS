@@ -1,3 +1,16 @@
+/*
+ * SDACS module: MQTT command parser and system-control dispatcher
+ *
+ * Purpose:
+ *   Parses JSON commands and routes capture, BLE advertisement, storage, calibration, OTA, and status operations to the appropriate subsystem.
+ *
+ * Design note:
+ *   Command validation is kept at the boundary so subsystem functions receive normalized parameters and responses share a consistent request_id.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "command_dispatcher.h"
 
 #include <inttypes.h>

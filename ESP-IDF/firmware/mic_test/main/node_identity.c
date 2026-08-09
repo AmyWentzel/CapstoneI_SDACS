@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Compiled node identity and topic-name construction
+ *
+ * Purpose:
+ *   Validates node01-node04 identities and derives MQTT base topics, BLE names, and BLE manufacturer payloads from the compiled ID.
+ *
+ * Design note:
+ *   One authoritative identity prevents BLE, MQTT, storage, and telemetry from disagreeing about which physical node produced data.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "node_identity.h"
 
 #include <stdio.h>

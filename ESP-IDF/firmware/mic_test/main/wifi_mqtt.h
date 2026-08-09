@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public Wi-Fi/MQTT transport interface
+ *
+ * Purpose:
+ *   Defines telemetry record structures, connection control, publishers, command callbacks, and storage-status integration.
+ *
+ * Design note:
+ *   This is the firmware boundary between local sensing state and Raspberry Pi middleware.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -116,7 +129,7 @@ typedef struct {
 typedef struct {
     const char *ssid;
     const char *pass;
-    const char *broker_uri;  // e.g. "mqtt://192.168.1.50"
+    const char *broker_uri;  // e.g. "mqtt://<broker-host>:1883"
     const char *topic;       // built from compiled node ID, e.g. "sdacs/node/<node_id>/features"
 } wifi_mqtt_cfg_t;
 

@@ -1,3 +1,6 @@
+// SDACS Flutter verification: regression coverage for room layout test.
+// These tests protect operator-visible behavior during the final branch merge.
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

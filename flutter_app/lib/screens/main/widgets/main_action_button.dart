@@ -1,3 +1,8 @@
+// SDACS Flutter component: Flutter UI implementation for the main action button portion of the SDACS operator workflow.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'package:flutter/material.dart';
 
 class MainActionButton extends StatelessWidget {

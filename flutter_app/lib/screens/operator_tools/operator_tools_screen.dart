@@ -1,3 +1,8 @@
+// SDACS Flutter component: Flutter UI implementation for the operator tools screen portion of the SDACS operator workflow.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';

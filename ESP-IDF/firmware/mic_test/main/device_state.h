@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public device-state interface
+ *
+ * Purpose:
+ *   Defines SDACS device states and transition/query helpers.
+ *
+ * Design note:
+ *   Used by command and capture code to enforce operational exclusivity.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

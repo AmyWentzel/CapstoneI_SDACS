@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public MAX17048 telemetry interface
+ *
+ * Purpose:
+ *   Provides lifecycle, latest-sample, one-shot read, and publication functions.
+ *
+ * Design note:
+ *   The service shares the common I2C bus with the SHT41 sensor.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

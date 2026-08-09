@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public shared-I2C interface
+ *
+ * Purpose:
+ *   Defines bus configuration and basic write/read/write-read transactions.
+ *
+ * Design note:
+ *   Peripheral drivers depend on this interface rather than creating independent I2C buses.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

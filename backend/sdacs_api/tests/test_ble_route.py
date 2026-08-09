@@ -1,3 +1,8 @@
+"""SDACS verification: regression tests for ble route.
+
+These tests document expected final-system behavior and protect the production merge from regressions.
+"""
+
 import asyncio
 
 import pytest

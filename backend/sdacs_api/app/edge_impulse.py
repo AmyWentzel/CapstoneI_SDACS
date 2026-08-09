@@ -1,3 +1,8 @@
+"""SDACS backend module: Backend abstraction for validating and invoking the deployed Edge Impulse runner while preserving deterministic health/error reporting.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import json

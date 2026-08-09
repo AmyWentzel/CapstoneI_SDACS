@@ -1,3 +1,8 @@
+"""SDACS backend module: FastAPI endpoints that expose acoustic-map labels, JSON results, and rendered images generated from SDACS capture data.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import os

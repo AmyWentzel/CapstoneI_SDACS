@@ -1,3 +1,8 @@
+// SDACS Flutter component: Room dimensions plus normalized node/source positions shared with the backend layout API.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:math' as math;
 
 const roomNodeIds = ['node01', 'node02', 'node03', 'node04'];

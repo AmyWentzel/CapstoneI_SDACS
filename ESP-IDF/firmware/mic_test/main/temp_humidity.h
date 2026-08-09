@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public SHT41 telemetry interface
+ *
+ * Purpose:
+ *   Provides sensor lifecycle, latest-sample, one-shot read, and publication functions.
+ *
+ * Design note:
+ *   Designed to coexist with the fuel gauge on the shared I2C bus.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdint.h>

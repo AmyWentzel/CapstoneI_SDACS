@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Capture task command interface
+ *
+ * Purpose:
+ *   Defines capture request parameters and the start entry point used by the MQTT command dispatcher.
+ *
+ * Design note:
+ *   Requests carry delay, duration, request identity, and optional dataset label metadata.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

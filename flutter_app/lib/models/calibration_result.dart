@@ -1,3 +1,8 @@
+// SDACS Flutter component: Compact model for displayed calibration outcomes.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class CalibrationResult {
   const CalibrationResult({
     required this.calibrationId,

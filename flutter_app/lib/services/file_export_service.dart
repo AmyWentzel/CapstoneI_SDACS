@@ -1,3 +1,8 @@
+// SDACS Flutter component: Platform-aware helper for exporting capture artifacts from the Flutter UI.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class FileExportService {
   const FileExportService();
 

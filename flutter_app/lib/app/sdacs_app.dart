@@ -1,3 +1,8 @@
+// SDACS Flutter component: Root Flutter application widget that provides backend configuration and route setup.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'package:flutter/material.dart';
 
 import '../config/backend_config.dart';

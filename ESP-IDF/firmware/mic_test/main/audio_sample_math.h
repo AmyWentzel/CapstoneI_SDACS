@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Pure signed-24-bit sample math helpers
+ *
+ * Purpose:
+ *   Provides rounding, gain-by-power-of-two, and saturation helpers that can be host-tested without ESP-IDF hardware dependencies.
+ *
+ * Design note:
+ *   Separating arithmetic from the driver makes clipping behavior reproducible and unit-testable.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

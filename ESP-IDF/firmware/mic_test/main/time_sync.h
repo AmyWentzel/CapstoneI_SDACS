@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public time synchronization interface
+ *
+ * Purpose:
+ *   Exposes validity checks, UTC formatting, logging, and bounded SNTP synchronization.
+ *
+ * Design note:
+ *   Consumers can distinguish synchronized timestamps from uptime-only timing.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

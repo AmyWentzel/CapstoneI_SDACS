@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public BLE locator interface
+ *
+ * Purpose:
+ *   Exposes synchronous boot advertisement and asynchronous re-advertise requests.
+ *
+ * Design note:
+ *   The API prevents overlapping BLE locator operations.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

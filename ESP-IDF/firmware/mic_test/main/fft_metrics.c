@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Streaming FFT and acoustic band feature extraction
+ *
+ * Purpose:
+ *   Accumulates samples, applies spectral analysis, identifies FFT peak frequency, and computes normalized sub/bass/low-mid/mid/presence/high band energies for both processing paths.
+ *
+ * Design note:
+ *   Separate metric contexts preserve unfiltered spectral analysis while supporting the HPF scene-classifier path.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "fft_metrics.h"
 
 #include <limits.h>

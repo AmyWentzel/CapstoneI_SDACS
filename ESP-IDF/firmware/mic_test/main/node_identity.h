@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public node identity interface
+ *
+ * Purpose:
+ *   Exposes identity validation and deterministic BLE/MQTT naming helpers.
+ *
+ * Design note:
+ *   Runtime NVS identity is intentionally not part of this interface.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

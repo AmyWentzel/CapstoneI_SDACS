@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Boot-time synchronization of compiled network defaults into NVS
+ *
+ * Purpose:
+ *   Applies compiled Wi-Fi and MQTT provisioning values while preserving configurable persistence behavior.
+ *
+ * Design note:
+ *   Provisioning is separated from storage so deployment-specific secrets remain outside tracked source.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "network_provisioning.h"
 
 #include <string.h>

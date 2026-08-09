@@ -1,4 +1,7 @@
-"""Shared SDACS_V3 room-window feature generation and export command."""
+"""SDACS backend module: Builds deterministic multi-node feature windows for the Edge Impulse model and exports model-ready feature records.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
 
 from __future__ import annotations
 
@@ -101,6 +104,13 @@ def build_feature_window(
     capture_id: str,
     sample_index: int,
 ) -> dict[str, Any]:
+    """Build one 57-feature room-level input vector from a synchronized four-node instant.
+
+    A window is accepted only when node01-node04 each contribute exactly one finite
+    source row. For every source feature the backend computes mean, population
+    standard deviation, and range, preserving the feature order expected by the
+    deployed Edge Impulse model.
+    """
     selected = [
         dict(row)
         for row in rows

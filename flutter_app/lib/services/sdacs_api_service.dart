@@ -1,3 +1,8 @@
+// SDACS Flutter component: Primary HTTP API client for telemetry, captures, BLE discovery, room layout, calibration, commands, and AI results.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -19,6 +24,10 @@ class SdacsApiException implements Exception {
   String toString() => message;
 }
 
+/// Typed HTTP boundary between the Flutter operator UI and Raspberry Pi FastAPI.
+///
+/// All REST serialization, response validation, and backend error translation are
+/// centralized here so screens remain focused on operator workflow and display state.
 class SdacsApiService {
   const SdacsApiService({this.config = const BackendConfig()});
 

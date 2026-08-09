@@ -1,3 +1,8 @@
+"""SDACS backend module: Scans Raspberry Pi BLE observations for SDACS advertisements and normalizes detected node identity/RSSI information.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 import asyncio
 from collections import defaultdict
 from statistics import median

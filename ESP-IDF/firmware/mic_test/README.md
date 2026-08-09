@@ -221,4 +221,4 @@ We will get back to you as soon as possible.
 
 ## SDACS Dual-Path HPF Scene Classifier
 
-Firmware `mic-gain-hpf-v1` keeps unfiltered fixed-gain features for low/mid/high acoustic analysis while generating a second 150 Hz HPF plus fixed-16x feature path for quiet/speech/noisy classification. MQTT scene fields use the `scene_` prefix. See `../../../docs/firmware/MIC_GAIN_HPF_VALIDATION.md` before flashing all four nodes or recollecting the Edge Impulse dataset.
+Firmware `mic-gain-hpf-v2` keeps unfiltered fixed-gain features for low/mid/high acoustic analysis while generating a second 150 Hz HPF plus fixed-16x feature path for quiet/speech/noisy classification. MQTT scene fields use the `scene_` prefix. See `../../../docs/firmware/MIC_GAIN_HPF_VALIDATION.md` before flashing all four nodes or recollecting the Edge Impulse dataset.

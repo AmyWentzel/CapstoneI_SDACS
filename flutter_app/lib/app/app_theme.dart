@@ -1,3 +1,8 @@
+// SDACS Flutter component: Shared Material theme and visual constants for a consistent SDACS operator interface.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'package:flutter/material.dart';
 
 class AppTheme {

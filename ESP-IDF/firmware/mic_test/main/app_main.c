@@ -1,3 +1,16 @@
+/*
+ * SDACS module: System startup and dependency orchestration
+ *
+ * Purpose:
+ *   Initializes persistent configuration, node identity, storage mode, shared I2C, BLE discovery, Wi-Fi/MQTT, environmental sensors, audio capture, FFT processing, and command dispatch.
+ *
+ * Design note:
+ *   The boot sequence is deliberately staged so BLE discovery completes before normal Wi-Fi/MQTT sensing begins.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include <string.h>
 #include <stdio.h>
 

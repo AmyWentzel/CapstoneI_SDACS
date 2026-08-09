@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Public local-storage interface
+ *
+ * Purpose:
+ *   Defines storage state, capture artifact structures, and mount/write/finalization APIs.
+ *
+ * Design note:
+ *   The capture task uses this abstraction instead of direct FAT/VFS calls.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #pragma once
 
 #include <stdbool.h>

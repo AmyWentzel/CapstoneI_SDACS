@@ -1,3 +1,8 @@
+"""SDACS backend module: Paho MQTT client that subscribes to SDACS node telemetry, normalizes messages, updates backend state, and broadcasts live updates.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -162,6 +167,12 @@ class SdacsMqttClient:
 
 
 def normalize_mqtt_message(topic: str, payload: bytes) -> TelemetryUpdate:
+    """Convert firmware MQTT JSON into the backend canonical telemetry schema.
+
+    Node identity and record type are inferred from the topic when needed, firmware
+    field aliases are normalized, and ambiguous timestamps are separated into wall
+    clock versus uptime representations before Pydantic validation.
+    """
     raw_payload = _decode_payload(payload)
     topic_parts = topic.split("/")
     node_id = _node_id_from_topic(topic_parts, raw_payload)

@@ -1,3 +1,16 @@
+/*
+ * SDACS module: SNTP and ISO-8601 timestamp utilities
+ *
+ * Purpose:
+ *   Attempts network time synchronization, checks epoch validity, and produces UTC timestamps for telemetry and capture metadata.
+ *
+ * Design note:
+ *   Monotonic/uptime fields remain available when wall-clock time is not yet valid.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "time_sync.h"
 
 #include <time.h>

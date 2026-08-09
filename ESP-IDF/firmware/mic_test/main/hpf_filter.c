@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Fourth-order Butterworth high-pass filter
+ *
+ * Purpose:
+ *   Implements two cascaded second-order biquads configured for the scene-classifier high-pass cutoff.
+ *
+ * Design note:
+ *   A fixed filter is used instead of AGC/adaptive preprocessing so model training and deployment see the same transfer function.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "hpf_filter.h"
 
 #include <math.h>

@@ -1,3 +1,6 @@
+// SDACS Flutter verification: regression coverage for widget test.
+// These tests protect operator-visible behavior during the final branch merge.
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_test_app/models/acoustic_map_model.dart';
 import 'package:flutter_test_app/models/node_telemetry.dart';

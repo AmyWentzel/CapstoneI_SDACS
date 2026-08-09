@@ -1,3 +1,8 @@
+// SDACS Flutter component: Typed request/response models for SPL calibration preview and apply workflows.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class SplCalibrationNodePreview {
   const SplCalibrationNodePreview({
     required this.nodeId,

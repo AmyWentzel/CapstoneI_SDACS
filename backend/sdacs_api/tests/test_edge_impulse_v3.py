@@ -1,3 +1,8 @@
+"""SDACS verification: regression tests for edge impulse v3.
+
+These tests document expected final-system behavior and protect the production merge from regressions.
+"""
+
 import json
 import math
 import subprocess

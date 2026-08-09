@@ -1,3 +1,8 @@
+// SDACS Flutter component: WebSocket client for live SDACS telemetry updates from the Raspberry Pi backend.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:async';
 import 'dart:convert';
 

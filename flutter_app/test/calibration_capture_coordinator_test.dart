@@ -1,3 +1,6 @@
+// SDACS Flutter verification: regression coverage for calibration capture coordinator test.
+// These tests protect operator-visible behavior during the final branch merge.
+
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';

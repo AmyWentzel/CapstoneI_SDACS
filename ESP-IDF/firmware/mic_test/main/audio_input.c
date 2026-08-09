@@ -1,3 +1,16 @@
+/*
+ * SDACS module: ICS-43432 I2S acquisition and dual-path sample preprocessing
+ *
+ * Purpose:
+ *   Reads 32-bit I2S frames, extracts signed 24-bit microphone samples, applies the fixed spectral gain, and produces the parallel HPF + scene-gain path with clipping diagnostics.
+ *
+ * Design note:
+ *   Fixed gains and explicit signed-24-bit saturation keep training and runtime preprocessing deterministic; raw diagnostics support microphone validation without changing the production path.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "audio_input.h"
 
 #include <inttypes.h>
@@ -754,6 +767,9 @@ esp_err_t audio_input_read_dual_s24(int32_t *spectral_dst,
     return ESP_OK;
 }
 
+/* Compatibility wrapper for callers that only need the unfiltered spectral path.
+ * The underlying dual-path read still performs the validated I2S conversion and
+ * fixed spectral gain; scene output is simply omitted for this call. */
 esp_err_t audio_input_read_s24(int32_t *dst,
                                size_t max_samples,
                                size_t *samples_read,
@@ -762,6 +778,8 @@ esp_err_t audio_input_read_s24(int32_t *dst,
     return audio_input_read_dual_s24(dst, NULL, max_samples, samples_read, timeout_ms);
 }
 
+/* Reset scene-filter history at capture boundaries so one recording cannot
+ * leak biquad state into the next synchronized capture. */
 void audio_input_reset_hpf(void)
 {
 #if SDACS_SCENE_HPF_ENABLED
@@ -779,6 +797,9 @@ bool audio_input_get_last_debug(audio_input_debug_t *out)
     return true;
 }
 
+/* Snapshot validation diagnostics for publication. These values make the
+ * preprocessing path auditable: pre-gain level, post-HPF level, both fixed
+ * gains, clipping counts, conversion alternatives, and dBFS normalization. */
 bool audio_input_get_raw_diagnostics(audio_input_raw_diagnostics_t *out)
 {
     if (!out || !s_audio.initialized) {

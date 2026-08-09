@@ -1,3 +1,8 @@
+"""SDACS verification: regression tests for calibration.
+
+These tests document expected final-system behavior and protect the production merge from regressions.
+"""
+
 from pathlib import Path
 
 import pytest

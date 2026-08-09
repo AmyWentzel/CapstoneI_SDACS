@@ -1,3 +1,8 @@
+// SDACS Flutter component: Coordinates tone playback, delayed capture timing, polling, and cleanup for SPL calibration captures.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:async';
 
 import '../models/capture_session.dart';

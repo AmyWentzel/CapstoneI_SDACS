@@ -1,3 +1,8 @@
+// SDACS Flutter component: Runtime backend address model/controller; defaults to the Raspberry Pi API and supports operator overrides.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'package:flutter/widgets.dart';
 
 class BackendConfig {

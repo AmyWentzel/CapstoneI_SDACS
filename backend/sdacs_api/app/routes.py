@@ -1,3 +1,8 @@
+"""SDACS backend module: Primary REST and WebSocket API surface for health, telemetry, captures, calibration, BLE discovery, commands, plots, and AI status.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 import asyncio
 import json
 from datetime import datetime, timezone

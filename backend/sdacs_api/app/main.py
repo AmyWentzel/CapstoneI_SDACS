@@ -1,3 +1,8 @@
+"""SDACS backend module: Production FastAPI composition root that wires settings, capture service, MQTT ingestion, WebSockets, CORS, and API routers.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from contextlib import asynccontextmanager
 import asyncio
 import logging

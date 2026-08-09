@@ -1,3 +1,8 @@
+"""SDACS backend module: Room-level acoustic analysis and rendering utilities that summarize four-node captures into spatial metrics and visual maps.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from __future__ import annotations
 
 import argparse

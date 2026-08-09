@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Battery level LED driver
+ *
+ * Purpose:
+ *   Maps MAX17048 state-of-charge percentage to the six on-board battery indicator LEDs.
+ *
+ * Design note:
+ *   The mapping is intentionally simple and deterministic so LED output remains a human-readable local status indicator.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "battery_leds.h"
 
 #include <math.h>

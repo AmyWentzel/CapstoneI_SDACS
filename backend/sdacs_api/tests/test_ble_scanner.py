@@ -1,3 +1,8 @@
+"""SDACS verification: regression tests for ble scanner.
+
+These tests document expected final-system behavior and protect the production merge from regressions.
+"""
+
 import pytest
 
 from app import ble_scanner

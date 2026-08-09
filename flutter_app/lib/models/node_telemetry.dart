@@ -1,5 +1,15 @@
+// SDACS Flutter component: Comprehensive normalized node telemetry model spanning firmware status, sensors, spectral metrics, and scene-processing diagnostics.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'dart:convert';
 
+/// Canonical Flutter representation of one node's latest telemetry.
+///
+/// The model intentionally includes both the unfiltered spectral path and the HPF
+/// scene-classifier path so the GUI can present engineering diagnostics without
+/// recomputing firmware DSP locally.
 class NodeTelemetry {
   const NodeTelemetry({
     required this.nodeId,

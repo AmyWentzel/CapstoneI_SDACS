@@ -14,7 +14,7 @@
 - Preserved legacy unfiltered MQTT fields.
 - Added `scene_*`, HPF configuration, post-HPF level, peak, and separate clipping diagnostics.
 - Increased the maximum feature JSON payload to 16 KiB.
-- Updated firmware version to `mic-gain-hpf-v1`.
+- Updated firmware version to `mic-gain-hpf-v2`.
 
 ## Backend changes
 

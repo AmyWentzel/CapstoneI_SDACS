@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Wi-Fi connectivity and MQTT telemetry transport
+ *
+ * Purpose:
+ *   Manages station connection, MQTT lifecycle, wildcard command subscriptions, heartbeat publication, feature/status JSON serialization, and callback delivery to the command dispatcher.
+ *
+ * Design note:
+ *   Raw audio is intentionally excluded from MQTT; compact diagnostics and features are published to keep transport bounded and suitable for the Raspberry Pi middleware.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "wifi_mqtt.h"
 #include "config_store.h"
 

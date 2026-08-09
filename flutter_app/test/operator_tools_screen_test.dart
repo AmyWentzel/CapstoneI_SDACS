@@ -1,3 +1,6 @@
+// SDACS Flutter verification: regression coverage for operator tools screen test.
+// These tests protect operator-visible behavior during the final branch merge.
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';

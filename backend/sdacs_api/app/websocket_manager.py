@@ -1,3 +1,8 @@
+"""SDACS backend module: Tracks connected Flutter WebSocket clients and broadcasts live normalized telemetry updates.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 import asyncio
 from typing import Any
 

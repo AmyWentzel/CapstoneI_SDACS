@@ -1,6 +1,6 @@
 # SDACS Dual-Path Microphone Gain and HPF Validation
 
-Firmware version: `mic-gain-hpf-v1`
+Firmware version: `mic-gain-hpf-v2`
 
 ## Purpose
 
@@ -128,6 +128,6 @@ The -63 dBFS level is a validation target, not a guaranteed result. The meaningf
 
 ## Edge Impulse rule
 
-The deployed pre-HPF model must not be used as a pass/fail authority after this patch. Recollect the `quiet_room_white_noise`, `speech`, and `noisy` dataset with `mic-gain-hpf-v1`, rebuild the 57-feature windows from `scene_*` fields, and retrain Edge Impulse.
+The deployed pre-HPF model must not be used as a pass/fail authority after this patch. Recollect the `quiet_room_white_noise`, `speech`, and `noisy` dataset with `mic-gain-hpf-v2`, rebuild the 57-feature windows from `scene_*` fields, and retrain Edge Impulse.
 
 The unfiltered path remains available for low/mid/high frequency-condition analysis and acoustic mapping.

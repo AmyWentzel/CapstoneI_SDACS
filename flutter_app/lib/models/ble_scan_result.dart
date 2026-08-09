@@ -1,3 +1,8 @@
+// SDACS Flutter component: Typed models for Raspberry Pi BLE node-discovery results.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'node_telemetry.dart';
 
 bool isCurrentBleScanRequest(int responseRequestId, int latestRequestId) =>

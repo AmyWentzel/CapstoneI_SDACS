@@ -1,3 +1,8 @@
+// SDACS Flutter component: Typed client models for acoustic-map labels, node values, recommendations, and rendered results.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 class AcousticMapLabelStatus {
   const AcousticMapLabelStatus({
     required this.id,

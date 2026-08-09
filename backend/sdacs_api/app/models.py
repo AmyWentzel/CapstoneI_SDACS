@@ -1,3 +1,8 @@
+"""SDACS backend module: Pydantic request/response and telemetry models shared by MQTT normalization, capture services, and FastAPI routes.
+
+The module is part of the Raspberry Pi middleware/API layer used by the final SDACS system.
+"""
+
 from datetime import datetime, timezone
 from typing import Any, Literal
 

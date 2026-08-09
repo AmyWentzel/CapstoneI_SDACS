@@ -1,3 +1,8 @@
+// SDACS Flutter component: Mutual-exclusion state controller that prevents conflicting operator workflows such as capture, calibration, or setup edits.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'package:flutter/foundation.dart';
 
 import '../models/capture_session.dart';
@@ -53,6 +58,9 @@ class OperationAccess {
   bool get canOpenResults => !isOperationBlocking && hasCompletedCapture;
 }
 
+/// Coordinates mutually exclusive operator actions across the application.
+/// This prevents capture/calibration/setup workflows from issuing conflicting
+/// commands to the four-node system at the same time.
 class OperationController extends ChangeNotifier {
   OperationController();
 

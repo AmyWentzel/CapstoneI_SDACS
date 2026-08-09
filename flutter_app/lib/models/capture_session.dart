@@ -1,3 +1,8 @@
+// SDACS Flutter component: Capture-session, combined-result, acoustic-analysis, and Edge Impulse response models.
+//
+// Role in system: presents or transports Raspberry Pi backend state without
+// duplicating firmware signal-processing logic in the client.
+
 import 'capture_node_metric.dart';
 
 class CaptureSession {

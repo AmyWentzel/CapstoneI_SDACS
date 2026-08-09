@@ -1,3 +1,16 @@
+/*
+ * SDACS module: Asynchronous firmware OTA update manager
+ *
+ * Purpose:
+ *   Runs ESP HTTPS OTA in a dedicated task, publishes progress/status, and coordinates device state around update execution.
+ *
+ * Design note:
+ *   OTA is isolated from capture operation and reports the running firmware version for traceability.
+ *
+ * This comment documents engineering intent for the final SDACS implementation;
+ * functional behavior is defined by the code and validated configuration below.
+ */
+
 #include "ota_manager.h"
 
 #include <inttypes.h>
